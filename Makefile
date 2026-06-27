@@ -1,52 +1,71 @@
 # Top-level entry points for the whole project. Python steps run via uv inside pipeline/.
+# Every stage tees its output to logs/<stage>.log; the model also writes logs/model/.
 #
+#   make                            # = make all: full local build (clean -> site + model)
+#   make all                        # clean-data stints box model games players
 #   make fetch                      # download MoneyPuck + all NHL seasons -> data/raw/
 #   make fetch-moneypuck            # just the MoneyPuck shots/skaters files
 #   make fetch-season SEASON=2024   # NHL shiftcharts+pbp for one season
 #   make clean-data                 # parse raw -> data/interim/        (idempotent)
 #   make stints                     # join      -> data/processed/      (idempotent)
 #   make box                        # per-player box score (our pbp)    -> data/interim/box
-#   make games                      # per-game timelines (site JSON)    -> web/public/data
+#   make model                      # fit isolated-impact models        -> data/models + logs/model
+#   make games                      # per-game timelines (site JSON)    -> data/games (+ web sync)
 #   make players                    # player ratings + box (site JSON)  -> web/public/data
-#   make model                     # fit/cache the isolated-impact models
-#   make pipeline                   # clean-data + stints + box + games + players
 #   make web-dev                    # run the website dev server
+#   make web-build                  # production build of the website
 #
-# Raw/interim/processed data lives under ./data; site JSON is written to ./web/public/data.
+# Raw/interim/processed data lives under ./data; run logs under ./logs; site JSON under ./data/games
+# (synced to ./web/public/data). `make all` does NOT fetch — run `make fetch` first if raw data is missing.
 
-PIPELINE := cd pipeline && uv run python -m
+SHELL := /bin/bash
+.SHELLFLAGS := -o pipefail -ec
+
+LOGDIR := $(CURDIR)/logs
+RUN = mkdir -p $(LOGDIR) && cd pipeline && uv run python -m
 SEASON ?=
 
-.PHONY: fetch fetch-moneypuck fetch-season clean-data stints box model games players pipeline web-dev
+.DEFAULT_GOAL := all
+.PHONY: all fetch fetch-moneypuck fetch-season clean-data stints box model games players publish-data pipeline web-dev web-build
+
+all: clean-data stints box model games players
 
 fetch:
-	$(PIPELINE) yhattrick.download all
+	$(RUN) yhattrick.download all 2>&1 | tee $(LOGDIR)/download.log
 
 fetch-moneypuck:
-	$(PIPELINE) yhattrick.download moneypuck
+	$(RUN) yhattrick.download moneypuck 2>&1 | tee $(LOGDIR)/download.log
 
 fetch-season:
-	$(PIPELINE) yhattrick.download games --season $(SEASON)
+	$(RUN) yhattrick.download games --season $(SEASON) 2>&1 | tee $(LOGDIR)/download.log
 
 clean-data:
-	$(PIPELINE) yhattrick.clean
+	$(RUN) yhattrick.clean 2>&1 | tee $(LOGDIR)/clean.log
 
 stints:
-	$(PIPELINE) yhattrick.stints
+	$(RUN) yhattrick.stints 2>&1 | tee $(LOGDIR)/stints.log
 
 box:
-	$(PIPELINE) yhattrick.aggregates
+	$(RUN) yhattrick.aggregates 2>&1 | tee $(LOGDIR)/box.log
 
 model:
-	$(PIPELINE) yhattrick.player_onice_model
+	$(RUN) yhattrick.player_onice_model --pool 2>&1 | tee $(LOGDIR)/model.log
 
 games:
-	$(PIPELINE) yhattrick.export_games
+	$(RUN) yhattrick.export_games 2>&1 | tee $(LOGDIR)/games.log
 
 players:
-	$(PIPELINE) yhattrick.export_players
+	$(RUN) yhattrick.export_players 2>&1 | tee $(LOGDIR)/players.log
 
-pipeline: clean-data stints box games players
+# upload the heavy per-game JSON to Cloudflare R2 (needs R2_* env vars; see yhattrick.publish)
+publish-data:
+	$(RUN) yhattrick.publish 2>&1 | tee $(LOGDIR)/publish.log
+
+# alias kept for muscle memory
+pipeline: all
 
 web-dev:
 	cd web && npm run dev
+
+web-build:
+	cd web && npm run build

@@ -31,12 +31,16 @@ INTERIM = DATA / "interim"
 PROCESSED = DATA / "processed"
 MODELS = DATA / "models"          # model outputs (impact coefficients, WAR, ...)
 
+# Run logs for every stage (parse, join, fits, exports). The model-fit log lives here too.
+LOGS = REPO_ROOT / "logs"
+LOGS_MODEL = LOGS / "model"       # per-fit metadata snapshots + the model_fits.jsonl history
+
 # Canonical site-facing JSON lives in the data tree; build_games syncs a copy to the web app.
 SITE_JSON = DATA / "games"
 WEB_DIR = REPO_ROOT / "web"
 WEB_DATA = WEB_DIR / "public" / "data"
 
-_ALL_DIRS = (RAW_MONEYPUCK, RAW_SHIFTS, RAW_PBP, INTERIM, PROCESSED, SITE_JSON)
+_ALL_DIRS = (RAW_MONEYPUCK, RAW_SHIFTS, RAW_PBP, INTERIM, PROCESSED, SITE_JSON, LOGS, LOGS_MODEL)
 
 
 def ensure_dirs() -> None:

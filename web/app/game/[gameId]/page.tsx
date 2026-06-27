@@ -2,14 +2,17 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import type { Game, PlayerAgg, PlayerRef, Stint, TimelineEvent } from "@/lib/types";
+import type { Game, PlayerAgg, Stint, TimelineEvent } from "@/lib/types";
 import { mmss } from "@/lib/format";
+import { gameDetailUrl } from "@/lib/data";
 import EventCard from "@/components/EventCard";
 
 const PERIOD_NAMES: Record<number, string> = { 1: "1st", 2: "2nd", 3: "3rd", 4: "OT", 5: "SO" };
 
-// name -> player id for the players in this game (skaters with a player page)
+// name -> player id for the players in this game (skaters with a player page; used by events)
 const LinkMap = createContext<Map<string, number>>(new Map());
+// player id -> player aggregate, to resolve normalized stint on-ice ids to names/positions
+const ByIdMap = createContext<Map<number, PlayerAgg>>(new Map());
 
 // a player name that links to the player page when we have one (skaters only)
 function PName({ name }: { name?: string | null }) {
@@ -25,13 +28,21 @@ function PName({ name }: { name?: string | null }) {
   );
 }
 
-function PlayerList({ players }: { players: PlayerRef[] }) {
+// a player id that links to the player page (skaters only); resolves name via the game roster
+function PNameById({ id }: { id: number }) {
+  const byId = useContext(ByIdMap);
+  const p = byId.get(id);
+  const name = p?.name ?? `#${id}`;
+  return p && p.pos !== "G" ? <PName name={name} /> : <span>{name}</span>;
+}
+
+function PlayerList({ ids }: { ids: number[] }) {
   return (
     <>
-      {players.map((p, i) => (
-        <span key={p.id}>
+      {ids.map((id, i) => (
+        <span key={id}>
           {i > 0 ? ", " : ""}
-          {p.pos === "G" ? p.name : <PName name={p.name} />}
+          <PNameById id={id} />
         </span>
       ))}
     </>
@@ -85,29 +96,29 @@ function EventRow({ e }: { e: TimelineEvent }) {
 }
 
 
-// players present in `cur` but not `prev` (came on) — by id, returning names
-function diff(prev: PlayerRef[], cur: PlayerRef[]) {
-  const prevIds = new Set(prev.map((p) => p.id));
-  const curIds = new Set(cur.map((p) => p.id));
+// player ids present in `cur` but not `prev` (came on), and vice versa (went off)
+function diff(prev: number[], cur: number[]) {
+  const prevSet = new Set(prev);
+  const curSet = new Set(cur);
   return {
-    on: cur.filter((p) => !prevIds.has(p.id)).map((p) => p.name),
-    off: prev.filter((p) => !curIds.has(p.id)).map((p) => p.name),
+    on: cur.filter((id) => !prevSet.has(id)),
+    off: prev.filter((id) => !curSet.has(id)),
   };
 }
 
-function ChangeGroup({ team, on, off }: { team: string; on: string[]; off: string[] }) {
+function ChangeGroup({ team, on, off }: { team: string; on: number[]; off: number[] }) {
   if (!on.length && !off.length) return null;
   return (
     <span className="grp">
       {team}{" "}
-      {on.map((n) => (
-        <span key={"on" + n} className="on">
-          +<PName name={n} />{" "}
+      {on.map((id) => (
+        <span key={"on" + id} className="on">
+          +<PNameById id={id} />{" "}
         </span>
       ))}
-      {off.map((n) => (
-        <span key={"off" + n} className="off">
-          −<PName name={n} />{" "}
+      {off.map((id) => (
+        <span key={"off" + id} className="off">
+          −<PNameById id={id} />{" "}
         </span>
       ))}
     </span>
@@ -116,6 +127,8 @@ function ChangeGroup({ team, on, off }: { team: string; on: string[]; off: strin
 
 function StintBlock({ s, prev, home, away }: { s: Stint; prev?: Stint; home: string; away: string }) {
   const [open, setOpen] = useState(s.events.length > 0);
+  const byId = useContext(ByIdMap);
+  const goalie = (id: number | null) => (id != null ? byId.get(id)?.name ?? `#${id}` : null);
   const hd = prev ? diff(prev.home_skaters, s.home_skaters) : null;
   const ad = prev ? diff(prev.away_skaters, s.away_skaters) : null;
   const hasChange = (hd && (hd.on.length || hd.off.length)) || (ad && (ad.on.length || ad.off.length));
@@ -149,17 +162,17 @@ function StintBlock({ s, prev, home, away }: { s: Stint; prev?: Stint; home: str
         <div className="stint-body">
           <div className="lines">
             <div className="line home">
-              <div className="lab">Home skaters {s.home_goalie[0] ? "" : "· goalie pulled"}</div>
+              <div className="lab">Home skaters {s.home_goalie != null ? "" : "· goalie pulled"}</div>
               <div className="names">
-                <PlayerList players={s.home_skaters} />
-                {s.home_goalie[0] && <span className="g"> · G {s.home_goalie[0].name}</span>}
+                <PlayerList ids={s.home_skaters} />
+                {s.home_goalie != null && <span className="g"> · G {goalie(s.home_goalie)}</span>}
               </div>
             </div>
             <div className="line away">
-              <div className="lab">Away skaters {s.away_goalie[0] ? "" : "· goalie pulled"}</div>
+              <div className="lab">Away skaters {s.away_goalie != null ? "" : "· goalie pulled"}</div>
               <div className="names">
-                <PlayerList players={s.away_skaters} />
-                {s.away_goalie[0] && <span className="g"> · G {s.away_goalie[0].name}</span>}
+                <PlayerList ids={s.away_skaters} />
+                {s.away_goalie != null && <span className="g"> · G {goalie(s.away_goalie)}</span>}
               </div>
             </div>
           </div>
@@ -274,7 +287,7 @@ export default function GameView() {
 
   useEffect(() => {
     setGame(null);
-    fetch(`/data/game/${gameId}.json`)
+    fetch(gameDetailUrl(gameId))
       .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
       .then(setGame)
       .catch((e) => setError(String(e)));
@@ -295,6 +308,11 @@ export default function GameView() {
     () => new Map((game?.players ?? []).filter((p) => p.pos !== "G").map((p) => [p.name, p.id])),
     [game]
   );
+  // id -> player, to resolve the normalized stint on-ice ids to names/positions
+  const byId = useMemo(
+    () => new Map((game?.players ?? []).map((p) => [p.id, p] as const)),
+    [game]
+  );
 
   if (error) return <div className="loading">Failed to load game {gameId} ({error}).</div>;
   if (!game) return <div className="loading">Loading game…</div>;
@@ -303,6 +321,7 @@ export default function GameView() {
 
   return (
     <LinkMap.Provider value={nameToId}>
+      <ByIdMap.Provider value={byId}>
       <Link className="backlink" href="/">
         ← all games
       </Link>
@@ -351,6 +370,7 @@ export default function GameView() {
           <PeriodSection key={period} period={period} stints={stints} home={game.home} away={game.away} />
         ))}
       </div>
+      </ByIdMap.Provider>
     </LinkMap.Provider>
   );
 }

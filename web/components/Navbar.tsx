@@ -1,7 +1,6 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import BrandMark from "@/components/BrandMark";
 
 export default function Navbar() {
   const path = usePathname();
@@ -12,10 +11,7 @@ export default function Navbar() {
     <header className="navbar">
       <div className="nav-inner">
         <Link href="/" className="brand">
-          <BrandMark />
-          <span className="brand-name">
-            <span className="brand-y">ŷ</span>HatTrick
-          </span>
+          <span className="brand-name"><span className="brand-y">ŷ</span>Trick</span>
         </Link>
         <nav className="nav-links">
           <Link className={isActive("/", true) ? "active" : ""} href="/">

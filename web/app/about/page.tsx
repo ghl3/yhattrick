@@ -1,21 +1,17 @@
 import type { Metadata } from "next";
-import BrandMark from "@/components/BrandMark";
 
 export const metadata: Metadata = {
   title: "About",
   description:
-    "What ŷHatTrick is, how the isolated-impact model works, where the data comes from, and how to read the numbers.",
+    "What ŷTrick is, how the isolated-impact model works, where the data comes from, and how to read the numbers.",
 };
 
 export default function About() {
   return (
     <div className="prose">
       <div className="panel about-hero">
-        <BrandMark size={56} />
         <div>
-          <h1>
-            <span className="brand-y">ŷ</span>HatTrick
-          </h1>
+          <h1><span className="brand-y">ŷ</span>Trick</h1>
           <p className="lede">
             A from-scratch NHL player-value project: isolated even-strength and special-teams
             impact ratings, plus a browsable, shift-by-shift view of every game.
@@ -27,9 +23,10 @@ export default function About() {
         <h2>The name</h2>
         <p>
           In statistics, a <em>hat</em> marks a predicted value — <strong>ŷ</strong> (“y-hat”) is the
-          model’s estimate of an outcome. In hockey, a <strong>hat trick</strong> is three goals. This
-          site is about <em>predicted</em> goals and the players who drive them, so the two ideas
-          collide into one: <strong>ŷHatTrick</strong>.
+          model’s estimate of an outcome. In hockey, a <strong>hat trick</strong> is three goals. The
+          two share that hat: the <strong>ŷ</strong> supplies it, so <strong>ŷ</strong> + “Trick” said
+          aloud is exactly “y-hat-trick.” Hence the mark <strong>ŷ&#8202;Trick</strong> — and the
+          domain spells it out as <strong>yhattrick.com</strong>.
         </p>
       </div>
 

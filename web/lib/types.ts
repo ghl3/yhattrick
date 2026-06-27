@@ -66,10 +66,11 @@ export interface Stint {
   duration_s: number;
   strength: string; // e.g. "5v5", "5v4"
   overload: boolean;
-  home_skaters: PlayerRef[];
-  away_skaters: PlayerRef[];
-  home_goalie: PlayerRef[];
-  away_goalie: PlayerRef[];
+  // on-ice personnel as player ids; resolve to name/pos via the game's players[] (normalized JSON)
+  home_skaters: number[];
+  away_skaters: number[];
+  home_goalie: number | null;
+  away_goalie: number | null;
   home_xgf: number;
   away_xgf: number;
   events: TimelineEvent[];

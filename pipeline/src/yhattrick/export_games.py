@@ -78,6 +78,15 @@ def _players(ids, lookup) -> list[dict]:
     return out
 
 
+def _ids(xs) -> list[int]:
+    """Stint on-ice personnel as bare player ids (names resolved client-side from players[])."""
+    return [int(x) for x in xs if not (x is None or pd.isna(x))]
+
+
+def _goalie_id(x) -> int | None:
+    return None if x is None or pd.isna(x) else int(x)
+
+
 def _game_meta(gid: int) -> dict:
     pbp = json.loads((C.RAW_PBP / f"{gid}.json").read_text())
     return {
@@ -183,10 +192,10 @@ def build_game(gid: int, stints_g, events_g, shots_g, shifts_g, lookup) -> dict:
             "idx": s["stint_idx"], "start": s["start_g"], "end": s["end_g"],
             "clock_start": _clock(s["start_g"]), "clock_end": _clock(s["end_g"]),
             "duration_s": s["duration_s"], "strength": s["strength"], "overload": bool(s["overload"]),
-            "home_skaters": _players(s["home_skaters"], lookup),
-            "away_skaters": _players(s["away_skaters"], lookup),
-            "home_goalie": _players([s["home_goalie"]], lookup),
-            "away_goalie": _players([s["away_goalie"]], lookup),
+            "home_skaters": _ids(s["home_skaters"]),
+            "away_skaters": _ids(s["away_skaters"]),
+            "home_goalie": _goalie_id(s["home_goalie"]),
+            "away_goalie": _goalie_id(s["away_goalie"]),
             "home_xgf": s["home_xgf"], "away_xgf": s["away_xgf"],
             "events": buckets[i],
         })

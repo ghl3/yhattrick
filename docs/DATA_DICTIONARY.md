@@ -84,7 +84,9 @@ Context & volume (all from our own pbp, not MoneyPuck; stored for current and fu
 - `players[]`: `id`, `name`, `pos`, `number`, `team`, `side`, `shifts`, `toi_s`, `g`, `a1`,
   `a2`, `pts`, `shots`, `xg`.
 - `stints[]`: `idx`, `start`, `end`, `clock_start`, `clock_end`, `duration_s`, `strength`,
-  `overload`, `home_skaters[]`/`away_skaters[]`/`home_goalie[]`/`away_goalie[]` (each
-  `{id,name,pos,number}`), `home_xgf`, `away_xgf`, and `events[]`: `t`, `clock`, `type`, `team`,
-  `x`, `y`, `zone`, `player?`, `detail?`, and on shot events `xGoal?`, `onice_match?`,
-  `shot_type?`, `distance?`, `angle?`, `rebound?`, `rush?`.
+  `overload`, `home_skaters[]`/`away_skaters[]` (arrays of **player ids**),
+  `home_goalie`/`away_goalie` (player id or `null` if pulled), `home_xgf`, `away_xgf`, and
+  `events[]`: `t`, `clock`, `type`, `team`, `x`, `y`, `zone`, `player?`, `detail?`, and on shot
+  events `xGoal?`, `onice_match?`, `shot_type?`, `distance?`, `angle?`, `rebound?`, `rush?`.
+  On-ice ids are resolved to name/pos/number via the file's `players[]` (normalized to keep the
+  per-game files small enough to serve from object storage).

@@ -5,6 +5,7 @@ description = "NHL Wins Above Replacement pipeline: per-shot xG, RAPM, and playe
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "boto3>=1.43.36",
     "pandas>=3.0.3",
     "pyarrow>=24.0.0",
     "requests>=2.34.2",

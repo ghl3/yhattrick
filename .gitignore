@@ -1,11 +1,13 @@
-# data (regenerate with `make fetch` + `make pipeline`)
+# data (regenerate with `make fetch` + `make all`)
 /data/raw/
 /data/interim/
 /data/processed/
 /data/games/
 /data/models/
-/data/*.log
 /web/public/data/
+
+# run logs + model-fit metadata (regenerated each run)
+/logs/
 
 # python
 __pycache__/
@@ -24,3 +26,10 @@ web/dist/
 audit_join.py
 .claude/
 *.log
+
+# local secrets (R2 credentials, etc.)
+.env
+pipeline/.env
+
+# wrangler local cache
+/.wrangler/

@@ -28,7 +28,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 from dataclasses import dataclass
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -169,7 +171,7 @@ def build_design(stints: pd.DataFrame, dual: bool):
             emit(s.away_skaters, s.home_skaters, s.away_xgf, s.duration_s, False, s)
 
     X = sparse.csr_matrix((vals, (rows, cols)), shape=(r, n_cols))
-    return X, np.asarray(y), np.asarray(w), players, np.asarray(games), off_toi, def_toi
+    return X, np.asarray(y), np.asarray(w), players, np.asarray(games), off_toi, def_toi, COV
 
 
 def _wmse(model, X, y, w):
@@ -211,8 +213,8 @@ def choose_lambda(X, y, w, games, lambdas=LAMBDAS, n_splits=5):
 
 
 def fit(stints: pd.DataFrame, names: dict, spec: Spec) -> tuple[pd.DataFrame, dict]:
-    X, y, w, players, games, off_toi, def_toi = build_design(stints, spec.dual)
-    lam, _ = choose_lambda(X, y, w, games)
+    X, y, w, players, games, off_toi, def_toi, cov = build_design(stints, spec.dual)
+    lam, cv_scores = choose_lambda(X, y, w, games)
     model = Ridge(alpha=lam, fit_intercept=True, solver="lsqr")
     model.fit(X, y, sample_weight=w)
     P = len(players)
@@ -229,9 +231,50 @@ def fit(stints: pd.DataFrame, names: dict, spec: Spec) -> tuple[pd.DataFrame, di
             spec.deff: round(float(coef[P + i]), 4), f"{spec.deff}_se": round(float(se[P + i]), 4),
             f"{spec.deff}_toi": round(def_toi.get(p, 0.0) / 60.0, 1),
         })
-    meta = {"lambda": lam, "intercept": round(float(model.intercept_), 4),
-            "home_ice": round(float(coef[2 * P]), 4), "n_obs": X.shape[0], "n_players": P}
+
+    # full non-player parameter block: every shared covariate's effect (xGF/60) with its SE,
+    # so the fit is fully recorded and the covariate signs/magnitudes can be audited.
+    covariates = {
+        name: {"coef": round(float(coef[col]), 4), "se": round(float(se[col]), 4)}
+        for name, col in cov.items()
+    }
+    meta = {
+        "model": spec.key,
+        "strengths": list(spec.strengths),
+        "seasons": sorted(int(s) for s in stints.season.unique()),
+        "lambda": int(lam),
+        "lambda_grid": LAMBDAS,
+        "lambda_cv_wmse": {str(k): round(v, 4) for k, v in cv_scores.items()},
+        "lambda_pinned": lam in (LAMBDAS[0], LAMBDAS[-1]),  # CV hit a grid edge -> widen the grid
+        "intercept": round(float(model.intercept_), 4),     # baseline xGF/60
+        "home_ice": round(float(coef[cov["home"]]), 4),
+        "covariates": covariates,
+        "n_obs": int(X.shape[0]),
+        "n_stints": int(len(stints)),
+        "n_players": int(P),
+    }
     return pd.DataFrame(rows), meta
+
+
+def _write_meta(meta: dict) -> None:
+    """Record the full fit (lambda, CV grid, intercept, every covariate coef+SE) to the logs tree:
+    a latest-snapshot JSON per (model, seasons), plus an appended line in the fit-history log."""
+    C.LOGS_MODEL.mkdir(parents=True, exist_ok=True)
+    label = "+".join(map(str, meta["seasons"]))
+    (C.LOGS_MODEL / f"{meta['model']}_{label}.meta.json").write_text(json.dumps(meta, indent=2))
+    record = {"ts": datetime.now().isoformat(timespec="seconds"), **meta}
+    with (C.LOGS / "model_fits.jsonl").open("a") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def _cache_fresh(path, seasons: list[int]) -> bool:
+    """A cached fit is stale if any of its source stint files is newer than it."""
+    pm = path.stat().st_mtime
+    for s in seasons:
+        sp = C.PROCESSED / "stints" / f"{s}.parquet"
+        if sp.exists() and sp.stat().st_mtime > pm:
+            return False
+    return True
 
 
 def fit_cached(seasons: list[int], spec: Spec, names: dict | None = None) -> pd.DataFrame:
@@ -239,14 +282,15 @@ def fit_cached(seasons: list[int], spec: Spec, names: dict | None = None) -> pd.
     present, so per-season and pooled fits are computed once and reused (e.g. by export)."""
     label = "+".join(map(str, seasons))
     path = C.MODELS / f"{spec.key}_{label}.parquet"
-    if path.exists():
+    if path.exists() and _cache_fresh(path, seasons):
         return pd.read_parquet(path)
     stints = load_stints(seasons, spec.strengths)
     if stints.empty:
         return pd.DataFrame()
-    coef, _ = fit(stints, names or roster_names(seasons), spec)
+    coef, meta = fit(stints, names or roster_names(seasons), spec)
     C.MODELS.mkdir(parents=True, exist_ok=True)
     coef.to_parquet(path, index=False)
+    _write_meta(meta)
     return coef
 
 
@@ -281,7 +325,9 @@ def run(seasons: list[int], pool: bool, specs: list[Spec]) -> None:
                   f"lambda={meta['lambda']}, intercept(xGF/60)={meta['intercept']} ===")
             out = C.MODELS / f"{spec.key}_{label}.parquet"
             coef.to_parquet(out, index=False)
-            print(f"    -> {out.name}")
+            _write_meta(meta)
+            print(f"    -> {out.name} (+ logs/model/{spec.key}_{label}.meta.json)"
+                  f"{'  ⚠ lambda pinned at grid edge' if meta['lambda_pinned'] else ''}")
             sniff(coef, spec, label)
 
 
