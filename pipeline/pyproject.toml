@@ -1,0 +1,21 @@
+[project]
+name = "hockeywar"
+version = "0.1.0"
+description = "NHL Wins Above Replacement pipeline: per-shot xG, RAPM, and player value modeling with an inspection website"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=3.0.3",
+    "pyarrow>=24.0.0",
+    "requests>=2.34.2",
+]
+
+[project.scripts]
+hockeywar-fetch = "hockeywar.download:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hockeywar"]

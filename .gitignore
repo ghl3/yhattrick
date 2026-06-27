@@ -1,0 +1,25 @@
+# data (regenerate with `make fetch` + `make pipeline`)
+/data/raw/
+/data/interim/
+/data/processed/
+/data/games/
+/data/*.log
+/web/public/data/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+pipeline/.venv/
+
+# node
+node_modules/
+web/dist/
+*.tsbuildinfo
+
+# misc
+.DS_Store
+.scratch_*.png
+audit_join.py
+.claude/
+*.log
