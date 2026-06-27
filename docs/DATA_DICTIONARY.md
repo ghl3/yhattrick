@@ -50,6 +50,22 @@ for how each table is produced.
 
 `player_id`, `season`, `player_name`, `position` (`C/L/R/D/G`), `number`, `team`.
 
+## interim/box/&lt;season&gt;.parquet — one row per player-season-`game_type`
+
+Descriptive box score from our own pbp + shifts (`game_type` ∈ {`regular`, `playoff`}, kept
+separate): `player_id`, `name`, `pos`, `team`, `teams` (list), `gp`, `toi_s`, `toi_min`, and the
+counting stats `g`, `a1`, `a2`, `points`, `sog`, `icf` (Corsi), `blocks`, `hits`, `takeaways`,
+`giveaways`, `fo_won`, `fo_lost`, `pen_taken`, `pen_drawn`, `so_g`, `so_att` (shootout, separate).
+
+Raw on-ice sums (regular season, same stint filter as the model — non-overload, ≥`MIN_STINT_S` —
+so rates share a TOI base with the isolated coefficients; descriptive metrics in their own right
+and a cross-check on the model): `ev_xgf_on`/`ev_xga_on` (5v5 xG for/against),
+`ev_cf_on`/`ev_ca_on` (5v5 Corsi/shot-attempts for/against), `ev_onice_s` (5v5 on-ice seconds),
+`pp_xgf_on` + `pp_onice_s` (power-play offence), `pk_xga_on` + `pk_onice_s` (penalty-kill xG
+allowed). Stored as **sums** so seasons pool additively; `export_players` divides into per-60
+rates (`ev_xgf60`, `ev_cf60`, …) and shares (`ev_xgshare`, `ev_cfshare`), each with a
+within-position percentile.
+
 ## processed/stints/&lt;season&gt;.parquet — one row per stint
 
 Core: `nhl_game_id`, `stint_idx`, `start_g`, `end_g`, `duration_s`, `home_skaters` (list[int]),

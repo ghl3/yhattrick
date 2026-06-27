@@ -10,6 +10,7 @@
 #   make stints                     # join      -> data/processed/      (idempotent)
 #   make box                        # per-player box score (our pbp)    -> data/interim/box
 #   make model                      # fit isolated-impact models        -> data/models + logs/model
+#   make model FAMILY=tweedie       # same, but the Tweedie-GLM response (default: gaussian)
 #   make games                      # per-game timelines (site JSON)    -> data/games (+ web sync)
 #   make players                    # player ratings + box (site JSON)  -> web/public/data
 #   make web-dev                    # run the website dev server
@@ -24,6 +25,7 @@ SHELL := /bin/bash
 LOGDIR := $(CURDIR)/logs
 RUN = mkdir -p $(LOGDIR) && cd pipeline && uv run python -m
 SEASON ?=
+FAMILY ?= gaussian        # response family for `make model`: gaussian | tweedie
 
 .DEFAULT_GOAL := all
 .PHONY: all fetch fetch-moneypuck fetch-season clean-data stints box model games players publish-data pipeline web-dev web-build
@@ -49,7 +51,7 @@ box:
 	$(RUN) yhattrick.aggregates 2>&1 | tee $(LOGDIR)/box.log
 
 model:
-	$(RUN) yhattrick.player_onice_model --pool 2>&1 | tee $(LOGDIR)/model.log
+	$(RUN) yhattrick.player_onice_model --pool --family $(FAMILY) 2>&1 | tee $(LOGDIR)/model.log
 
 games:
 	$(RUN) yhattrick.export_games 2>&1 | tee $(LOGDIR)/games.log

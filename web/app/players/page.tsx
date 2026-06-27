@@ -10,49 +10,73 @@ import {
   type ColumnDef,
   type SortingState,
 } from "@tanstack/react-table";
-import type { MetricKey, PlayerRow } from "@/lib/types";
+import type { PlayerRow } from "@/lib/types";
 import { pctColor } from "@/lib/format";
 
-const METRICS: { key: MetricKey; label: string; title: string }[] = [
-  { key: "ev_off", label: "EV O", title: "Even-strength offense impact (xGF/60)" },
-  { key: "ev_def", label: "EV D", title: "Even-strength defense impact (xGA/60 suppressed)" },
-  { key: "pp_off", label: "PP", title: "Power-play offense impact (xGF/60)" },
-  { key: "pk_def", label: "PK", title: "Penalty-kill defense impact (xGA/60 suppressed)" },
-];
+type View = "impact" | "onice";
+const num2 = (v: number) => v.toFixed(2);
+const num1 = (v: number) => v.toFixed(1);
+const pct1 = (v: number) => `${(v * 100).toFixed(0)}%`;
 
-// cell that shows the value, tinted by its within-position percentile
-function metricCell(value: number | null, pctile: number | null) {
+// metric columns per view: modeled (isolated) impact vs raw on-ice rates
+type MetricCol = { key: keyof PlayerRow; label: string; title: string; fmt: (v: number) => string };
+const VIEWS: Record<View, MetricCol[]> = {
+  impact: [
+    { key: "ev_off", label: "EV O", title: "Even-strength offense impact, isolated (xGF/60 added)", fmt: num2 },
+    { key: "ev_def", label: "EV D", title: "Even-strength defense impact, isolated (xGA/60 suppressed)", fmt: num2 },
+    { key: "pp_off", label: "PP", title: "Power-play offense impact, isolated (xGF/60)", fmt: num2 },
+    { key: "pk_def", label: "PK", title: "Penalty-kill defense impact, isolated (xGA/60 suppressed)", fmt: num2 },
+  ],
+  onice: [
+    { key: "ev_xgshare", label: "xGF%", title: "5v5 on-ice expected-goals share", fmt: pct1 },
+    { key: "ev_cfshare", label: "CF%", title: "5v5 on-ice Corsi (shot-attempt) share", fmt: pct1 },
+    { key: "ev_xgf60", label: "xGF/60", title: "5v5 on-ice expected goals for / 60", fmt: num2 },
+    { key: "ev_xga60", label: "xGA/60", title: "5v5 on-ice expected goals against / 60", fmt: num2 },
+    { key: "ev_cf60", label: "CF/60", title: "5v5 on-ice Corsi for / 60", fmt: num1 },
+    { key: "ev_ca60", label: "CA/60", title: "5v5 on-ice Corsi against / 60", fmt: num1 },
+  ],
+};
+
+// cell: value tinted by its within-position percentile
+function metricCell(value: number | null, pctile: number | null, fmt: (v: number) => string) {
   if (value == null) return <span className="metric-cell muted">—</span>;
   return (
     <span className="metric-cell" style={{ background: pctColor(pctile) }} title={`${Math.round(pctile ?? 0)}th pctile`}>
-      {value.toFixed(2)}
+      {fmt(value)}
     </span>
   );
 }
 
-const columns: ColumnDef<PlayerRow>[] = [
-  {
-    header: "Player",
-    accessorKey: "name",
-    cell: (c) => <Link href={`/player/${c.row.original.id}`}>{c.getValue<string>()}</Link>,
-  },
-  { header: "Pos", accessorKey: "pos" },
-  { header: "EV TOI", accessorKey: "ev_toi", cell: (c) => <span className="num">{Math.round(c.getValue<number>())}</span> },
-  ...METRICS.map(
-    (m): ColumnDef<PlayerRow> => ({
-      header: m.label,
-      accessorKey: m.key,
-      meta: { title: m.title },
-      cell: (c) => metricCell(c.getValue<number | null>(), c.row.original[`${m.key}_pct` as keyof PlayerRow] as number | null),
-    })
-  ),
-];
+function buildColumns(view: View): ColumnDef<PlayerRow>[] {
+  return [
+    {
+      header: "Player",
+      accessorKey: "name",
+      cell: (c) => <Link href={`/player/${c.row.original.id}`}>{c.getValue<string>()}</Link>,
+    },
+    { header: "Pos", accessorKey: "pos" },
+    { header: "EV TOI", accessorKey: "ev_toi", cell: (c) => <span className="num">{Math.round(c.getValue<number>())}</span> },
+    ...VIEWS[view].map(
+      (m): ColumnDef<PlayerRow> => ({
+        header: m.label,
+        accessorKey: m.key,
+        meta: { title: m.title },
+        cell: (c) => metricCell(
+          c.getValue<number | null>(),
+          c.row.original[`${m.key}_pct` as keyof PlayerRow] as number | null,
+          m.fmt,
+        ),
+      })
+    ),
+  ];
+}
 
 export default function Players() {
   const [rows, setRows] = useState<PlayerRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [globalFilter, setGlobalFilter] = useState("");
   const [posFilter, setPosFilter] = useState<"ALL" | "F" | "D">("ALL");
+  const [view, setView] = useState<View>("impact");
   const [sorting, setSorting] = useState<SortingState>([{ id: "ev_off", desc: true }]);
 
   useEffect(() => {
@@ -61,6 +85,12 @@ export default function Players() {
       .then(setRows)
       .catch((e) => setError(String(e)));
   }, []);
+
+  const columns = useMemo(() => buildColumns(view), [view]);
+  const switchView = (v: View) => {
+    setView(v);
+    setSorting([{ id: VIEWS[v][0].key as string, desc: true }]); // sort by the view's first metric
+  };
 
   const data = useMemo(
     () => (rows ?? []).filter((r) => posFilter === "ALL" || r.group === posFilter),
@@ -90,6 +120,13 @@ export default function Players() {
           {(["ALL", "F", "D"] as const).map((g) => (
             <button key={g} className={posFilter === g ? "active" : ""} onClick={() => setPosFilter(g)}>
               {g === "ALL" ? "All" : g}
+            </button>
+          ))}
+        </div>
+        <div className="seg">
+          {(["impact", "onice"] as const).map((v) => (
+            <button key={v} className={view === v ? "active" : ""} onClick={() => switchView(v)}>
+              {v === "impact" ? "Isolated impact" : "On-ice rates"}
             </button>
           ))}
         </div>

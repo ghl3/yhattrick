@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import type { MetricKey, PlayerDetail, SeasonRow } from "@/lib/types";
+import type { MetricKey, OniceKey, PlayerDetail, SeasonRow } from "@/lib/types";
 import { pctColor } from "@/lib/format";
 
 const seasonLabel = (s: number) => `${s}-${String(s + 1).slice(-2)}`;
@@ -13,6 +13,21 @@ const IMPACT: { key: MetricKey; label: string; blurb: string }[] = [
   { key: "ev_def", label: "EV Defense", blurb: "5v5 expected goals suppressed per 60" },
   { key: "pp_off", label: "PP Offense", blurb: "Power-play expected goals added per 60" },
   { key: "pk_def", label: "PK Defense", blurb: "Penalty-kill expected goals suppressed per 60" },
+];
+
+// on-ice (raw, descriptive) metrics — the team's rate while the player is on the ice
+const pct1 = (v: number) => `${(v * 100).toFixed(1)}%`;
+const num2 = (v: number) => v.toFixed(2);
+const num1 = (v: number) => v.toFixed(1);
+const ONICE: { key: OniceKey; label: string; blurb: string; fmt: (v: number) => string }[] = [
+  { key: "ev_xgf60", label: "EV xGF/60", blurb: "5v5 on-ice expected goals for", fmt: num2 },
+  { key: "ev_xga60", label: "EV xGA/60", blurb: "5v5 on-ice expected goals against", fmt: num2 },
+  { key: "ev_xgshare", label: "EV xGF%", blurb: "Share of on-ice 5v5 expected goals", fmt: pct1 },
+  { key: "ev_cf60", label: "EV CF/60", blurb: "5v5 on-ice shot attempts (Corsi) for", fmt: num1 },
+  { key: "ev_ca60", label: "EV CA/60", blurb: "5v5 on-ice shot attempts against", fmt: num1 },
+  { key: "ev_cfshare", label: "EV CF%", blurb: "Share of on-ice 5v5 shot attempts (Corsi %)", fmt: pct1 },
+  { key: "pp_xgf60", label: "PP xGF/60", blurb: "Power-play on-ice expected goals for", fmt: num2 },
+  { key: "pk_xga60", label: "PK xGA/60", blurb: "Penalty-kill on-ice expected goals against", fmt: num2 },
 ];
 
 // per-season columns; `graph` ones are clickable to chart over time
@@ -34,10 +49,11 @@ const COLS: Col[] = [
   { key: "pk_def", label: "PK", title: "PK defense impact (xGA/60)", get: (r) => r.pk_def ?? null, fmt: (v) => v.toFixed(2), graph: true },
 ];
 
-function MetricBox({ label, blurb, v, se, toi, pctile, group }: {
-  label: string; blurb: string; v: number | null; se: number | null; toi: number | null; pctile: number | null; group: string;
+// shared percentile header + body shell for both metric families
+function BoxShell({ pctile, group, label, blurb, children }: {
+  pctile: number | null; group: string; label: string; blurb: string; children: React.ReactNode;
 }) {
-  const has = v != null && pctile != null;
+  const has = pctile != null;
   return (
     <div className="metric-box">
       <div className="mb-pct" style={{ background: has ? pctColor(pctile) : "var(--accent-softer)" }}>
@@ -52,13 +68,37 @@ function MetricBox({ label, blurb, v, se, toi, pctile, group }: {
       </div>
       <div className="mb-body">
         <div className="mb-label">{label}</div>
-        <div className="mb-val">
-          {has ? <>{v! >= 0 ? "+" : ""}{v!.toFixed(3)} <span className="mb-ci">± {(1.96 * (se ?? 0)).toFixed(3)}</span></> : <span className="muted">—</span>}
-        </div>
+        {children}
         <div className="mb-blurb">{blurb}</div>
-        <div className="mb-toi">{toi ? `${Math.round(toi)} min` : ""}</div>
       </div>
     </div>
+  );
+}
+
+// modeled, isolated impact: signed per-60 delta with a 95% CI
+function MetricBox({ label, blurb, v, se, toi, pctile, group }: {
+  label: string; blurb: string; v: number | null; se: number | null; toi: number | null; pctile: number | null; group: string;
+}) {
+  const has = v != null && pctile != null;
+  return (
+    <BoxShell pctile={has ? pctile : null} group={group} label={label} blurb={blurb}>
+      <div className="mb-val">
+        {has ? <>{v! >= 0 ? "+" : ""}{v!.toFixed(3)} <span className="mb-ci">± {(1.96 * (se ?? 0)).toFixed(3)}</span></> : <span className="muted">—</span>}
+      </div>
+      <div className="mb-toi">{toi ? `${Math.round(toi)} min` : ""}</div>
+    </BoxShell>
+  );
+}
+
+// raw, descriptive on-ice rate: plain value, no CI
+function OniceBox({ label, blurb, v, pctile, group, fmt }: {
+  label: string; blurb: string; v: number | null; pctile: number | null; group: string; fmt: (v: number) => string;
+}) {
+  const has = v != null && pctile != null;
+  return (
+    <BoxShell pctile={has ? pctile : null} group={group} label={label} blurb={blurb}>
+      <div className="mb-val">{v != null ? fmt(v) : <span className="muted">—</span>}</div>
+    </BoxShell>
   );
 }
 
@@ -117,8 +157,23 @@ export default function Player() {
           })}
         </div>
         <p className="muted card-note">
-          Even-strength &amp; special-teams impact on expected goals, adjusted for linemates and competition
-          (ridge, regular season). Percentiles are within position group; ± is a 95% confidence interval.
+          Even-strength &amp; special-teams impact on expected goals, <strong>adjusted</strong> for linemates and
+          competition (ridge, regular season). Percentiles are within position group; ± is a 95% confidence interval.
+        </p>
+      </div>
+
+      <div className="panel">
+        <h2>On-ice rates</h2>
+        <div className="metric-grid">
+          {ONICE.map((m) => {
+            const d = p.onice[m.key];
+            return <OniceBox key={m.key} label={m.label} blurb={m.blurb} v={d.v} pctile={d.pct} group={p.group} fmt={m.fmt} />;
+          })}
+        </div>
+        <p className="muted card-note">
+          Raw, <strong>un-adjusted</strong> team rates while the player was on the ice (5v5 unless noted),
+          regular season. Unlike isolated impact these aren&apos;t separated from linemates or competition —
+          comparing the two shows how much of a player&apos;s on-ice results he himself drives.
         </p>
       </div>
 

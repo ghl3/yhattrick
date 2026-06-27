@@ -20,18 +20,34 @@ import pandas as pd
 
 from . import config as C
 from . import player_onice_model as model
+from .aggregates import ONICE_COLS
 
 FULL_MIN_GAMES = 200     # treat a season as "full" (skip tiny dev slices)
 MIN_EV_TOI = 100         # minutes of 5v5 ice time to appear in the table
 SKATER_POS = {"C", "L", "R", "D"}
 N_LINEMATES = 8
 
-# impact metric -> higher_is_better (defence metrics are better when more negative)
+# --- isolated-impact (modeled RAPM) metrics: per-60 deltas, adjusted for linemates/competition ---
+# metric -> higher_is_better (defence metrics are better when more negative)
 METRICS = {"ev_off": True, "ev_def": False, "pp_off": True, "pk_def": False}
 # percentile pool: only players with enough role ice time are "eligible" to be ranked against
 ELIGIBILITY = {
     "ev_off": ("ev_off_toi", MIN_EV_TOI), "ev_def": ("ev_def_toi", MIN_EV_TOI),
     "pp_off": ("pp_off_toi", 40), "pk_def": ("pk_def_toi", 40),
+}
+
+# --- on-ice (raw, descriptive) metrics: the team's rate while the player is on the ice, NOT
+# isolated. Their own first-class variables (xG and Corsi families + shares), each with a
+# within-position percentile.  name -> (higher_is_better, eligibility_toi_col, threshold) ---
+ONICE = {
+    "ev_xgf60":   (True,  "ev_off_toi", MIN_EV_TOI),   # 5v5 on-ice expected goals for / 60
+    "ev_xga60":   (False, "ev_def_toi", MIN_EV_TOI),   # 5v5 on-ice expected goals against / 60
+    "ev_xgshare": (True,  "ev_off_toi", MIN_EV_TOI),   # xGF / (xGF+xGA)
+    "ev_cf60":    (True,  "ev_off_toi", MIN_EV_TOI),   # 5v5 on-ice Corsi (shot attempts) for / 60
+    "ev_ca60":    (False, "ev_def_toi", MIN_EV_TOI),   # 5v5 on-ice Corsi against / 60
+    "ev_cfshare": (True,  "ev_off_toi", MIN_EV_TOI),   # CF / (CF+CA)  (classic Corsi %)
+    "pp_xgf60":   (True,  "pp_off_toi", 40),           # power-play on-ice xGF / 60
+    "pk_xga60":   (False, "pk_def_toi", 40),           # penalty-kill on-ice xGA / 60
 }
 # box-score columns carried into the per-season detail
 BOX_COLS = ["gp", "toi_min", "g", "a1", "a2", "points", "sog", "icf", "blocks",
@@ -91,6 +107,41 @@ def season_impact(season, names) -> pd.DataFrame:
     return ev[keep_ev].merge(pp[keep_pp], on="player_id", how="left")
 
 
+def onice_table(allbox: pd.DataFrame) -> pd.DataFrame:
+    """Career on-ice rates per player (sums pooled across seasons → per-60 rates and shares).
+    Returns one row per player_id with the ONICE metric columns; NaN where no qualifying ice
+    time. These are descriptive (raw, un-isolated) variables in their own right."""
+    if not len(allbox) or not set(ONICE_COLS) <= set(allbox.columns):
+        return pd.DataFrame(columns=["player_id", *ONICE])
+    s = allbox.groupby("player_id")[ONICE_COLS].sum()
+
+    def per60(num, den):
+        return np.where(den > 0, num * 3600.0 / den.replace(0, np.nan), np.nan)
+
+    def share(f, a):
+        tot = f + a
+        return np.where(tot > 0, f / tot.replace(0, np.nan), np.nan)
+
+    out = pd.DataFrame({"player_id": s.index.astype(int)})
+    out["ev_xgf60"] = per60(s.ev_xgf_on, s.ev_onice_s)
+    out["ev_xga60"] = per60(s.ev_xga_on, s.ev_onice_s)
+    out["ev_xgshare"] = share(s.ev_xgf_on, s.ev_xga_on)
+    out["ev_cf60"] = per60(s.ev_cf_on, s.ev_onice_s)
+    out["ev_ca60"] = per60(s.ev_ca_on, s.ev_onice_s)
+    out["ev_cfshare"] = share(s.ev_cf_on, s.ev_ca_on)
+    out["pp_xgf60"] = per60(s.pp_xgf_on, s.pp_onice_s)
+    out["pk_xga60"] = per60(s.pk_xga_on, s.pk_onice_s)
+    return out.reset_index(drop=True)
+
+
+def add_onice_percentiles(df: pd.DataFrame) -> None:
+    """Add `<metric>_pct` (within position group, eligible pool only) for every ONICE metric."""
+    for col, (higher, toi_col, thr) in ONICE.items():
+        elig = df[df[toi_col] >= thr]
+        r = elig.groupby("group")[col].rank(pct=True)
+        df[f"{col}_pct"] = ((r if higher else 1 - r) * 100).round(0)
+
+
 def linemates(seasons, names, top=N_LINEMATES) -> dict[int, list]:
     """Top 5v5 linemates per player by shared on-ice time (from stints)."""
     stints = model.load_stints(seasons, model.SPECS["ev"].strengths)
@@ -129,6 +180,12 @@ def main() -> None:
         if p.exists():
             df = pd.read_parquet(p)
             box[s] = df[df.game_type == "regular"].copy() if "game_type" in df.columns else df
+    # career box totals across seasons (for the index + header)
+    allbox = pd.concat(box.values(), ignore_index=True) if box else pd.DataFrame()
+    # on-ice (raw, descriptive) metrics as first-class variables, with within-position percentiles
+    pooled = pooled.merge(onice_table(allbox), on="player_id", how="left")
+    add_onice_percentiles(pooled)
+
     simp = {s: season_impact(s, names) for s in seasons}
     mates = linemates(seasons, names)
 
@@ -140,8 +197,11 @@ def main() -> None:
     pdir = C.SITE_JSON / "player"
     pdir.mkdir(exist_ok=True)
 
-    # career box totals across seasons (for the index + header)
-    allbox = pd.concat(box.values(), ignore_index=True) if box else pd.DataFrame()
+    def onval(r, c):   # round an on-ice value off an itertuples row (None if missing)
+        v = getattr(r, c)
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return None
+        return round(float(v), 4 if c.endswith("share") else 2)
 
     index = []
     for r in table.itertuples():
@@ -151,11 +211,14 @@ def main() -> None:
         goals = int(career.g.sum()) if len(career) else 0
         assists = int((career.a1 + career.a2).sum()) if len(career) else 0
         pts = int(career.points.sum()) if len(career) else 0
+        team_list = sorted({t for ts in career.teams for t in ts}) if len(career) else []
         index.append({
-            "id": pid, "name": r.name, "pos": r.pos, "group": r.group,
+            "id": pid, "name": r.name, "pos": r.pos, "group": r.group, "teams": team_list,
             "ev_toi": r.ev_off_toi, "gp": gp, "g": goals, "a": assists, "points": pts,
             **{c: getattr(r, c) for c in METRICS},
             **{f"{c}_pct": getattr(r, f"{c}_pct") for c in METRICS},
+            **{c: onval(r, c) for c in ONICE},
+            **{f"{c}_pct": getattr(r, f"{c}_pct") for c in ONICE},
         })
 
         # --- detail ---
@@ -183,6 +246,7 @@ def main() -> None:
             "gp": gp, "g": goals, "a": assists, "points": pts,
             "impact": {m: {"v": getattr(r, m), "se": getattr(r, f"{m}_se"),
                            "toi": getattr(r, f"{m}_toi"), "pct": getattr(r, f"{m}_pct")} for m in METRICS},
+            "onice": {c: {"v": onval(r, c), "pct": getattr(r, f"{c}_pct")} for c in ONICE},
             "per_season": per_season,
             "linemates": mates.get(pid, [])[:N_LINEMATES],
         }

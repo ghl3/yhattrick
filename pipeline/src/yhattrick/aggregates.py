@@ -21,6 +21,7 @@ import pandas as pd
 
 from . import config as C
 from .clean import _downloaded_game_ids
+from .player_onice_model import MIN_STINT_S   # same stint filter the model uses, for a fair cross-check
 
 # counting stats tallied from pbp (points is derived). so_* are shootout-only and kept separate
 # from the flow-play totals (shootout is a tiebreaker, not real-play offence).
@@ -81,6 +82,56 @@ def event_counts(gids: list[int]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+# raw (un-modeled) on-ice sums per player, by strength — descriptive metrics in their own right
+# (and a cross-check on the isolated model): xG and Corsi for/against accumulated over every stint
+# the player was on the ice, plus on-ice TOI, so export can form per-60 rates and shares. Sums
+# (not rates) so seasons pool additively. EV has the full xG + Corsi family; special teams keeps
+# xG (PP offence, PK xG allowed).
+ONICE_COLS = ["ev_xgf_on", "ev_xga_on", "ev_cf_on", "ev_ca_on", "ev_onice_s",
+              "pp_xgf_on", "pp_onice_s", "pk_xga_on", "pk_onice_s"]
+_I = {c: i for i, c in enumerate(ONICE_COLS)}   # column -> accumulator index
+
+
+def onice_xg(season: int) -> pd.DataFrame:
+    """Raw on-ice xG/Corsi for/against + on-ice TOI per player from the stint table (regular
+    season only). EV (5v5) uses both teams' skaters; special teams credits the power-play team's
+    offence (pp_xgf_on) and the short-handed team's xG allowed (pk_xga_on)."""
+    p = C.PROCESSED / "stints" / f"{season}.parquet"
+    if not p.exists():
+        return pd.DataFrame(columns=["player_id", *ONICE_COLS])
+    df = pd.read_parquet(p)
+    # match the model's stint set exactly so raw rates and isolated coefficients share a TOI base:
+    # regular season, no overload, and drop sub-MIN_STINT_S line-change slivers.
+    df = df[df.nhl_game_id.map(C.is_regular_season) & (df.duration_s >= MIN_STINT_S)]
+    if "overload" in df.columns:
+        df = df[~df.overload]
+    XGF, XGA, CF, CA, EV = _I["ev_xgf_on"], _I["ev_xga_on"], _I["ev_cf_on"], _I["ev_ca_on"], _I["ev_onice_s"]
+    PPX, PPT, PKX, PKT = _I["pp_xgf_on"], _I["pp_onice_s"], _I["pk_xga_on"], _I["pk_onice_s"]
+    acc: dict[int, list] = defaultdict(lambda: [0.0] * len(ONICE_COLS))
+    for s in df.itertuples():
+        dur = float(s.duration_s)
+        hx, ax = float(s.home_xgf), float(s.away_xgf)
+        hc, ac = float(s.home_corsi), float(s.away_corsi)
+        if s.strength == "5v5":
+            for pid in s.home_skaters:
+                a = acc[int(pid)]; a[XGF] += hx; a[XGA] += ax; a[CF] += hc; a[CA] += ac; a[EV] += dur
+            for pid in s.away_skaters:
+                a = acc[int(pid)]; a[XGF] += ax; a[XGA] += hx; a[CF] += ac; a[CA] += hc; a[EV] += dur
+        elif s.home_n != s.away_n:                       # special teams (5v4 / 4v5)
+            if s.home_n > s.away_n:                       # home on the power play
+                for pid in s.home_skaters:
+                    a = acc[int(pid)]; a[PPX] += hx; a[PPT] += dur          # PP offence
+                for pid in s.away_skaters:
+                    a = acc[int(pid)]; a[PKX] += hx; a[PKT] += dur          # PK: xG allowed
+            else:                                        # away on the power play
+                for pid in s.away_skaters:
+                    a = acc[int(pid)]; a[PPX] += ax; a[PPT] += dur
+                for pid in s.home_skaters:
+                    a = acc[int(pid)]; a[PKX] += ax; a[PKT] += dur
+    rows = [{"player_id": pid, **dict(zip(ONICE_COLS, vals))} for pid, vals in acc.items()]
+    return pd.DataFrame(rows)
+
+
 def ice_and_team(sh: pd.DataFrame) -> pd.DataFrame:
     """GP, TOI and team(s) per player from a (game-type-filtered) shift table."""
     g = sh.groupby("player_id").agg(gp=("nhl_game_id", "nunique"), toi_s=("duration_s", "sum"))
@@ -112,12 +163,18 @@ def build_season(season: int) -> int:
     roster = pd.read_parquet(C.INTERIM / "roster" / f"{season}.parquet")[["player_id", "player_name", "position"]]
     reg = [g for g in gids if C.is_regular_season(g)]
     post = [g for g in gids if not C.is_regular_season(g)]
+    ox = onice_xg(season)                                # raw on-ice xG cross-check (regular only)
 
     frames = []
     for game_type, gg in (("regular", reg), ("playoff", post)):
         if not gg:
             continue
-        frames.append(_box_for(gg, sh[sh.nhl_game_id.isin(gg)], roster, season, game_type))
+        bf = _box_for(gg, sh[sh.nhl_game_id.isin(gg)], roster, season, game_type)
+        if game_type == "regular" and len(ox):
+            bf = bf.merge(ox, on="player_id", how="left")
+        for c in ONICE_COLS:                             # present (and 0-filled) on every row
+            bf[c] = bf[c].fillna(0.0) if c in bf.columns else 0.0
+        frames.append(bf)
     box = pd.concat(frames, ignore_index=True)
 
     out = C.INTERIM / "box" / f"{season}.parquet"

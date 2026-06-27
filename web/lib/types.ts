@@ -86,14 +86,26 @@ export interface GameTotals {
 }
 
 // --- model / player views (export_players.py) ---
+// modeled, isolated impact (RAPM, per-60 deltas)
 export type MetricKey = "ev_off" | "ev_def" | "pp_off" | "pk_def";
+// raw, descriptive on-ice rates (the team's rate while the player is on the ice, not isolated)
+export type OniceKey =
+  | "ev_xgf60" | "ev_xga60" | "ev_xgshare"
+  | "ev_cf60" | "ev_ca60" | "ev_cfshare"
+  | "pp_xgf60" | "pk_xga60";
 
 export interface PlayerRow {
   id: number;
   name: string;
   pos: string;
   group: "F" | "D";
+  teams: string[];
   ev_toi: number;
+  gp: number;
+  g: number;
+  a: number;
+  points: number;
+  // isolated impact + percentiles
   ev_off: number;
   ev_off_pct: number;
   ev_def: number;
@@ -102,6 +114,23 @@ export interface PlayerRow {
   pp_off_pct: number;
   pk_def: number;
   pk_def_pct: number;
+  // on-ice rates + percentiles (value keys from OniceKey, plus `${key}_pct`)
+  ev_xgf60: number | null;
+  ev_xga60: number | null;
+  ev_xgshare: number | null;
+  ev_cf60: number | null;
+  ev_ca60: number | null;
+  ev_cfshare: number | null;
+  pp_xgf60: number | null;
+  pk_xga60: number | null;
+  ev_xgf60_pct: number | null;
+  ev_xga60_pct: number | null;
+  ev_xgshare_pct: number | null;
+  ev_cf60_pct: number | null;
+  ev_ca60_pct: number | null;
+  ev_cfshare_pct: number | null;
+  pp_xgf60_pct: number | null;
+  pk_xga60_pct: number | null;
 }
 
 export interface PlayerMetric {
@@ -109,6 +138,11 @@ export interface PlayerMetric {
   se: number;
   toi: number;
   pct: number;
+}
+
+export interface OniceMetric {
+  v: number | null;
+  pct: number | null;
 }
 
 export interface SeasonRow {
@@ -156,6 +190,7 @@ export interface PlayerDetail {
   a: number;
   points: number;
   impact: Record<MetricKey, PlayerMetric>;
+  onice: Record<OniceKey, OniceMetric>;
   per_season: SeasonRow[];
   linemates: Linemate[];
 }
