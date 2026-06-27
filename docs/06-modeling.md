@@ -33,8 +33,8 @@ rate, adjusted for linemates and competition, fit separately per strength state.
   per-season or pooled (`--pool`).
 
 ```bash
-uv run python -m hockeywar.player_onice_model --season 2021          # one season, both models
-uv run python -m hockeywar.player_onice_model --pool --model pp_pk    # special teams, pooled seasons
+uv run python -m yhattrick.player_onice_model --season 2021          # one season, both models
+uv run python -m yhattrick.player_onice_model --pool --model pp_pk    # special teams, pooled seasons
 ```
 
 Known limitation (single-season): always-together pairs are hard to separate (e.g. an elite D

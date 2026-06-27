@@ -1,5 +1,6 @@
+"use client";
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import Link from "next/link";
 import {
   flexRender,
   getCoreRowModel,
@@ -9,8 +10,8 @@ import {
   type ColumnDef,
   type SortingState,
 } from "@tanstack/react-table";
-import type { MetricKey, PlayerRow } from "../lib/types";
-import { pctColor } from "../lib/format";
+import type { MetricKey, PlayerRow } from "@/lib/types";
+import { pctColor } from "@/lib/format";
 
 const METRICS: { key: MetricKey; label: string; title: string }[] = [
   { key: "ev_off", label: "EV O", title: "Even-strength offense impact (xGF/60)" },
@@ -33,7 +34,7 @@ const columns: ColumnDef<PlayerRow>[] = [
   {
     header: "Player",
     accessorKey: "name",
-    cell: (c) => <Link to={`/player/${c.row.original.id}`}>{c.getValue<string>()}</Link>,
+    cell: (c) => <Link href={`/player/${c.row.original.id}`}>{c.getValue<string>()}</Link>,
   },
   { header: "Pos", accessorKey: "pos" },
   { header: "EV TOI", accessorKey: "ev_toi", cell: (c) => <span className="num">{Math.round(c.getValue<number>())}</span> },
@@ -55,7 +56,7 @@ export default function Players() {
   const [sorting, setSorting] = useState<SortingState>([{ id: "ev_off", desc: true }]);
 
   useEffect(() => {
-    fetch(`${import.meta.env.BASE_URL}data/players.json`)
+    fetch(`/data/players.json`)
       .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
       .then(setRows)
       .catch((e) => setError(String(e)));
@@ -78,7 +79,7 @@ export default function Players() {
   });
 
   if (error)
-    return <div className="loading">Failed to load players.json ({error}). Run <code>uv run python -m hockeywar.export_model</code>.</div>;
+    return <div className="loading">Failed to load players.json ({error}). Run <code>uv run python -m yhattrick.export_players</code>.</div>;
   if (!rows) return <div className="loading">Loading players…</div>;
 
   return (

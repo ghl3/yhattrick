@@ -6,7 +6,7 @@ Writes:
   data/games/player/<id>.json    full detail (headline impact, per-season stats+impact, linemates)
 then syncs to web/public/data.
 
-Usage:  uv run python -m hockeywar.export_players
+Usage:  uv run python -m yhattrick.export_players
 """
 from __future__ import annotations
 

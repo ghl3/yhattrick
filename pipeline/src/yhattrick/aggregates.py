@@ -8,8 +8,8 @@ penalty committer/drawer, give/takeaway player), so the counting stats are attri
 Output: interim/box/<season>.parquet — one row per player-season.
 
 Usage:
-  uv run python -m hockeywar.aggregates                 # all seasons with data
-  uv run python -m hockeywar.aggregates --season 2021
+  uv run python -m yhattrick.aggregates                 # all seasons with data
+  uv run python -m yhattrick.aggregates --season 2021
 """
 from __future__ import annotations
 

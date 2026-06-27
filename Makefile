@@ -20,31 +20,31 @@ SEASON ?=
 .PHONY: fetch fetch-moneypuck fetch-season clean-data stints box model games players pipeline web-dev
 
 fetch:
-	$(PIPELINE) hockeywar.download all
+	$(PIPELINE) yhattrick.download all
 
 fetch-moneypuck:
-	$(PIPELINE) hockeywar.download moneypuck
+	$(PIPELINE) yhattrick.download moneypuck
 
 fetch-season:
-	$(PIPELINE) hockeywar.download games --season $(SEASON)
+	$(PIPELINE) yhattrick.download games --season $(SEASON)
 
 clean-data:
-	$(PIPELINE) hockeywar.clean
+	$(PIPELINE) yhattrick.clean
 
 stints:
-	$(PIPELINE) hockeywar.stints
+	$(PIPELINE) yhattrick.stints
 
 box:
-	$(PIPELINE) hockeywar.aggregates
+	$(PIPELINE) yhattrick.aggregates
 
 model:
-	$(PIPELINE) hockeywar.player_onice_model
+	$(PIPELINE) yhattrick.player_onice_model
 
 games:
-	$(PIPELINE) hockeywar.export_games
+	$(PIPELINE) yhattrick.export_games
 
 players:
-	$(PIPELINE) hockeywar.export_players
+	$(PIPELINE) yhattrick.export_players
 
 pipeline: clean-data stints box games players
 

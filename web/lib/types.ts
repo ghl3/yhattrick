@@ -1,4 +1,4 @@
-// Shapes of the JSON the pipeline writes to web/public/data (see build_games.py).
+// Shapes of the JSON the pipeline writes to web/public/data (see export_games.py).
 
 export interface GameIndexRow {
   game_id: number;
@@ -84,7 +84,7 @@ export interface GameTotals {
   away_score: number | null;
 }
 
-// --- model / player views (export_model.py) ---
+// --- model / player views (export_players.py) ---
 export type MetricKey = "ev_off" | "ev_def" | "pp_off" | "pk_def";
 
 export interface PlayerRow {

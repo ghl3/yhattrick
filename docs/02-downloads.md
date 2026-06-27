@@ -14,8 +14,8 @@ make fetch-moneypuck            # just the MoneyPuck season files
 make fetch-season SEASON=2024   # NHL per-game data for one season
 ```
 
-Under the hood these call `python -m hockeywar.download {moneypuck|games|all}` (also exposed as
-the `hockeywar-fetch` console script). Minimal parameters by design: seasons come from
+Under the hood these call `python -m yhattrick.download {moneypuck|games|all}` (also exposed as
+the `yhattrick-fetch` console script). Minimal parameters by design: seasons come from
 `config.SEASONS`, and the **game list is derived from the data itself** (the unique `game_id`s
 in each MoneyPuck shots file), so there is nothing to configure per game.
 

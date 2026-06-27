@@ -20,10 +20,10 @@ Built on the borrowed MoneyPuck xG attached to each stint; swappable for our own
 Runs on whatever seasons are present in data/processed/stints (prototype-friendly).
 
 Usage:
-  uv run python -m hockeywar.player_onice_model                 # every model, every available season
-  uv run python -m hockeywar.player_onice_model --season 2021
-  uv run python -m hockeywar.player_onice_model --pool          # pool all available seasons into one fit
-  uv run python -m hockeywar.player_onice_model --model pp_pk    # just special teams (or 'ev')
+  uv run python -m yhattrick.player_onice_model                 # every model, every available season
+  uv run python -m yhattrick.player_onice_model --season 2021
+  uv run python -m yhattrick.player_onice_model --pool          # pool all available seasons into one fit
+  uv run python -m yhattrick.player_onice_model --model pp_pk    # just special teams (or 'ev')
 """
 from __future__ import annotations
 

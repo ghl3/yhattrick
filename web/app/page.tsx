@@ -1,5 +1,6 @@
+"use client";
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import Link from "next/link";
 import {
   flexRender,
   getCoreRowModel,
@@ -9,15 +10,15 @@ import {
   type ColumnDef,
   type SortingState,
 } from "@tanstack/react-table";
-import type { GameIndexRow } from "../lib/types";
-import { seasonLabel } from "../lib/format";
+import type { GameIndexRow } from "@/lib/types";
+import { seasonLabel } from "@/lib/format";
 
 const columns: ColumnDef<GameIndexRow>[] = [
   {
     header: "Date",
     accessorKey: "date",
     cell: (c) => (
-      <Link to={`/game/${c.row.original.game_id}`}>{c.getValue<string>() ?? "—"}</Link>
+      <Link href={`/game/${c.row.original.game_id}`}>{c.getValue<string>() ?? "—"}</Link>
     ),
   },
   { header: "Season", accessorKey: "season", cell: (c) => seasonLabel(c.getValue<number>()) },
@@ -26,7 +27,7 @@ const columns: ColumnDef<GameIndexRow>[] = [
     id: "matchup",
     accessorFn: (r) => `${r.away} @ ${r.home}`,
     cell: (c) => (
-      <Link to={`/game/${c.row.original.game_id}`}>
+      <Link href={`/game/${c.row.original.game_id}`}>
         {c.row.original.away} @ {c.row.original.home}
       </Link>
     ),
@@ -53,7 +54,7 @@ export default function GamesIndex() {
   const [sorting, setSorting] = useState<SortingState>([{ id: "date", desc: false }]);
 
   useEffect(() => {
-    fetch(`${import.meta.env.BASE_URL}data/games.json`)
+    fetch(`/data/games.json`)
       .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
       .then(setRows)
       .catch((e) => setError(String(e)));

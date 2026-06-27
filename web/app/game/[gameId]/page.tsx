@@ -1,8 +1,10 @@
+"use client";
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Link, useParams } from "react-router-dom";
-import type { Game, PlayerAgg, PlayerRef, Stint, TimelineEvent } from "../lib/types";
-import { mmss } from "../lib/format";
-import EventCard from "../components/EventCard";
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import type { Game, PlayerAgg, PlayerRef, Stint, TimelineEvent } from "@/lib/types";
+import { mmss } from "@/lib/format";
+import EventCard from "@/components/EventCard";
 
 const PERIOD_NAMES: Record<number, string> = { 1: "1st", 2: "2nd", 3: "3rd", 4: "OT", 5: "SO" };
 
@@ -15,7 +17,7 @@ function PName({ name }: { name?: string | null }) {
   if (!name) return null;
   const id = map.get(name);
   return id ? (
-    <Link to={`/player/${id}`} onClick={(e) => e.stopPropagation()}>
+    <Link href={`/player/${id}`} onClick={(e) => e.stopPropagation()}>
       {name}
     </Link>
   ) : (
@@ -247,7 +249,7 @@ function PlayerTable({ side, players }: { side: "home" | "away"; players: Player
       <tbody>
         {rows.map((p) => (
           <tr key={p.id}>
-            <td>{p.pos === "G" ? p.name : <Link to={`/player/${p.id}`}>{p.name}</Link>}</td>
+            <td>{p.pos === "G" ? p.name : <Link href={`/player/${p.id}`}>{p.name}</Link>}</td>
             <td>{p.pos}</td>
             <td>{p.shifts}</td>
             <td>{mmss(p.toi_s)}</td>
@@ -265,13 +267,14 @@ function PlayerTable({ side, players }: { side: "home" | "away"; players: Player
 }
 
 export default function GameView() {
-  const { gameId } = useParams();
+  const params = useParams<{ gameId: string }>();
+  const gameId = params.gameId;
   const [game, setGame] = useState<Game | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setGame(null);
-    fetch(`${import.meta.env.BASE_URL}data/game/${gameId}.json`)
+    fetch(`/data/game/${gameId}.json`)
       .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
       .then(setGame)
       .catch((e) => setError(String(e)));
@@ -300,7 +303,7 @@ export default function GameView() {
 
   return (
     <LinkMap.Provider value={nameToId}>
-      <Link className="backlink" to="/">
+      <Link className="backlink" href="/">
         ← all games
       </Link>
 

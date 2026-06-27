@@ -1,4 +1,4 @@
-import type { TimelineEvent } from "../lib/types";
+import type { TimelineEvent } from "@/lib/types";
 
 // Full NHL rink. Coords: x in [-100,100] ft, y in [-42.5,42.5]; goal lines at x=±89, blue at ±25.
 const FT = 2;

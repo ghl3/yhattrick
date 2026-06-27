@@ -14,8 +14,8 @@ Health check: every shot's reconstructed on-ice skater counts must match MoneyPu
 home/awaySkatersOnIce. We report the match rate per season and fail if it falls below a floor.
 
 Usage:
-  uv run python -m hockeywar.stints                 # all seasons present in interim/
-  uv run python -m hockeywar.stints --season 2021
+  uv run python -m yhattrick.stints                 # all seasons present in interim/
+  uv run python -m yhattrick.stints --season 2021
 """
 from __future__ import annotations
 

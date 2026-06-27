@@ -241,3 +241,18 @@ table.shot-meta td { padding: 2px 0; font-variant-numeric: tabular-nums; }
 .muted { color: var(--muted); }
 .loading { padding: 40px; text-align: center; color: var(--muted); }
 .backlink { font-size: 13px; margin-bottom: 12px; display: inline-block; }
+
+/* --- yHatTrick brand + about page --- */
+.brand-name { font-size: 16px; }
+.brand-y { color: var(--accent-deep); font-weight: 800; }
+
+.prose { max-width: 820px; }
+.prose h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: -0.4px; }
+.prose h2 { margin: 0 0 10px; font-size: 17px; }
+.prose p { margin: 0 0 12px; }
+.prose ul { margin: 0 0 4px; padding-left: 20px; }
+.prose li { margin-bottom: 8px; }
+.prose em { color: var(--muted); font-style: italic; }
+
+.about-hero { display: flex; align-items: center; gap: 18px; }
+.about-hero .lede { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.5; }

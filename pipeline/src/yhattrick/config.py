@@ -51,7 +51,7 @@ MONEYPUCK_SKATERS_URL = "https://moneypuck.com/moneypuck/playerData/seasonSummar
 NHL_SHIFTCHARTS_URL = "https://api.nhle.com/stats/rest/en/shiftcharts?cayenneExp=gameId={game_id}"
 NHL_PBP_URL = "https://api-web.nhle.com/v1/gamecenter/{game_id}/play-by-play"
 
-USER_AGENT = "Mozilla/5.0 (hockeywar data pipeline; research/personal use)"
+USER_AGENT = "Mozilla/5.0 (yhattrick data pipeline; research/personal use)"
 REQUEST_TIMEOUT = 30           # seconds per request
 THROTTLE_SECONDS = 0.4         # polite delay between NHL API calls
 MAX_RETRIES = 3

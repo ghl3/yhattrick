@@ -1,8 +1,10 @@
+"use client";
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import Link from "next/link";
+import { useParams } from "next/navigation";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import type { MetricKey, PlayerDetail, SeasonRow } from "../lib/types";
-import { pctColor } from "../lib/format";
+import type { MetricKey, PlayerDetail, SeasonRow } from "@/lib/types";
+import { pctColor } from "@/lib/format";
 
 const seasonLabel = (s: number) => `${s}-${String(s + 1).slice(-2)}`;
 
@@ -61,14 +63,15 @@ function MetricBox({ label, blurb, v, se, toi, pctile, group }: {
 }
 
 export default function Player() {
-  const { id } = useParams();
+  const params = useParams<{ id: string }>();
+  const id = params.id;
   const [p, setP] = useState<PlayerDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [stat, setStat] = useState("points");
 
   useEffect(() => {
     setP(null);
-    fetch(`${import.meta.env.BASE_URL}data/player/${id}.json`)
+    fetch(`/data/player/${id}.json`)
       .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
       .then(setP)
       .catch((e) => setError(String(e)));
@@ -87,7 +90,7 @@ export default function Player() {
 
   return (
     <div>
-      <Link className="backlink" to="/players">← all players</Link>
+      <Link className="backlink" href="/players">← all players</Link>
 
       <div className="panel">
         <div className="player-head">
@@ -167,7 +170,7 @@ export default function Player() {
         <h2>Top 5v5 linemates</h2>
         <div className="linemates">
           {p.linemates.map((lm) => (
-            <Link key={lm.id} to={`/player/${lm.id}`} className="linemate">
+            <Link key={lm.id} href={`/player/${lm.id}`} className="linemate">
               <span className="lm-name">{lm.name}</span>
               <span className="lm-toi">{Math.round(lm.toi_min)} min 5v5</span>
             </Link>

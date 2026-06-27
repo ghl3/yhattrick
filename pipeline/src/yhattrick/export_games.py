@@ -10,8 +10,8 @@ the play-by-play events (faceoffs, shots w/ borrowed xG + on-ice-match flag, goa
 hits) so the on-ice sets, strength, and shot attribution can be eyeballed against reality.
 
 Usage:
-  uv run python -m hockeywar.build_games                 # all processed seasons
-  uv run python -m hockeywar.build_games --season 2021 --limit 50
+  uv run python -m yhattrick.build_games                 # all processed seasons
+  uv run python -m yhattrick.build_games --season 2021 --limit 50
 """
 from __future__ import annotations
 

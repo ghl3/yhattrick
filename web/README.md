@@ -1,32 +1,31 @@
-# React + TypeScript + Vite
+# ŷHatTrick — web
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The ŷHatTrick site: a Next.js (App Router) front end for browsing NHL games
+shift-by-shift and inspecting isolated player-impact ratings.
 
-Currently, two official plugins are available:
+It reads static JSON written by the pipeline to `public/data/` (see the project
+root `Makefile`: `make games` and `make players`).
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Develop
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+npm run dev      # http://localhost:3000
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## Build
+
+```bash
+npm run build
+npm run start
+```
+
+## Routes
+
+- `/` — games index
+- `/game/[gameId]` — stint-by-stint timeline + event/rink cards
+- `/players` — player impact leaderboard
+- `/player/[id]` — player card (impact, per-season trends, linemates)
+- `/about` — what the project is and how the model works
+
+Deployed on Vercel.

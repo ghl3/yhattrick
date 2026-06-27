@@ -10,10 +10,10 @@ games to fetch from it -- no schedule API needed. Every fetch checks for an exis
 first, so re-running only pulls what's missing (resumable).
 
 Usage:
-  uv run python -m hockeywar.download moneypuck            # all season zips + skaters
-  uv run python -m hockeywar.download games --season 2024  # shiftcharts+pbp for that season
-  uv run python -m hockeywar.download games --season 2024 --limit 25
-  uv run python -m hockeywar.download all                  # everything, all seasons
+  uv run python -m yhattrick.download moneypuck            # all season zips + skaters
+  uv run python -m yhattrick.download games --season 2024  # shiftcharts+pbp for that season
+  uv run python -m yhattrick.download games --season 2024 --limit 25
+  uv run python -m yhattrick.download all                  # everything, all seasons
 """
 from __future__ import annotations
 

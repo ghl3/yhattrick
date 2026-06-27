@@ -9,8 +9,8 @@ Outputs (parquet, partitioned by season):
 No joining happens here (that's stints.py). raw/ is never modified.
 
 Usage:
-  uv run python -m hockeywar.clean                 # all configured seasons
-  uv run python -m hockeywar.clean --season 2024
+  uv run python -m yhattrick.clean                 # all configured seasons
+  uv run python -m yhattrick.clean --season 2024
 """
 from __future__ import annotations
 

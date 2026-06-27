@@ -74,7 +74,7 @@ shift data is the exact fallback if event-to-event derivation proves too coarse.
 hockey/
   pipeline/                      # Python (uv project)
     pyproject.toml
-    src/hockeywar/
+    src/yhattrick/
       config.py                  # seasons, constants (goals/win≈6, penalty≈0.17, k, λ), paths
       download.py                # fetch 5 seasons of hockeyR-data pbp -> data/raw/
       clean.py                   # parse/filter events, normalize on-ice cols -> tidy events
