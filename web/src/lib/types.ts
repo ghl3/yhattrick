@@ -84,6 +84,81 @@ export interface GameTotals {
   away_score: number | null;
 }
 
+// --- model / player views (export_model.py) ---
+export type MetricKey = "ev_off" | "ev_def" | "pp_off" | "pk_def";
+
+export interface PlayerRow {
+  id: number;
+  name: string;
+  pos: string;
+  group: "F" | "D";
+  ev_toi: number;
+  ev_off: number;
+  ev_off_pct: number;
+  ev_def: number;
+  ev_def_pct: number;
+  pp_off: number;
+  pp_off_pct: number;
+  pk_def: number;
+  pk_def_pct: number;
+}
+
+export interface PlayerMetric {
+  v: number;
+  se: number;
+  toi: number;
+  pct: number;
+}
+
+export interface SeasonRow {
+  season: number;
+  team: string;
+  gp: number;
+  toi_min: number;
+  g: number;
+  a1: number;
+  a2: number;
+  points: number;
+  sog: number;
+  icf: number;
+  blocks: number;
+  hits: number;
+  takeaways: number;
+  giveaways: number;
+  fo_won: number;
+  fo_lost: number;
+  pen_taken: number;
+  pen_drawn: number;
+  so_g?: number;
+  so_att?: number;
+  ev_off?: number | null;
+  ev_def?: number | null;
+  pp_off?: number | null;
+  pk_def?: number | null;
+}
+
+export interface Linemate {
+  id: number;
+  name: string;
+  toi_min: number;
+}
+
+export interface PlayerDetail {
+  id: number;
+  name: string;
+  pos: string;
+  group: "F" | "D";
+  teams: string[];
+  seasons: number[];
+  gp: number;
+  g: number;
+  a: number;
+  points: number;
+  impact: Record<MetricKey, PlayerMetric>;
+  per_season: SeasonRow[];
+  linemates: Linemate[];
+}
+
 export interface Game {
   game_id: number;
   date: string | null;

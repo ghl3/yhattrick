@@ -1,10 +1,40 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import type { Game, PlayerAgg, PlayerRef, Stint, TimelineEvent } from "../lib/types";
 import { mmss } from "../lib/format";
 import EventCard from "../components/EventCard";
 
 const PERIOD_NAMES: Record<number, string> = { 1: "1st", 2: "2nd", 3: "3rd", 4: "OT", 5: "SO" };
+
+// name -> player id for the players in this game (skaters with a player page)
+const LinkMap = createContext<Map<string, number>>(new Map());
+
+// a player name that links to the player page when we have one (skaters only)
+function PName({ name }: { name?: string | null }) {
+  const map = useContext(LinkMap);
+  if (!name) return null;
+  const id = map.get(name);
+  return id ? (
+    <Link to={`/player/${id}`} onClick={(e) => e.stopPropagation()}>
+      {name}
+    </Link>
+  ) : (
+    <span>{name}</span>
+  );
+}
+
+function PlayerList({ players }: { players: PlayerRef[] }) {
+  return (
+    <>
+      {players.map((p, i) => (
+        <span key={p.id}>
+          {i > 0 ? ", " : ""}
+          {p.pos === "G" ? p.name : <PName name={p.name} />}
+        </span>
+      ))}
+    </>
+  );
+}
 
 function Collapsible({ title, children, open: initial = true }: { title: ReactNode; children: ReactNode; open?: boolean }) {
   const [open, setOpen] = useState(initial);
@@ -36,7 +66,7 @@ function EventRow({ e }: { e: TimelineEvent }) {
         <span className="et">{e.clock.split(" ")[1]}</span>
         <span className={`ev-type ${cls}`}>{e.type.replace(/-/g, " ")}</span>
         <span className="muted">{e.team ?? ""}</span>
-        <span>{e.player ?? ""}</span>
+        <span><PName name={e.player} /></span>
         {e.detail && <span className="muted">({e.detail})</span>}
         {isShot && (
           <span className="ev-xg">
@@ -52,9 +82,6 @@ function EventRow({ e }: { e: TimelineEvent }) {
   );
 }
 
-function names(players: { name: string }[]) {
-  return players.map((p) => p.name).join(", ");
-}
 
 // players present in `cur` but not `prev` (came on) — by id, returning names
 function diff(prev: PlayerRef[], cur: PlayerRef[]) {
@@ -73,12 +100,12 @@ function ChangeGroup({ team, on, off }: { team: string; on: string[]; off: strin
       {team}{" "}
       {on.map((n) => (
         <span key={"on" + n} className="on">
-          +{n}{" "}
+          +<PName name={n} />{" "}
         </span>
       ))}
       {off.map((n) => (
         <span key={"off" + n} className="off">
-          −{n}{" "}
+          −<PName name={n} />{" "}
         </span>
       ))}
     </span>
@@ -122,14 +149,14 @@ function StintBlock({ s, prev, home, away }: { s: Stint; prev?: Stint; home: str
             <div className="line home">
               <div className="lab">Home skaters {s.home_goalie[0] ? "" : "· goalie pulled"}</div>
               <div className="names">
-                {names(s.home_skaters)}
+                <PlayerList players={s.home_skaters} />
                 {s.home_goalie[0] && <span className="g"> · G {s.home_goalie[0].name}</span>}
               </div>
             </div>
             <div className="line away">
               <div className="lab">Away skaters {s.away_goalie[0] ? "" : "· goalie pulled"}</div>
               <div className="names">
-                {names(s.away_skaters)}
+                <PlayerList players={s.away_skaters} />
                 {s.away_goalie[0] && <span className="g"> · G {s.away_goalie[0].name}</span>}
               </div>
             </div>
@@ -220,7 +247,7 @@ function PlayerTable({ side, players }: { side: "home" | "away"; players: Player
       <tbody>
         {rows.map((p) => (
           <tr key={p.id}>
-            <td>{p.name}</td>
+            <td>{p.pos === "G" ? p.name : <Link to={`/player/${p.id}`}>{p.name}</Link>}</td>
             <td>{p.pos}</td>
             <td>{p.shifts}</td>
             <td>{mmss(p.toi_s)}</td>
@@ -260,13 +287,19 @@ export default function GameView() {
     return [...groups.entries()].sort((a, b) => a[0] - b[0]);
   }, [game]);
 
+  // skater name -> id, so any name in the timeline can link to that player's page
+  const nameToId = useMemo(
+    () => new Map((game?.players ?? []).filter((p) => p.pos !== "G").map((p) => [p.name, p.id])),
+    [game]
+  );
+
   if (error) return <div className="loading">Failed to load game {gameId} ({error}).</div>;
   if (!game) return <div className="loading">Loading game…</div>;
 
   const t = game.totals;
 
   return (
-    <div>
+    <LinkMap.Provider value={nameToId}>
       <Link className="backlink" to="/">
         ← all games
       </Link>
@@ -315,6 +348,6 @@ export default function GameView() {
           <PeriodSection key={period} period={period} stints={stints} home={game.home} away={game.away} />
         ))}
       </div>
-    </div>
+    </LinkMap.Provider>
   );
 }

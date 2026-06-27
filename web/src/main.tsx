@@ -5,6 +5,8 @@ import "./styles.css";
 import App from "./App";
 import GamesIndex from "./routes/GamesIndex";
 import GameView from "./routes/GameView";
+import Players from "./routes/Players";
+import Player from "./routes/Player";
 
 const router = createBrowserRouter([
   {
@@ -13,6 +15,8 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <GamesIndex /> },
       { path: "game/:gameId", element: <GameView /> },
+      { path: "players", element: <Players /> },
+      { path: "player/:id", element: <Player /> },
     ],
   },
 ]);

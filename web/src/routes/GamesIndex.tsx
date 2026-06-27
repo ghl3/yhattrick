@@ -10,7 +10,7 @@ import {
   type SortingState,
 } from "@tanstack/react-table";
 import type { GameIndexRow } from "../lib/types";
-import { pct, seasonLabel } from "../lib/format";
+import { seasonLabel } from "../lib/format";
 
 const columns: ColumnDef<GameIndexRow>[] = [
   {
@@ -44,11 +44,6 @@ const columns: ColumnDef<GameIndexRow>[] = [
   { header: "Stints", accessorKey: "n_stints", cell: (c) => <span className="num">{c.getValue<number>()}</span> },
   { header: "Shots", accessorKey: "n_shots", cell: (c) => <span className="num">{c.getValue<number>()}</span> },
   { header: "Events", accessorKey: "n_events", cell: (c) => <span className="num">{c.getValue<number>()}</span> },
-  {
-    header: "On-ice match",
-    accessorKey: "onice_exact",
-    cell: (c) => <span className="num">{pct(c.getValue<number | null>())}</span>,
-  },
 ];
 
 export default function GamesIndex() {
@@ -91,7 +86,7 @@ export default function GamesIndex() {
         />
         <span className="muted">{subtitle}</span>
       </div>
-      <table className="games">
+      <table className="games gtable">
         <thead>
           {table.getHeaderGroups().map((hg) => (
             <tr key={hg.id}>

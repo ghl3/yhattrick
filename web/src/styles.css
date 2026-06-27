@@ -32,16 +32,68 @@ body {
 a { color: var(--accent-deep); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-.app-header {
-  background: linear-gradient(180deg, var(--accent) 0%, var(--accent-deep) 100%);
-  color: #fff;
-  padding: 14px 24px;
+.navbar {
+  background: #fff;
+  border-bottom: 1px solid var(--border);
 }
-.app-header h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: 0.2px; }
-.app-header h1 a { color: #fff; }
-.app-header .sub { font-size: 12px; opacity: 0.85; margin-top: 2px; }
+.nav-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 11px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.brand { display: inline-flex; align-items: center; gap: 10px; color: var(--text); font-weight: 700; font-size: 16px; letter-spacing: -0.2px; }
+.brand:hover { text-decoration: none; }
+.brand svg { display: block; border-radius: 6px; }
+.nav-links { display: flex; gap: 4px; }
+.nav-links a { padding: 6px 13px; border-radius: 6px; color: var(--muted); font-weight: 500; font-size: 14px; }
+.nav-links a:hover { background: var(--accent-softer); text-decoration: none; }
+.nav-links a.active { color: var(--accent-deep); background: var(--accent-soft); }
 
-.container { max-width: 1100px; margin: 0 auto; padding: 22px 24px 80px; }
+/* segmented control (position filter) */
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+.seg button { border: 0; background: #fff; color: var(--muted); padding: 7px 14px; font-size: 13px; cursor: pointer; border-left: 1px solid var(--border); }
+.seg button:first-child { border-left: 0; }
+.seg button.active { background: var(--accent-soft); color: var(--accent-deep); font-weight: 600; }
+
+/* percentile-tinted metric cell in the players table */
+.metric-cell { display: inline-block; min-width: 46px; padding: 2px 8px; border-radius: 5px; text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+/* player card */
+.player-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.player-name { margin: 0; font-size: 24px; font-weight: 700; }
+.player-meta { color: var(--muted); font-size: 13px; }
+.metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+.metric-box { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; }
+.mb-pct { padding: 10px 12px; display: flex; align-items: baseline; gap: 8px; }
+.mb-pctile { font-size: 22px; font-weight: 700; color: var(--text); }
+.mb-vs { font-size: 11px; color: var(--text); opacity: 0.7; }
+.mb-body { padding: 10px 12px; }
+.mb-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); font-weight: 600; }
+.mb-val { font-size: 18px; font-weight: 600; font-family: var(--mono); margin-top: 2px; }
+.mb-ci { font-size: 12px; color: var(--muted); font-weight: 400; }
+.mb-blurb { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+.mb-toi { font-size: 11px; color: var(--muted); margin-top: 6px; font-family: var(--mono); }
+.card-note { font-size: 12px; margin: 16px 0 0; }
+
+/* per-season trend chart + table */
+.chart-wrap { margin: 4px 0 14px; }
+table.season-table th.sortable { cursor: pointer; }
+table.season-table th.graphed, table.season-table td.graphed { background: var(--accent-soft); }
+table.season-table th.graphed { color: var(--accent-deep); }
+table.season-table td:first-child, table.season-table th:first-child { font-variant-numeric: normal; }
+
+/* linemates */
+.linemates { display: flex; flex-wrap: wrap; gap: 8px; }
+.linemate { display: flex; flex-direction: column; gap: 1px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--accent-softer); }
+.linemate:hover { background: var(--accent-soft); text-decoration: none; }
+.lm-name { font-weight: 600; color: var(--accent-deep); font-size: 13px; }
+.lm-toi { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+
+.container { max-width: 1100px; margin: 0 auto; padding: 24px 24px 80px; }
 
 /* --- panels --- */
 .panel {
@@ -71,6 +123,12 @@ table.games th:hover { color: var(--accent-deep); }
 table.games td { padding: 8px 12px; border-bottom: 1px solid var(--accent-softer); white-space: nowrap; }
 table.games tr:hover td { background: var(--accent-softer); }
 .num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--mono); }
+
+/* numeric column alignment: headers AND cells match. Text columns stay left. */
+.gtable th:nth-child(n+4), .gtable td:nth-child(n+4) { text-align: right; }
+.ptable th:nth-child(n+3), .ptable td:nth-child(n+3) { text-align: right; }
+table.season-table th:nth-child(n+3), table.season-table td:nth-child(n+3) { text-align: right; }
+table.season-table th:nth-child(-n+2), table.season-table td:nth-child(-n+2) { text-align: left; }
 
 .pill { display: inline-block; padding: 1px 7px; border-radius: 20px; font-size: 11px; font-weight: 600; }
 .pill.good { background: #e6f5ec; color: var(--good); }
@@ -174,6 +232,9 @@ table.shot-meta td { padding: 2px 0; font-variant-numeric: tabular-nums; }
 .changes .grp { color: var(--muted); }
 .changes .on { color: var(--good); font-weight: 600; }
 .changes .off { color: var(--bad); font-weight: 600; }
+/* links inside the line-change diff keep the green/red, not the default link blue */
+.changes .on a, .changes .off a { color: inherit; }
+.changes .on a:hover, .changes .off a:hover { text-decoration: underline; }
 .changes .start { color: var(--muted); font-style: italic; }
 .players th.sortable { cursor: pointer; user-select: none; }
 .players th.sortable:hover { color: var(--accent-deep); }

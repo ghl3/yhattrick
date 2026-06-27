@@ -1,33 +1,47 @@
-# 06 — Modeling (deferred)
+# 06 — Modeling
 
-> Status: **not yet implemented.** Phase 1 builds the clean data layer and the inspection site;
-> modeling comes next, on top of `data/processed/`. This doc records the intended approach; the
-> authoritative design is `../PLAN.md`.
+The goal is a from-scratch **Wins Above Replacement (WAR)** rating for skaters, assembled from
+isolated, per-60 impact components. Built on `data/processed/`. Authoritative design: `../PLAN.md`.
 
-The goal is a from-scratch **Wins Above Replacement (WAR)** rating for skaters over five seasons,
-assembled from isolated, per-60 impact components.
+## Implemented: isolated-impact model (`impact.py`)
 
-## Planned stages
+A regularized adjusted plus-minus that isolates each player's per-60 effect on the expected-goal
+rate, adjusted for linemates and competition, fit separately per strength state.
 
-1. **xG** — start on the **borrowed** MoneyPuck `xGoal` (already attached to every shot) to get
-   the whole pipeline working end-to-end, then train our own calibrated XGBoost model on the
-   shot features and swap it in, validating against the borrowed values.
-2. **RAPM** — ridge regression over stints (the `processed/stints` table) with dual
-   offense/defense player encodings, weighted by stint TOI, run per strength state, yielding
-   per-player per-60 coefficients (EV offense/defense, PP, PK). Stints flagged `overload` or with
-   `large` on-ice disagreement are dropped/downweighted.
-3. **Finishing** — shrunk goals-minus-xG residual per player-season.
-4. **Penalties** — (drawn − taken) × a goal value.
-5. **GAR → WAR** — convert coefficients to goals over ice time, subtract a position-specific
-   replacement baseline (roster-depth cutoff), divide by goals-per-win; then percentiles.
+- **Observations**: each stint contributes a team-attacking row — response = that team's xG per
+  60 min; predictors = an OFFENCE indicator for each on-ice attacker and a DEFENCE indicator for
+  each defender, plus a home-ice term. Even strength (5v5) emits both perspectives; special teams
+  (5v4) emits only the power-play team attacking, so PP offence and PK defence stay pure. Stints
+  flagged `overload` and sub-10s line-change stints are dropped.
+- **Fit**: weighted ridge (TOI weights), strength chosen by game-grouped cross-validation
+  (`scikit-learn` `Ridge` + `GroupKFold`; sparse design via `scipy.sparse`).
+- **Parameters** per player (each with a standard error and role TOI):
 
-A later v2 explores a hierarchical/shared-effect RAPM to stabilize small special-teams samples.
+  | Strength | Offence | Defence |
+  |---|---|---|
+  | 5v5 | `ev_off` (xG/60 added) | `ev_def` (xG/60 allowed) |
+  | 5v4 | `pp_off` (power-play offence) | `pk_def` (penalty-kill xG allowed) |
 
-## What modeling will consume
+- **Uncertainty**: analytic ridge standard errors (`*_se`) from the coefficient covariance —
+  intervals widen with low ice time and with collinearity (linemates who never separate).
+- **Outputs**: `data/models/{ev,pp_pk}_<seasons>.parquet`. Runs on whatever seasons are processed,
+  per-season or pooled (`--pool`).
 
-Everything it needs already exists in `data/processed/`:
-- `stints/<season>.parquet` — the RAPM design substrate (on-ice players, strength, xGF/xGA, TOI).
-- `shots_onice/<season>.parquet` — per-shot xG with on-ice context (xG model + finishing).
-- `interim/events` + MoneyPuck `skaters` — penalties drawn/taken and validation totals.
+```bash
+uv run python -m hockeywar.impact --season 2021          # one season, both models
+uv run python -m hockeywar.impact --pool --model pp_pk    # special teams, pooled seasons
+```
 
-The website will then gain leaderboard and player-card routes alongside the existing game view.
+Known limitation (single-season): always-together pairs are hard to separate (e.g. an elite D
+pair can have its offence assigned to one partner). Pooling seasons and a future hierarchical
+variant address this.
+
+## Next (not yet built)
+
+- **Finishing** — shrunk goals-minus-xG residual per player-season.
+- **Penalties** — (drawn − taken) × a goal value.
+- **GAR → WAR** — convert the impact coefficients to goals over ice time, subtract a
+  position-specific replacement baseline, divide by goals-per-win; then percentiles.
+- **Our own xG** — XGBoost on the shot features, validated against the borrowed `xGoal`, swapped
+  in under the whole stack.
+- A leaderboard + player-card route on the website surfacing these with their confidence.

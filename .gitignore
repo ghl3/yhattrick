@@ -3,6 +3,7 @@
 /data/interim/
 /data/processed/
 /data/games/
+/data/models/
 /data/*.log
 /web/public/data/
 

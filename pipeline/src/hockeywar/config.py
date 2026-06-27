@@ -29,6 +29,7 @@ RAW_PBP = RAW / "nhl" / "pbp"
 
 INTERIM = DATA / "interim"
 PROCESSED = DATA / "processed"
+MODELS = DATA / "models"          # model outputs (impact coefficients, WAR, ...)
 
 # Canonical site-facing JSON lives in the data tree; build_games syncs a copy to the web app.
 SITE_JSON = DATA / "games"
@@ -72,3 +73,8 @@ def mp_to_nhl_game_id(mp_game_id: int, season: int) -> int:
 def nhl_to_mp_game_id(nhl_game_id: int) -> int:
     """2024020500 -> 20500 (drop the 4-digit season + the inserted 0)."""
     return int(str(nhl_game_id)[5:])
+
+
+def is_regular_season(nhl_game_id: int) -> bool:
+    """NHL gameId game-type digits are 02 for regular season, 03 for playoffs."""
+    return (nhl_game_id // 10000) % 100 == 2
