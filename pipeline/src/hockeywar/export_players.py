@@ -6,7 +6,7 @@ Writes:
   data/games/player/<id>.json    full detail (headline impact, per-season stats+impact, linemates)
 then syncs to web/public/data.
 
-Usage:  uv run python -m hockeywar.export_model
+Usage:  uv run python -m hockeywar.export_players
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 from . import config as C
-from . import impact
+from . import player_onice_model as model
 
 FULL_MIN_GAMES = 200     # treat a season as "full" (skip tiny dev slices)
 MIN_EV_TOI = 100         # minutes of 5v5 ice time to appear in the table
@@ -57,7 +57,7 @@ def _dump(obj) -> str:
 
 def full_seasons() -> list[int]:
     out = []
-    for s in impact.available_seasons():
+    for s in model.available_seasons():
         n = pd.read_parquet(C.PROCESSED / "stints" / f"{s}.parquet", columns=["nhl_game_id"]).nhl_game_id.nunique()
         if n >= FULL_MIN_GAMES:
             out.append(s)
@@ -66,8 +66,8 @@ def full_seasons() -> list[int]:
 
 def pooled_impact(seasons, names) -> pd.DataFrame:
     """One row per player across the window, with within-position percentiles (headline card)."""
-    ev = impact.fit_cached(seasons, impact.SPECS["ev"], names)
-    pp = impact.fit_cached(seasons, impact.SPECS["pp_pk"], names)
+    ev = model.fit_cached(seasons, model.SPECS["ev"], names)
+    pp = model.fit_cached(seasons, model.SPECS["pp_pk"], names)
     df = ev.merge(pp.drop(columns=["name", "pos"]), on="player_id", how="left")
     df = df[df.pos.isin(SKATER_POS)].copy()
     df["group"] = np.where(df.pos == "D", "D", "F")
@@ -82,8 +82,8 @@ def pooled_impact(seasons, names) -> pd.DataFrame:
 
 def season_impact(season, names) -> pd.DataFrame:
     """Per-season ev_off/ev_def/pp_off/pk_def for one season (no percentiles)."""
-    ev = impact.fit_cached([season], impact.SPECS["ev"], names)
-    pp = impact.fit_cached([season], impact.SPECS["pp_pk"], names)
+    ev = model.fit_cached([season], model.SPECS["ev"], names)
+    pp = model.fit_cached([season], model.SPECS["pp_pk"], names)
     if ev.empty:
         return pd.DataFrame()
     keep_ev = ["player_id", "ev_off", "ev_def"]
@@ -93,7 +93,7 @@ def season_impact(season, names) -> pd.DataFrame:
 
 def linemates(seasons, names, top=N_LINEMATES) -> dict[int, list]:
     """Top 5v5 linemates per player by shared on-ice time (from stints)."""
-    stints = impact.load_stints(seasons, impact.SPECS["ev"].strengths)
+    stints = model.load_stints(seasons, model.SPECS["ev"].strengths)
     pair: dict[tuple, float] = defaultdict(float)
     for s in stints.itertuples():
         for side in (s.home_skaters, s.away_skaters):
@@ -119,7 +119,7 @@ def main() -> None:
     if not seasons:
         raise SystemExit("no full processed seasons available — run `make stints` first")
     print(f"[export] seasons {seasons}")
-    names = impact.roster_names(seasons)
+    names = model.roster_names(seasons)
 
     pooled = pooled_impact(seasons, names)
     # regular-season box only (playoffs are kept separate in the parquet via game_type)

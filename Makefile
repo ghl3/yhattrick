@@ -8,7 +8,7 @@
 #   make box                        # per-player box score (our pbp)    -> data/interim/box
 #   make games                      # per-game timelines (site JSON)    -> web/public/data
 #   make players                    # player ratings + box (site JSON)  -> web/public/data
-#   make impact                     # fit/cache the isolated-impact models
+#   make model                     # fit/cache the isolated-impact models
 #   make pipeline                   # clean-data + stints + box + games + players
 #   make web-dev                    # run the website dev server
 #
@@ -17,7 +17,7 @@
 PIPELINE := cd pipeline && uv run python -m
 SEASON ?=
 
-.PHONY: fetch fetch-moneypuck fetch-season clean-data stints box impact games players pipeline web-dev
+.PHONY: fetch fetch-moneypuck fetch-season clean-data stints box model games players pipeline web-dev
 
 fetch:
 	$(PIPELINE) hockeywar.download all
@@ -37,8 +37,8 @@ stints:
 box:
 	$(PIPELINE) hockeywar.aggregates
 
-impact:
-	$(PIPELINE) hockeywar.impact
+model:
+	$(PIPELINE) hockeywar.player_onice_model
 
 games:
 	$(PIPELINE) hockeywar.export_games

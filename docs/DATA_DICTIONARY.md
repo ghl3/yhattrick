@@ -52,10 +52,17 @@ for how each table is produced.
 
 ## processed/stints/&lt;season&gt;.parquet — one row per stint
 
-`nhl_game_id`, `stint_idx`, `start_g`, `end_g`, `duration_s`, `home_skaters` (list[int]),
+Core: `nhl_game_id`, `stint_idx`, `start_g`, `end_g`, `duration_s`, `home_skaters` (list[int]),
 `away_skaters` (list[int]), `home_goalie`, `away_goalie` (int|null), `home_n`, `away_n` (skater
 counts), `strength` (e.g. `5v5`), `home_xgf`, `away_xgf` (summed borrowed xG), `overload`
 (bool — illegal >6-skater stint, a source shift-timing artifact).
+
+Context & volume (all from our own pbp, not MoneyPuck; stored for current and future modeling):
+- `home_corsi`/`away_corsi` — shot attempts (SOG + missed + blocked + goal) by the shooting team.
+- `home_fen`/`away_fen` — unblocked attempts (Fenwick); `home_sog`/`away_sog` — shots on goal.
+- `home_lead` — home goals − away goals **before** the stint (score state).
+- `start_zone`/`end_zone` — home-perspective faceoff zone (`O`/`D`/`N`, null if not a faceoff).
+- `start_type` — `faceoff` or `fly` (on-the-fly change).
 
 ## processed/shots_onice/&lt;season&gt;.parquet — one row per shot, with on-ice context
 

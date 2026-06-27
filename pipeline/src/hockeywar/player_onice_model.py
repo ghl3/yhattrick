@@ -20,10 +20,10 @@ Built on the borrowed MoneyPuck xG attached to each stint; swappable for our own
 Runs on whatever seasons are present in data/processed/stints (prototype-friendly).
 
 Usage:
-  uv run python -m hockeywar.impact                 # every model, every available season
-  uv run python -m hockeywar.impact --season 2021
-  uv run python -m hockeywar.impact --pool          # pool all available seasons into one fit
-  uv run python -m hockeywar.impact --model pp_pk    # just special teams (or 'ev')
+  uv run python -m hockeywar.player_onice_model                 # every model, every available season
+  uv run python -m hockeywar.player_onice_model --season 2021
+  uv run python -m hockeywar.player_onice_model --pool          # pool all available seasons into one fit
+  uv run python -m hockeywar.player_onice_model --model pp_pk    # just special teams (or 'ev')
 """
 from __future__ import annotations
 
@@ -96,17 +96,34 @@ def roster_names(seasons: list[int]) -> dict[int, dict]:
 def build_design(stints: pd.DataFrame, dual: bool):
     """Return sparse X, y, weights, the player ids per column block, per-row game ids (for CV),
     and per-player offence/defence TOI (seconds). For dual (EV) each stint emits both attacking
-    perspectives; otherwise only the team with more skaters (the power play) attacks."""
+    perspectives; otherwise only the team with more skaters (the power play) attacks.
+
+    Beyond the 2*P player off/def columns, the design carries shared NON-per-player covariates,
+    all oriented to the attacking team of each row: home ice, offensive/defensive zone start,
+    trailing/leading score state, per-season indicators (era drift), and period (2nd/3rd).
+    These absorb deployment/score/era bias so player coefficients better reflect skill; they are
+    fit but not reported per player."""
     players = sorted(set().union(*stints.home_skaters, *stints.away_skaters))
     idx = {p: i for i, p in enumerate(players)}
     P = len(players)
-    HOME_COL = 2 * P
+
+    seasons_present = sorted(stints.season.unique())
+    season_col = {s: i for i, s in enumerate(seasons_present[1:])}  # first season = reference
+
+    base = 2 * P
+    COV = {"home": base, "ozone": base + 1, "dzone": base + 2, "trail": base + 3, "lead": base + 4}
+    s_base = base + 5
+    for s, i in season_col.items():
+        COV[f"season_{s}"] = s_base + i
+    p_base = s_base + len(season_col)
+    COV["p2"], COV["p3"] = p_base, p_base + 1
+    n_cols = p_base + 2
 
     rows, cols, vals, y, w, games = [], [], [], [], [], []
     off_toi, def_toi = {}, {}
     r = 0
 
-    def emit(off_ids, def_ids, xgf, dur, is_home, gid):
+    def emit(off_ids, def_ids, xgf, dur, atk_home, s):
         nonlocal r
         for p in off_ids:
             rows.append(r); cols.append(idx[p]); vals.append(1.0)
@@ -114,24 +131,44 @@ def build_design(stints: pd.DataFrame, dual: bool):
         for p in def_ids:
             rows.append(r); cols.append(P + idx[p]); vals.append(1.0)
             def_toi[p] = def_toi.get(p, 0.0) + dur
-        if is_home:
-            rows.append(r); cols.append(HOME_COL); vals.append(1.0)
+
+        def put(name):
+            rows.append(r); cols.append(COV[name]); vals.append(1.0)
+
+        if atk_home:
+            put("home")
+        # zone start (attacking perspective): home O-zone == away D-zone, so flip for away
+        if s.start_type == "faceoff" and s.start_zone in ("O", "D"):
+            az = s.start_zone if atk_home else ("O" if s.start_zone == "D" else "D")
+            put("ozone" if az == "O" else "dzone")
+        lead = s.home_lead if atk_home else -s.home_lead
+        if lead < 0:
+            put("trail")
+        elif lead > 0:
+            put("lead")
+        if s.season in season_col:
+            put(f"season_{s.season}")
+        period = s.start_g // C.PERIOD_SECONDS + 1
+        if period == 2:
+            put("p2")
+        elif period >= 3:
+            put("p3")
+
         y.append(xgf * 3600.0 / dur)  # xG per 60 minutes
         w.append(dur)
-        games.append(gid)
+        games.append(s.nhl_game_id)
         r += 1
 
     for s in stints.itertuples():
         if dual:
-            emit(s.home_skaters, s.away_skaters, s.home_xgf, s.duration_s, True, s.nhl_game_id)
-            emit(s.away_skaters, s.home_skaters, s.away_xgf, s.duration_s, False, s.nhl_game_id)
-        else:  # power-play team (more skaters) attacks
-            if s.home_n > s.away_n:
-                emit(s.home_skaters, s.away_skaters, s.home_xgf, s.duration_s, True, s.nhl_game_id)
-            else:
-                emit(s.away_skaters, s.home_skaters, s.away_xgf, s.duration_s, False, s.nhl_game_id)
+            emit(s.home_skaters, s.away_skaters, s.home_xgf, s.duration_s, True, s)
+            emit(s.away_skaters, s.home_skaters, s.away_xgf, s.duration_s, False, s)
+        elif s.home_n > s.away_n:  # power-play team (more skaters) attacks
+            emit(s.home_skaters, s.away_skaters, s.home_xgf, s.duration_s, True, s)
+        else:
+            emit(s.away_skaters, s.home_skaters, s.away_xgf, s.duration_s, False, s)
 
-    X = sparse.csr_matrix((vals, (rows, cols)), shape=(r, 2 * P + 1))
+    X = sparse.csr_matrix((vals, (rows, cols)), shape=(r, n_cols))
     return X, np.asarray(y), np.asarray(w), players, np.asarray(games), off_toi, def_toi
 
 
