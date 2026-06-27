@@ -20,6 +20,7 @@ import pandas as pd
 
 from . import config as C
 from . import player_onice_model as model
+from . import finishing
 from .aggregates import ONICE_COLS
 
 FULL_MIN_GAMES = 200     # treat a season as "full" (skip tiny dev slices)
@@ -48,6 +49,22 @@ ONICE = {
     "ev_cfshare": (True,  "ev_off_toi", MIN_EV_TOI),   # CF / (CF+CA)  (classic Corsi %)
     "pp_xgf60":   (True,  "pp_off_toi", 40),           # power-play on-ice xGF / 60
     "pk_xga60":   (False, "pk_def_toi", 40),           # penalty-kill on-ice xGA / 60
+}
+
+# --- individual (on-puck) metrics: the player's OWN shooting & production, all situations. Rates
+# are per-60 of all-situations TOI; finishing comes from finishing.py.  name -> (higher_better,
+# eligibility_col, threshold) ---
+SHOTS_MIN = 150          # min unblocked shots to rank shot-based metrics
+INDIV_TOI_MIN = 200      # min all-situations minutes to rank production rates
+INDIVIDUAL = {
+    "shots60":     (True,  "shots", SHOTS_MIN),        # unblocked shots / 60 (shot generation)
+    "xg_per_shot": (True,  "shots", SHOTS_MIN),        # avg xG per shot (shot quality / danger)
+    "ixg60":       (True,  "shots", SHOTS_MIN),        # individual xG / 60 (= shots60 x xg_per_shot)
+    "fin_per100":  (True,  "shots", SHOTS_MIN),        # finishing: goals above expected / 100 shots
+    "g60":         (True,  "toi_all", INDIV_TOI_MIN),  # goals / 60
+    "a60":         (True,  "toi_all", INDIV_TOI_MIN),  # assists / 60
+    "pen_drawn60": (True,  "toi_all", INDIV_TOI_MIN),  # penalties drawn / 60
+    "pen_taken60": (False, "toi_all", INDIV_TOI_MIN),  # penalties taken / 60 (lower is better)
 }
 # box-score columns carried into the per-season detail
 BOX_COLS = ["gp", "toi_min", "g", "a1", "a2", "points", "sog", "icf", "blocks",
@@ -142,6 +159,46 @@ def add_onice_percentiles(df: pd.DataFrame) -> None:
         df[f"{col}_pct"] = ((r if higher else 1 - r) * 100).round(0)
 
 
+def career_totals(allbox: pd.DataFrame) -> pd.DataFrame:
+    """Per-player career sums needed for the individual rates (all-situations TOI + production)."""
+    if not len(allbox):
+        return pd.DataFrame(columns=["player_id", "toi_all", "c_g", "c_a", "c_pd", "c_pt"])
+    s = allbox.groupby("player_id").agg(
+        toi_s=("toi_s", "sum"), c_g=("g", "sum"), a1=("a1", "sum"), a2=("a2", "sum"),
+        c_pd=("pen_drawn", "sum"), c_pt=("pen_taken", "sum")).reset_index()
+    s["player_id"] = s.player_id.astype(int)
+    s["toi_all"] = (s.toi_s / 60.0)                    # all-situations minutes
+    s["c_a"] = s.a1 + s.a2
+    return s[["player_id", "toi_all", "c_g", "c_a", "c_pd", "c_pt"]]
+
+
+def individual_table(fin: pd.DataFrame, career: pd.DataFrame) -> pd.DataFrame:
+    """Per-player individual rates: shot volume/quality, ixG/60, finishing, scoring + penalties /60.
+    `fin` from finishing.py (shots, ixg, fin_per100, ...); `career` from career_totals."""
+    df = career.merge(fin[["player_id", "shots", "ixg", "fin_per100", "fin_per100_se", "fin_goals"]],
+                      on="player_id", how="left")
+    sec = df.toi_all * 60.0
+    df["shots"] = df.shots.fillna(0.0)
+    df["ixg"] = df.ixg.fillna(0.0)
+    per60 = lambda n: np.where(sec > 0, n * 3600.0 / sec.replace(0, np.nan), np.nan)
+    df["shots60"] = per60(df.shots)
+    df["ixg60"] = per60(df.ixg)
+    df["xg_per_shot"] = np.where(df.shots > 0, df.ixg / df.shots.replace(0, np.nan), np.nan)
+    df["g60"] = per60(df.c_g)
+    df["a60"] = per60(df.c_a)
+    df["pen_drawn60"] = per60(df.c_pd)
+    df["pen_taken60"] = per60(df.c_pt)
+    return df
+
+
+def add_individual_percentiles(df: pd.DataFrame) -> None:
+    """Add `<metric>_pct` (within position group, eligible pool only) for every INDIVIDUAL metric."""
+    for col, (higher, elig_col, thr) in INDIVIDUAL.items():
+        elig = df[df[elig_col] >= thr]
+        r = elig.groupby("group")[col].rank(pct=True)
+        df[f"{col}_pct"] = ((r if higher else 1 - r) * 100).round(0)
+
+
 def linemates(seasons, names, top=N_LINEMATES) -> dict[int, list]:
     """Top 5v5 linemates per player by shared on-ice time (from stints)."""
     stints = model.load_stints(seasons, model.SPECS["ev"].strengths)
@@ -186,6 +243,13 @@ def main() -> None:
     pooled = pooled.merge(onice_table(allbox), on="player_id", how="left")
     add_onice_percentiles(pooled)
 
+    # individual (on-puck) metrics: shooting, finishing, scoring, penalties — all situations
+    fin_k = finishing.pooled_k(seasons, names)
+    pooled = pooled.merge(individual_table(finishing.fit_cached(seasons, names), career_totals(allbox)),
+                          on="player_id", how="left")
+    add_individual_percentiles(pooled)
+    fin_season = {s: finishing.season_finishing(s, names, fin_k) for s in seasons}
+
     simp = {s: season_impact(s, names) for s in seasons}
     mates = linemates(seasons, names)
 
@@ -197,11 +261,14 @@ def main() -> None:
     pdir = C.SITE_JSON / "player"
     pdir.mkdir(exist_ok=True)
 
+    def _rnd(v, n):
+        return None if v is None or (isinstance(v, float) and math.isnan(v)) else round(float(v), n)
+
     def onval(r, c):   # round an on-ice value off an itertuples row (None if missing)
-        v = getattr(r, c)
-        if v is None or (isinstance(v, float) and math.isnan(v)):
-            return None
-        return round(float(v), 4 if c.endswith("share") else 2)
+        return _rnd(getattr(r, c), 4 if c.endswith("share") else 2)
+
+    def indval(r, c):  # round an individual value (xg_per_shot is small -> more precision)
+        return _rnd(getattr(r, c), 4 if c == "xg_per_shot" else 2)
 
     index = []
     for r in table.itertuples():
@@ -219,6 +286,8 @@ def main() -> None:
             **{f"{c}_pct": getattr(r, f"{c}_pct") for c in METRICS},
             **{c: onval(r, c) for c in ONICE},
             **{f"{c}_pct": getattr(r, f"{c}_pct") for c in ONICE},
+            **{c: indval(r, c) for c in INDIVIDUAL},
+            **{f"{c}_pct": getattr(r, f"{c}_pct") for c in INDIVIDUAL},
         })
 
         # --- detail ---
@@ -238,6 +307,15 @@ def main() -> None:
                 ir = si[si.player_id == pid]
                 if len(ir):
                     rec.update({m: (None if pd.isna(ir.iloc[0][m]) else round(float(ir.iloc[0][m]), 3)) for m in METRICS})
+            fs = fin_season.get(s)
+            if fs is not None and len(fs):
+                fr = fs[fs.player_id == pid]
+                sec = float(brow.toi_min) * 60.0
+                if len(fr) and sec > 0:
+                    fr = fr.iloc[0]
+                    rec["shots60"] = round(float(fr.shots) * 3600.0 / sec, 2)
+                    rec["xg_per_shot"] = round(float(fr.ixg) / fr.shots, 4) if fr.shots > 0 else None
+                    rec["fin_per100"] = None if pd.isna(fr.fin_per100) else round(float(fr.fin_per100), 2)
             per_season.append(rec)
 
         detail = {
@@ -247,6 +325,12 @@ def main() -> None:
             "impact": {m: {"v": getattr(r, m), "se": getattr(r, f"{m}_se"),
                            "toi": getattr(r, f"{m}_toi"), "pct": getattr(r, f"{m}_pct")} for m in METRICS},
             "onice": {c: {"v": onval(r, c), "pct": getattr(r, f"{c}_pct")} for c in ONICE},
+            "individual": {c: {"v": indval(r, c), "pct": getattr(r, f"{c}_pct"),
+                               **({"se": _rnd(getattr(r, "fin_per100_se"), 2)} if c == "fin_per100" else {})}
+                           for c in INDIVIDUAL},
+            "shooting": {"shots": int(_rnd(getattr(r, "shots"), 0) or 0),
+                         "ixg": _rnd(getattr(r, "ixg"), 1),
+                         "fin_goals": _rnd(getattr(r, "fin_goals"), 1)},
             "per_season": per_season,
             "linemates": mates.get(pid, [])[:N_LINEMATES],
         }

@@ -66,6 +66,14 @@ allowed). Stored as **sums** so seasons pool additively; `export_players` divide
 rates (`ev_xgf60`, `ev_cf60`, …) and shares (`ev_xgshare`, `ev_cfshare`), each with a
 within-position percentile.
 
+## data/models/finishing_&lt;seasons&gt;.parquet — one row per shooter
+
+Finishing (goals above expected, regressed), pooled over all in-play regular-season unblocked
+shots, empty-net + shootout excluded: `player_id`, `name`, `pos`, `shots` (F, unblocked),
+`ixg` (Σ xGoal), `goals` (G), `fin_per100` (= (G−ixG)/(F+k)·100, the shrunk headline),
+`fin_per100_se`, `fin_goals` (= (G−ixG)·F/(F+k), shrunk total for WAR), `fin_goals_se`. Shrinkage
+`k` and its EB diagnostics are logged to `logs/model/finishing_<seasons>.meta.json`.
+
 ## processed/stints/&lt;season&gt;.parquet — one row per stint
 
 Core: `nhl_game_id`, `stint_idx`, `start_g`, `end_g`, `duration_s`, `home_skaters` (list[int]),

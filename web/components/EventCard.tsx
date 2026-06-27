@@ -110,8 +110,7 @@ export default function EventCard({ e }: { e: TimelineEvent }) {
       ["Shot type", e.shot_type ?? "—"],
       ["Distance", e.distance != null ? `${e.distance} ft` : "—"],
       ["Angle", e.angle != null ? `${e.angle}°` : "—"],
-      ["Rush / Rebound", `${e.rush ? "rush" : "—"} / ${e.rebound ? "rebound" : "—"}`],
-      ["On-ice match", e.onice_match ?? "—"]
+      ["Rush / Rebound", `${e.rush ? "rush" : "—"} / ${e.rebound ? "rebound" : "—"}`]
     );
   }
   return (
@@ -122,7 +121,7 @@ export default function EventCard({ e }: { e: TimelineEvent }) {
           {rows.map(([k, v]) => (
             <tr key={k}>
               <th>{k}</th>
-              <td className={k === "On-ice match" && v === "large" ? "flag-large" : ""}>{v}</td>
+              <td>{v}</td>
             </tr>
           ))}
         </tbody>

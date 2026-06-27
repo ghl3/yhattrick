@@ -13,10 +13,10 @@ import {
 import type { PlayerRow } from "@/lib/types";
 import { pctColor } from "@/lib/format";
 
-type View = "impact" | "onice";
+type View = "impact" | "onice" | "individual";
+const num3 = (v: number) => v.toFixed(3);
 const num2 = (v: number) => v.toFixed(2);
 const num1 = (v: number) => v.toFixed(1);
-const pct1 = (v: number) => `${(v * 100).toFixed(0)}%`;
 
 // metric columns per view: modeled (isolated) impact vs raw on-ice rates
 type MetricCol = { key: keyof PlayerRow; label: string; title: string; fmt: (v: number) => string };
@@ -28,12 +28,18 @@ const VIEWS: Record<View, MetricCol[]> = {
     { key: "pk_def", label: "PK", title: "Penalty-kill defense impact, isolated (xGA/60 suppressed)", fmt: num2 },
   ],
   onice: [
-    { key: "ev_xgshare", label: "xGF%", title: "5v5 on-ice expected-goals share", fmt: pct1 },
-    { key: "ev_cfshare", label: "CF%", title: "5v5 on-ice Corsi (shot-attempt) share", fmt: pct1 },
     { key: "ev_xgf60", label: "xGF/60", title: "5v5 on-ice expected goals for / 60", fmt: num2 },
     { key: "ev_xga60", label: "xGA/60", title: "5v5 on-ice expected goals against / 60", fmt: num2 },
     { key: "ev_cf60", label: "CF/60", title: "5v5 on-ice Corsi for / 60", fmt: num1 },
     { key: "ev_ca60", label: "CA/60", title: "5v5 on-ice Corsi against / 60", fmt: num1 },
+  ],
+  individual: [
+    { key: "fin_per100", label: "Fin/100", title: "Finishing: goals above expected per 100 shots (regressed)", fmt: num2 },
+    { key: "shots60", label: "Sh/60", title: "Unblocked shots per 60", fmt: num1 },
+    { key: "xg_per_shot", label: "xG/sh", title: "Average shot quality (xG per shot)", fmt: num3 },
+    { key: "ixg60", label: "ixG/60", title: "Individual expected goals per 60", fmt: num2 },
+    { key: "g60", label: "G/60", title: "Goals per 60", fmt: num2 },
+    { key: "a60", label: "A/60", title: "Assists per 60", fmt: num2 },
   ],
 };
 
@@ -124,9 +130,9 @@ export default function Players() {
           ))}
         </div>
         <div className="seg">
-          {(["impact", "onice"] as const).map((v) => (
+          {(["impact", "individual", "onice"] as const).map((v) => (
             <button key={v} className={view === v ? "active" : ""} onClick={() => switchView(v)}>
-              {v === "impact" ? "Isolated impact" : "On-ice rates"}
+              {v === "impact" ? "Isolated impact" : v === "individual" ? "Individual rates" : "Team rates"}
             </button>
           ))}
         </div>

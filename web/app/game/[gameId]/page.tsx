@@ -85,7 +85,6 @@ function EventRow({ e }: { e: TimelineEvent }) {
           <span className="ev-xg">
             {e.shot_type ? `${e.shot_type} ` : ""}
             {e.distance != null ? `${e.distance}ft · ` : ""}xG {e.xGoal!.toFixed(3)}
-            {e.onice_match === "large" && <span className="flag-large"> ⚠on-ice</span>}
           </span>
         )}
         {located && <span className="ev-expand">{open ? "▾" : "▸"}</span>}

@@ -93,6 +93,10 @@ export type OniceKey =
   | "ev_xgf60" | "ev_xga60" | "ev_xgshare"
   | "ev_cf60" | "ev_ca60" | "ev_cfshare"
   | "pp_xgf60" | "pk_xga60";
+// individual (on-puck) rates — the player's own shooting & production, all situations
+export type IndividualKey =
+  | "shots60" | "xg_per_shot" | "ixg60" | "fin_per100"
+  | "g60" | "a60" | "pen_drawn60" | "pen_taken60";
 
 export interface PlayerRow {
   id: number;
@@ -131,6 +135,23 @@ export interface PlayerRow {
   ev_cfshare_pct: number | null;
   pp_xgf60_pct: number | null;
   pk_xga60_pct: number | null;
+  // individual rates + percentiles
+  shots60: number | null;
+  xg_per_shot: number | null;
+  ixg60: number | null;
+  fin_per100: number | null;
+  g60: number | null;
+  a60: number | null;
+  pen_drawn60: number | null;
+  pen_taken60: number | null;
+  shots60_pct: number | null;
+  xg_per_shot_pct: number | null;
+  ixg60_pct: number | null;
+  fin_per100_pct: number | null;
+  g60_pct: number | null;
+  a60_pct: number | null;
+  pen_drawn60_pct: number | null;
+  pen_taken60_pct: number | null;
 }
 
 export interface PlayerMetric {
@@ -143,6 +164,12 @@ export interface PlayerMetric {
 export interface OniceMetric {
   v: number | null;
   pct: number | null;
+}
+
+export interface IndividualMetric {
+  v: number | null;
+  pct: number | null;
+  se?: number; // only finishing carries a CI
 }
 
 export interface SeasonRow {
@@ -170,6 +197,9 @@ export interface SeasonRow {
   ev_def?: number | null;
   pp_off?: number | null;
   pk_def?: number | null;
+  shots60?: number | null;
+  xg_per_shot?: number | null;
+  fin_per100?: number | null;
 }
 
 export interface Linemate {
@@ -191,6 +221,8 @@ export interface PlayerDetail {
   points: number;
   impact: Record<MetricKey, PlayerMetric>;
   onice: Record<OniceKey, OniceMetric>;
+  individual: Record<IndividualKey, IndividualMetric>;
+  shooting: { shots: number; ixg: number | null; fin_goals: number | null };
   per_season: SeasonRow[];
   linemates: Linemate[];
 }

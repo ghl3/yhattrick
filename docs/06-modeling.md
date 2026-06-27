@@ -57,21 +57,49 @@ uv run python -m yhattrick.player_onice_model --pool --model pp_pk       # speci
 uv run python -m yhattrick.player_onice_model --pool --family tweedie    # Tweedie GLM, pooled
 ```
 
-**Cross-check on the site**: each modeled coefficient is shown next to the player's *raw* on-ice
-per-60 rate (xGF/60 for offence, xGA/60 for defence), computed in `aggregates.py` from the stint
-table. A large gap between raw and isolated means linemates/usage — not the player — drove the
-on-ice number.
-
 Known limitation: always-together pairs are still hard to separate (an elite D pair can have its
 offence assigned to one partner). Pooling seasons helps; a future hierarchical variant (PP↔EV
 pooling, player overall component) would help more.
 
+## Implemented: finishing (`finishing.py`)
+
+Isolated on-ice xGF measures team chance *volume*, not the player's own shooting, so it can't credit
+elite scorers. **Finishing** fills that gap: goals scored above the expected-goals value of the
+player's own shots, `G − ixG` (ixG = Σ`xGoal` over his unblocked shots). It's low-repeatability, so
+it's **regressed toward zero** by empirical-Bayes shrinkage — estimate the population spread of true
+per-shot finishing talent τ² (method of moments) and shrink each player by `k = σ̄²/τ²` shots:
+
+  `fin_per100 = (G−ixG)/(F+k)·100` (headline)   `fin_goals = (G−ixG)·F/(F+k)` (WAR-ready total)
+
+Pooled over all in-play situations (regular season), excluding empty-net and shootout; analytic SE
+→ a 95% CI. Output `data/models/finishing_<seasons>.parquet`; full meta (k, τ², σ̄², league G/ixG)
+in `logs/model/`. Run: `uv run python -m yhattrick.finishing --pool`.
+
+## The three per-player metric families (site)
+
+Each player is described by three parallel families, shown as separate card sections and an index
+view-toggle:
+
+- **Isolated impact** — value *adjusted* for linemates & competition (the RAPM coefficients above).
+- **On-ice rates** — the team's rates *while the player is on the ice*, unadjusted (xGF/60, xGA/60,
+  xGF%, Corsi CF/60, CA/60, CF%), from `aggregates.py`. A big gap vs isolated impact means
+  linemates/usage drove the on-ice number.
+- **Individual rates** — the player's *own* on-puck production (all situations): Shots/60,
+  xG/shot (shot quality), ixG/60, **Finishing/100**, Goals/60, Assists/60, Penalties drawn/taken
+  per 60. Note `Shots/60 × xG/shot = ixG/60`.
+
 ## Next (not yet built)
 
-- **Finishing** — shrunk goals-minus-xG residual per player-season.
-- **Penalties** — (drawn − taken) × a goal value.
+- **Penalties value** — (drawn − taken) × a goal value (rates already shown).
 - **GAR → WAR** — convert the impact coefficients to goals over ice time, subtract a
   position-specific replacement baseline, divide by goals-per-win; then percentiles.
-- **Our own xG** — XGBoost on the shot features, validated against the borrowed `xGoal`, swapped
-  in under the whole stack.
+- **Our own xG (high priority)** — the borrowed MoneyPuck `xGoal` is calibrated in aggregate
+  (league predicted 0.068 ≈ actual 0.068) but has a systematic **S-shaped per-bin bias**: it
+  *under*-rates mid-danger shots (0.02–0.10 xG convert at 1.1–1.3× predicted) and *over*-rates
+  high-danger shots (0.15–0.50 convert at 0.7–0.9×). This biases `xG/shot` by shot-mix and loads
+  the residual into finishing (inflated for perimeter shooters like Panarin, deflated for
+  slot-chance players), and rides along in on-ice xG + the RAPM. Fix: a gradient-boosted model on
+  our shot features + pre-shot context (time/distance since last event, rush sequences, score
+  state), then isotonic/Platt **calibration** so the per-bin curve is flat. Swap in under the whole
+  stack.
 - A leaderboard + player-card route on the website surfacing these with their confidence.
