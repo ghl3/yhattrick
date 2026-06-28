@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 export const metadata: Metadata = {
   title: "About",
   description:
-    "What ŷTrick is, how the isolated-impact model works, where the data comes from, and how to read the numbers.",
+    "An independent NHL analytics site: an in-house expected-goals model, isolated player-impact ratings, descriptive stats, and a shift-by-shift view of every game — all from public NHL data.",
 };
 
 export default function About() {
@@ -13,102 +13,97 @@ export default function About() {
         <div>
           <h1><span className="brand-y">ŷ</span>Trick</h1>
           <p className="lede">
-            A from-scratch NHL player-value project: isolated even-strength and special-teams
-            impact ratings, plus a browsable, shift-by-shift view of every game.
+            An independent NHL analytics site: an in-house expected-goals model, isolated
+            player-impact ratings, descriptive stats, and a shift-by-shift view of every game — all
+            built from public NHL data.
           </p>
         </div>
       </div>
 
       <div className="panel">
-        <h2>The name</h2>
-        <p>
-          In statistics, a <em>hat</em> marks a predicted value — <strong>ŷ</strong> (“y-hat”) is the
-          model’s estimate of an outcome. In hockey, a <strong>hat trick</strong> is three goals. The
-          two share that hat: the <strong>ŷ</strong> supplies it, so <strong>ŷ</strong> + “Trick” said
-          aloud is exactly “y-hat-trick.” Hence the mark <strong>ŷ&#8202;Trick</strong> — and the
-          domain spells it out as <strong>yhattrick.com</strong>.
-        </p>
-      </div>
-
-      <div className="panel">
-        <h2>What it does</h2>
-        <p>Two things, from the same underlying data:</p>
+        <h2>What&apos;s here</h2>
         <ul>
           <li>
-            <strong>Isolated impact ratings.</strong> For every skater, an estimate of how much they
-            raise their team’s expected-goal rate (offense) and suppress the opponent’s (defense),
-            separated from the quality of their linemates and competition.
+            <strong>Expected Goals Model.</strong> An in-house, per-shot model that scores every
+            unblocked shot by its chance of going in, using shot geometry and pre-shot context.
           </li>
           <li>
-            <strong>Game inspection.</strong> Each game broken into <em>stints</em> — intervals of
+            <strong>Player Impact Models.</strong>{" "}
+            For each skater, how much they raise their team&apos;s expected-goal rate and suppress the
+            opponent&apos;s — at even strength, on the power play, and on the penalty kill — separated
+            from linemates and competition, plus finishing (goals scored above what the shots were
+            worth), with within-position percentiles.
+          </li>
+          <li>
+            <strong>Descriptive stats.</strong> Box score, on-ice team rates (xG, Corsi, shares), and
+            individual rates — shot volume and quality, scoring, penalties.
+          </li>
+          <li>
+            <strong>Per-player views.</strong> Shot maps, a percentile profile, a full game log, and
+            bio.
+          </li>
+          <li>
+            <strong>Game inspection.</strong> Every game broken into <em>stints</em> — intervals of
             constant on-ice personnel — with the exact players, strength state, shot events, and an
-            expected-goals tally for each, on a rink map.
+            expected-goals tally for each.
           </li>
         </ul>
       </div>
 
       <div className="panel">
-        <h2>How the model works</h2>
-        <p>
-          The ratings are a regularized adjusted plus-minus (RAPM). Every stint becomes an
-          observation: the response is a team’s expected goals per 60 minutes of that ice time, and
-          the predictors are indicators for which players are on the ice — an offense term for each
-          attacker and a defense term for each defender. Solving the whole season at once with{" "}
-          <strong>ridge regression</strong> untangles teammates from opponents, because players who
-          appear in many different combinations can be separated.
-        </p>
+        <h2>The pages</h2>
         <ul>
-          <li>
-            <strong>Strength states.</strong> Even strength (5v5) and special teams (5v4 power play,
-            4v5 penalty kill) are fit separately so power-play offense and penalty-kill defense stay
-            clean.
-          </li>
-          <li>
-            <strong>Context adjustment.</strong> Shared covariates — home ice, offensive/defensive
-            zone start, score state, period, and season — absorb deployment, score, and era effects
-            so player coefficients better reflect skill.
-          </li>
-          <li>
-            <strong>Regular season only,</strong> pooled across multiple seasons for a stronger
-            signal. Playoffs and shootouts are tracked separately and never enter the model.
-          </li>
-          <li>
-            <strong>Uncertainty is shown.</strong> Each rating carries a 95% confidence interval that
-            widens with low ice time and with linemates who rarely separate; percentiles are computed
-            within position group.
-          </li>
+          <li><strong>Players</strong> — a sortable leaderboard; click through to a player&apos;s full card.</li>
+          <li><strong>Teams</strong> — each team&apos;s roster and schedule.</li>
+          <li><strong>Games</strong> — every game, newest first; open one for its stint-by-stint timeline.</li>
+          <li><strong>Models</strong> — the expected-goals model: its danger map, calibration, and what drives it.</li>
+          <li><strong>About</strong> — this page.</li>
         </ul>
       </div>
 
       <div className="panel">
-        <h2>Where the data comes from</h2>
+        <h2>The models</h2>
+
+        <h3>Expected Goals Model</h3>
         <p>
-          Everything is computed from raw NHL sources — play-by-play and shift charts — joined
-          shift-to-shot in-house: box scores, on-ice personnel, shot volume (Corsi/Fenwick/shots on
-          goal), score and zone context, the impact model, and our own per-shot{" "}
-          <em>expected-goals</em> model. No third-party model outputs.
+          A gradient-boosted model scores each unblocked shot using its location and pre-shot context
+          — rebound, rush, shot type, and strength and score state, among others.
+        </p>
+
+        <h3>Player Impact Models</h3>
+        <p>
+          The impact ratings are a regularized adjusted plus-minus model. Every stint becomes an
+          observation: the response is a team&apos;s expected goals per 60 minutes of that ice time,
+          and the predictors are indicators for who is on the ice — an offense term for each attacker
+          and a defense term for each defender. Ridge regression untangles teammates from opponents;
+          even strength and special teams are fit separately, regular season only, and pooled across
+          seasons, with a 95% confidence interval on every rating.
+        </p>
+        <p>
+          Finishing is a related player model: a skater&apos;s goals above what their shots were
+          expected to yield, shrunk toward zero until the sample is large enough to trust.
         </p>
       </div>
 
       <div className="panel">
-        <h2>Caveats</h2>
-        <ul>
-          <li>
-            Linemates who almost never play apart are hard to separate; their shared impact can land
-            unevenly on one of them. Pooling seasons helps; a hierarchical model will help more.
-          </li>
-          <li>
-            The most recent season is still filling in (not every game has shift data yet), so its
-            sample is partial.
-          </li>
-          <li>
-            These are impact components, not a finished Wins Above Replacement number. Finishing,
-            penalties, and the goals-to-wins conversion are still to come.
-          </li>
-        </ul>
+        <h2>Data &amp; credit</h2>
+        <p>
+          Everything here is built from <strong>public NHL data</strong>: the play-by-play API, shift
+          charts (with the NHL HTML time-on-ice reports as a fallback), player landing (bios and
+          handedness), and the league schedule and standings. Team logos and player headshots are
+          served from the NHL&apos;s asset CDN.
+        </p>
+        <p>
+          Everything derived — the xG model, impact ratings, finishing, and the box, on-ice, and
+          individual stats — is computed in-house from those raw feeds.
+        </p>
+        <p>
+          The ratings and analysis here are free to use. The underlying NHL data remains the
+          NHL&apos;s and stays subject to its terms of use, so please respect those when reusing it.
+        </p>
         <p className="muted card-note">
-          Expected goals are a model estimate, not actual goals. Treat every rating as an estimate
-          with a margin of error, not a verdict.
+          ŷTrick is an independent project and is not affiliated with or endorsed by the National
+          Hockey League.
         </p>
       </div>
     </div>
