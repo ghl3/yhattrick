@@ -117,6 +117,9 @@ a:hover { text-decoration: underline; }
 .rowlink { cursor: pointer; }
 .rowlink:hover { background: var(--accent-softer); }
 .rowlink a:hover { text-decoration: underline; }
+/* sortable column headers (shared DataTable) */
+th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+th.sortable:hover { color: var(--accent-deep); }
 
 /* per-season trend chart + table */
 .chart-wrap { margin: 4px 0 14px; }

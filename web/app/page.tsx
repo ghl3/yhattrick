@@ -1,24 +1,12 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
-import {
-  flexRender,
-  getCoreRowModel,
-  getFilteredRowModel,
-  getSortedRowModel,
-  useReactTable,
-  type ColumnDef,
-  type SortingState,
-} from "@tanstack/react-table";
+import { type ColumnDef, type SortingState } from "@tanstack/react-table";
 import type { GameIndexRow } from "@/lib/types";
 import { seasonLabel } from "@/lib/format";
+import { DataTable } from "@/components/DataTable";
 
 const columns: ColumnDef<GameIndexRow>[] = [
-  {
-    header: "Date",
-    accessorKey: "date",
-    cell: (c) => c.getValue<string>() ?? "—",
-  },
+  { header: "Date", accessorKey: "date", cell: (c) => c.getValue<string>() ?? "—" },
   { header: "Season", accessorKey: "season", cell: (c) => seasonLabel(c.getValue<number>()) },
   {
     header: "Matchup",
@@ -42,7 +30,6 @@ const columns: ColumnDef<GameIndexRow>[] = [
 ];
 
 export default function GamesIndex() {
-  const router = useRouter();
   const [rows, setRows] = useState<GameIndexRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [globalFilter, setGlobalFilter] = useState("");
@@ -54,17 +41,6 @@ export default function GamesIndex() {
       .then(setRows)
       .catch((e) => setError(String(e)));
   }, []);
-
-  const table = useReactTable({
-    data: rows ?? [],
-    columns,
-    state: { sorting, globalFilter },
-    onSortingChange: setSorting,
-    onGlobalFilterChange: setGlobalFilter,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-  });
 
   const subtitle = useMemo(() => (rows ? `${rows.length} games processed` : ""), [rows]);
 
@@ -82,29 +58,14 @@ export default function GamesIndex() {
         />
         <span className="muted">{subtitle}</span>
       </div>
-      <table className="games gtable">
-        <thead>
-          {table.getHeaderGroups().map((hg) => (
-            <tr key={hg.id}>
-              {hg.headers.map((h) => (
-                <th key={h.id} onClick={h.column.getToggleSortingHandler()}>
-                  {flexRender(h.column.columnDef.header, h.getContext())}
-                  {{ asc: " ▲", desc: " ▼" }[h.column.getIsSorted() as string] ?? ""}
-                </th>
-              ))}
-            </tr>
-          ))}
-        </thead>
-        <tbody>
-          {table.getRowModel().rows.map((row) => (
-            <tr key={row.id} className="rowlink" onClick={() => router.push(`/game/${row.original.game_id}`)}>
-              {row.getVisibleCells().map((cell) => (
-                <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <DataTable
+        data={rows}
+        columns={columns}
+        sorting={sorting}
+        onSortingChange={setSorting}
+        globalFilter={globalFilter}
+        rowHref={(r) => `/game/${r.game_id}`}
+      />
     </div>
   );
 }

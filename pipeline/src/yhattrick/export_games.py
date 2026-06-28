@@ -231,6 +231,10 @@ def build_season(season: int, limit: int | None = None) -> list[dict]:
             "game_id": int(gid), "season": season,
             "date": game["date"], "home": game["home"], "away": game["away"],
             "home_score": game["home_score"], "away_score": game["away_score"],
+            # per-team xG + shots and an overtime flag, for team-season summaries
+            "home_xgf": game["totals"]["home_xgf"], "away_xgf": game["totals"]["away_xgf"],
+            "home_shots": game["totals"]["home_shots"], "away_shots": game["totals"]["away_shots"],
+            "ot": bool((ev_g.period >= 4).any()),
             "n_stints": len(st_g), "n_shots": n_shots,
             "n_events": sum(len(s["events"]) for s in game["stints"]),
             "onice_exact": round((sh_g.onice_match == "exact").mean(), 4) if n_shots else None,

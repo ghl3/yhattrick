@@ -8,6 +8,11 @@ export interface GameIndexRow {
   away: string;
   home_score: number | null;
   away_score: number | null;
+  home_xgf: number;
+  away_xgf: number;
+  home_shots: number;
+  away_shots: number;
+  ot: boolean;
   n_stints: number;
   n_shots: number;
   n_events: number;

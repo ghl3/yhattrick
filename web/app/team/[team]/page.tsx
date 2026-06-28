@@ -2,14 +2,27 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
+import { type ColumnDef, type SortingState } from "@tanstack/react-table";
 import type { GameIndexRow, PlayerRow } from "@/lib/types";
 import { seasonLabel } from "@/lib/format";
 import { teamFullName, teamLogo } from "@/lib/teams";
+import { DataTable } from "@/components/DataTable";
+
+const rosterColumns: ColumnDef<PlayerRow>[] = [
+  { header: "Player", accessorKey: "name", cell: (c) => c.getValue<string>() },
+  { header: "Pos", accessorKey: "pos" },
+  { header: "GP", accessorKey: "gp", cell: (c) => <span className="num">{c.getValue<number>()}</span> },
+  { header: "G", accessorKey: "g", cell: (c) => <span className="num">{c.getValue<number>()}</span> },
+  { header: "A", accessorKey: "a", cell: (c) => <span className="num">{c.getValue<number>()}</span> },
+  { header: "P", accessorKey: "points", cell: (c) => <span className="num">{c.getValue<number>()}</span> },
+  { header: "EV TOI", accessorKey: "ev_toi", cell: (c) => <span className="num">{Math.round(c.getValue<number>())}</span> },
+];
 
 export default function Team() {
   const params = useParams<{ team: string }>();
   const router = useRouter();
   const team = (params.team || "").toUpperCase();
+  const [rosterSort, setRosterSort] = useState<SortingState>([{ id: "points", desc: true }]);
   const [players, setPlayers] = useState<PlayerRow[] | null>(null);
   const [games, setGames] = useState<GameIndexRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -39,6 +52,27 @@ export default function Team() {
     return [...m.entries()].sort((a, b) => b[0] - a[0]);
   }, [sched]);
 
+  // per-season summary from this team's games (record + goals/xG for & against), newest first
+  type SeasonSummary = { gp: number; w: number; l: number; otl: number; gf: number; ga: number; xgf: number; xga: number; sf: number; sa: number };
+  const summaries = useMemo(() => {
+    const m = new Map<number, SeasonSummary>();
+    for (const g of sched) {
+      const home = g.home === team;
+      const gf = (home ? g.home_score : g.away_score) ?? 0;
+      const ga = (home ? g.away_score : g.home_score) ?? 0;
+      const s = m.get(g.season) ?? { gp: 0, w: 0, l: 0, otl: 0, gf: 0, ga: 0, xgf: 0, xga: 0, sf: 0, sa: 0 };
+      s.gp++;
+      s.gf += gf; s.ga += ga;
+      s.xgf += (home ? g.home_xgf : g.away_xgf) ?? 0;
+      s.xga += (home ? g.away_xgf : g.home_xgf) ?? 0;
+      s.sf += (home ? g.home_shots : g.away_shots) ?? 0;
+      s.sa += (home ? g.away_shots : g.home_shots) ?? 0;
+      if (gf > ga) s.w++; else if (g.ot) s.otl++; else s.l++;
+      m.set(g.season, s);
+    }
+    return [...m.entries()].sort((a, b) => b[0] - a[0]);
+  }, [sched, team]);
+
   if (error) return <div className="loading">Failed to load data ({error}).</div>;
   if (!players || !games) return <div className="loading">Loading {team}…</div>;
 
@@ -58,25 +92,56 @@ export default function Team() {
       </div>
 
       <div className="panel">
-        <h2>Players</h2>
+        <h2>By season</h2>
         <table className="games ptable">
           <thead>
-            <tr><th>Player</th><th>Pos</th><th>GP</th><th>G</th><th>A</th><th>P</th><th>EV TOI</th></tr>
+            <tr>
+              <th>Season</th>
+              <th>GP</th>
+              <th>Record</th>
+              <th title="Points (2 per win, 1 per overtime loss)">Pts</th>
+              <th title="Goals for">GF</th>
+              <th title="Goals against">GA</th>
+              <th title="Goal differential">Diff</th>
+              <th title="Expected goals for">xGF</th>
+              <th title="Expected goals against">xGA</th>
+              <th title="Share of on-ice expected goals">xG%</th>
+            </tr>
           </thead>
           <tbody>
-            {roster.map((p) => (
-              <tr key={p.id}>
-                <td><Link href={`/player/${p.id}`}>{p.name}</Link></td>
-                <td>{p.pos}</td>
-                <td className="num">{p.gp}</td>
-                <td className="num">{p.g}</td>
-                <td className="num">{p.a}</td>
-                <td className="num">{p.points}</td>
-                <td className="num">{Math.round(p.ev_toi)}</td>
-              </tr>
-            ))}
+            {summaries.map(([season, s]) => {
+              const diff = s.gf - s.ga;
+              const xgPct = s.xgf + s.xga > 0 ? (s.xgf / (s.xgf + s.xga)) * 100 : null;
+              return (
+                <tr key={season}>
+                  <td>{seasonLabel(season)}</td>
+                  <td className="num">{s.gp}</td>
+                  <td className="num">{s.w}-{s.l}-{s.otl}</td>
+                  <td className="num">{2 * s.w + s.otl}</td>
+                  <td className="num">{s.gf}</td>
+                  <td className="num">{s.ga}</td>
+                  <td className="num">{diff > 0 ? `+${diff}` : diff}</td>
+                  <td className="num">{Math.round(s.xgf)}</td>
+                  <td className="num">{Math.round(s.xga)}</td>
+                  <td className="num">{xgPct != null ? `${xgPct.toFixed(1)}%` : "—"}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
+        <p className="muted card-note">Regular season. xG totals are summed from our model; xG% is xGF / (xGF + xGA).</p>
+      </div>
+
+      <div className="panel">
+        <h2>Players</h2>
+        <DataTable
+          data={roster}
+          columns={rosterColumns}
+          sorting={rosterSort}
+          onSortingChange={setRosterSort}
+          rowHref={(p) => `/player/${p.id}`}
+          className="games ptable"
+        />
         <p className="muted card-note">Players who appeared for {team} in any covered season (totals are career across all teams).</p>
       </div>
 

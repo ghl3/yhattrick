@@ -1,17 +1,9 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import {
-  flexRender,
-  getCoreRowModel,
-  getFilteredRowModel,
-  getSortedRowModel,
-  useReactTable,
-  type ColumnDef,
-  type SortingState,
-} from "@tanstack/react-table";
+import { type ColumnDef, type SortingState } from "@tanstack/react-table";
 import type { PlayerRow } from "@/lib/types";
 import { pctColor } from "@/lib/format";
+import { DataTable } from "@/components/DataTable";
 
 type View = "impact" | "onice" | "individual";
 const num3 = (v: number) => v.toFixed(3);
@@ -55,11 +47,7 @@ function metricCell(value: number | null, pctile: number | null, fmt: (v: number
 
 function buildColumns(view: View): ColumnDef<PlayerRow>[] {
   return [
-    {
-      header: "Player",
-      accessorKey: "name",
-      cell: (c) => <Link href={`/player/${c.row.original.id}`}>{c.getValue<string>()}</Link>,
-    },
+    { header: "Player", accessorKey: "name", cell: (c) => c.getValue<string>() },
     { header: "Pos", accessorKey: "pos" },
     { header: "EV TOI", accessorKey: "ev_toi", cell: (c) => <span className="num">{Math.round(c.getValue<number>())}</span> },
     ...VIEWS[view].map(
@@ -103,17 +91,6 @@ export default function Players() {
     [rows, posFilter]
   );
 
-  const table = useReactTable({
-    data,
-    columns,
-    state: { sorting, globalFilter },
-    onSortingChange: setSorting,
-    onGlobalFilterChange: setGlobalFilter,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-  });
-
   if (error)
     return <div className="loading">Failed to load players.json ({error}). Run <code>uv run python -m yhattrick.export_players</code>.</div>;
   if (!rows) return <div className="loading">Loading players…</div>;
@@ -138,29 +115,15 @@ export default function Players() {
         </div>
         <span className="muted">{data.length} players · color = percentile vs. position</span>
       </div>
-      <table className="games ptable">
-        <thead>
-          {table.getHeaderGroups().map((hg) => (
-            <tr key={hg.id}>
-              {hg.headers.map((h) => (
-                <th key={h.id} title={(h.column.columnDef.meta as { title?: string })?.title} onClick={h.column.getToggleSortingHandler()}>
-                  {flexRender(h.column.columnDef.header, h.getContext())}
-                  {{ asc: " ▲", desc: " ▼" }[h.column.getIsSorted() as string] ?? ""}
-                </th>
-              ))}
-            </tr>
-          ))}
-        </thead>
-        <tbody>
-          {table.getRowModel().rows.map((row) => (
-            <tr key={row.id}>
-              {row.getVisibleCells().map((cell) => (
-                <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <DataTable
+        data={data}
+        columns={columns}
+        sorting={sorting}
+        onSortingChange={setSorting}
+        globalFilter={globalFilter}
+        rowHref={(r) => `/player/${r.id}`}
+        className="games ptable"
+      />
     </div>
   );
 }
