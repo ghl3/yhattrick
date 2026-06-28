@@ -208,6 +208,24 @@ export interface Linemate {
   toi_min: number;
 }
 
+export interface GameLogRow {
+  game_id: number;
+  season: number;
+  date: string | null;
+  team: string;
+  opp: string;
+  home: boolean;
+  gf: number | null;
+  ga: number | null;
+  result: string | null; // "W" | "L" | "OTL" | "T"
+  toi_s: number;
+  g: number;
+  a: number;
+  p: number;
+  sog: number;
+  pen: number;
+}
+
 export interface PlayerDetail {
   id: number;
   name: string;
@@ -225,6 +243,32 @@ export interface PlayerDetail {
   shooting: { shots: number; ixg: number | null; fin_goals: number | null };
   per_season: SeasonRow[];
   linemates: Linemate[];
+  games: GameLogRow[];
+  heat: PlayerHeat | null;
+  bio: PlayerBio | null;
+}
+
+export interface PlayerBio {
+  headshot: string | null;
+  height_in: number | null;
+  weight_lb: number | null;
+  shoots: string | null;
+  birth_date: string | null;
+  birth_city: string | null;
+  birth_state: string | null;
+  birth_country: string | null;
+  number: number | null;
+  draft_year: number | null;
+  draft_overall: number | null;
+}
+
+// per-player shot-location grids (player_heatmap.py). Each grid is [yi][xi] over cell centers x/y.
+export interface PlayerHeat {
+  x: number[];
+  y: number[];
+  s: number[][];  // smoothed shot count
+  g: number[][];  // smoothed goal count
+  xg: number[][]; // smoothed summed xG
 }
 
 // --- xG model exploration page (xg.py -> web/public/data/xg_model.json) ---

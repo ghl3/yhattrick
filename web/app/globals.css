@@ -94,6 +94,29 @@ a:hover { text-decoration: underline; }
 .result-w { color: #1f9d57; }
 .result-l { color: #c0392b; }
 .result-t { color: var(--muted); }
+.result-otl { color: var(--warn); }
+
+/* player game log: scrollable with a sticky header */
+.gamelog-wrap { max-height: 560px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+.gamelog thead th { position: sticky; top: 0; background: var(--panel); z-index: 1; box-shadow: 0 1px 0 var(--border); }
+.heat-seg { margin-bottom: 14px; }
+
+/* player + team header heroes */
+.player-hero, .team-hero { display: flex; align-items: center; gap: 18px; }
+.player-mug { width: 88px; height: 88px; border-radius: 50%; object-fit: cover; border: 1px solid var(--border); background: var(--accent-softer); flex: none; }
+.team-logo { width: 72px; height: 72px; object-fit: contain; flex: none; }
+.player-hero-main { min-width: 0; }
+.bio-row { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; font-size: 13px; color: var(--muted); }
+.bio-row b { color: var(--text); font-weight: 600; }
+
+/* two-up visualization row (shot map + radar) */
+.viz-row { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+.viz-cell { min-width: 0; }
+@media (max-width: 760px) { .viz-row { grid-template-columns: 1fr; } }
+/* whole-row click target for game tables */
+.rowlink { cursor: pointer; }
+.rowlink:hover { background: var(--accent-softer); }
+.rowlink a:hover { text-decoration: underline; }
 
 /* per-season trend chart + table */
 .chart-wrap { margin: 4px 0 14px; }

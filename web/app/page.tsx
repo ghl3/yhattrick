@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   flexRender,
   getCoreRowModel,
@@ -17,20 +17,14 @@ const columns: ColumnDef<GameIndexRow>[] = [
   {
     header: "Date",
     accessorKey: "date",
-    cell: (c) => (
-      <Link href={`/game/${c.row.original.game_id}`}>{c.getValue<string>() ?? "—"}</Link>
-    ),
+    cell: (c) => c.getValue<string>() ?? "—",
   },
   { header: "Season", accessorKey: "season", cell: (c) => seasonLabel(c.getValue<number>()) },
   {
     header: "Matchup",
     id: "matchup",
     accessorFn: (r) => `${r.away} @ ${r.home}`,
-    cell: (c) => (
-      <Link href={`/game/${c.row.original.game_id}`}>
-        {c.row.original.away} @ {c.row.original.home}
-      </Link>
-    ),
+    cell: (c) => `${c.row.original.away} @ ${c.row.original.home}`,
   },
   {
     header: "Score",
@@ -48,10 +42,11 @@ const columns: ColumnDef<GameIndexRow>[] = [
 ];
 
 export default function GamesIndex() {
+  const router = useRouter();
   const [rows, setRows] = useState<GameIndexRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [globalFilter, setGlobalFilter] = useState("");
-  const [sorting, setSorting] = useState<SortingState>([{ id: "date", desc: false }]);
+  const [sorting, setSorting] = useState<SortingState>([{ id: "date", desc: true }]);
 
   useEffect(() => {
     fetch(`/data/games.json`)
@@ -102,7 +97,7 @@ export default function GamesIndex() {
         </thead>
         <tbody>
           {table.getRowModel().rows.map((row) => (
-            <tr key={row.id}>
+            <tr key={row.id} className="rowlink" onClick={() => router.push(`/game/${row.original.game_id}`)}>
               {row.getVisibleCells().map((cell) => (
                 <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
               ))}

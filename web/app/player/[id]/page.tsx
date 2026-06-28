@@ -1,12 +1,24 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import type { IndividualKey, MetricKey, OniceKey, PlayerDetail, SeasonRow } from "@/lib/types";
-import { pctColor } from "@/lib/format";
+import { useParams, useRouter } from "next/navigation";
+import {
+  CartesianGrid, Line, LineChart, PolarAngleAxis, PolarGrid, PolarRadiusAxis,
+  Radar, RadarChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
+} from "recharts";
+import type { GameLogRow, IndividualKey, MetricKey, OniceKey, PlayerDetail, PlayerHeat, SeasonRow } from "@/lib/types";
+import { mmss, pctColor } from "@/lib/format";
 
 const seasonLabel = (s: number) => `${s}-${String(s + 1).slice(-2)}`;
+const heightStr = (inches?: number | null) => (inches ? `${Math.floor(inches / 12)}'${inches % 12}"` : null);
+const ageFrom = (iso?: string | null): number | null => {
+  if (!iso) return null;
+  const b = new Date(iso), now = new Date();
+  let a = now.getFullYear() - b.getFullYear();
+  const m = now.getMonth() - b.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < b.getDate())) a--;
+  return a;
+};
 
 const IMPACT: { key: MetricKey; name: string; explain: string }[] = [
   { key: "ev_off", name: "Even-Strength Offense", explain: "Expected goals he adds per 60 at 5-on-5, vs. an average player." },
@@ -114,6 +126,172 @@ function OniceBox({ name, explain, v, pctile, group, fmt, se, signed }: {
   );
 }
 
+// --- shot map (offensive half, attacking net on the right at x=89); mirrors the xG page rink ---
+const HFT = 4.2;
+const HX0 = 24, HX1 = 100;
+const HW = (HX1 - HX0) * HFT;
+const HH = 85 * HFT;
+const hpx = (x: number) => (x - HX0) * HFT;
+const hpy = (y: number) => (y + 42.5) * HFT;
+const HRED = "#d98c8c", HBLUE = "#9fc1e6";
+
+// pale -> amber -> red ramp (t in 0..1)
+function ramp(t: number): string {
+  t = Math.min(1, Math.max(0, t));
+  const lerp = (a: number, b: number, u: number) => Math.round(a + (b - a) * u);
+  if (t < 0.5) {
+    const u = t / 0.5;
+    return `rgb(${lerp(238, 245, u)},${lerp(245, 180, u)},${lerp(251, 0, u)})`;
+  }
+  const u = (t - 0.5) / 0.5;
+  return `rgb(${lerp(245, 200, u)},${lerp(180, 30, u)},${lerp(0, 30, u)})`;
+}
+
+type HeatMode = "shots" | "goals" | "shotpct" | "xg";
+const HEAT_MODES: { key: HeatMode; label: string }[] = [
+  { key: "shots", label: "Shots" },
+  { key: "goals", label: "Goals" },
+  { key: "shotpct", label: "Shot %" },
+  { key: "xg", label: "Avg xG" },
+];
+
+function ShotMap({ heat }: { heat: PlayerHeat }) {
+  const [mode, setMode] = useState<HeatMode>("shots");
+  const { x, y, s, g, xg } = heat;
+  const cw = (x.length > 1 ? x[1] - x[0] : 3) * HFT;
+  const ch = (y.length > 1 ? y[1] - y[0] : 3) * HFT;
+
+  const maxS = useMemo(() => Math.max(0, ...s.flat()), [s]);
+  const maxG = useMemo(() => Math.max(0, ...g.flat()), [g]);
+  const eps = 0.06 * maxS;                                  // hide ratios in barely-shot-from areas
+  const RATIO_CAP = mode === "shotpct" ? 0.3 : 0.32;       // goals/shot and xG/shot both top out ~0.3
+
+  // each cell -> a 0..1 color intensity, or null to leave blank (sparse cells in ratio modes)
+  const intensity = (xi: number, yi: number): number | null => {
+    const sv = s[yi][xi];
+    if (mode === "shots") return maxS > 0 ? sv / maxS : 0;
+    if (mode === "goals") return maxG > 0 ? g[yi][xi] / maxG : 0;
+    if (sv < eps) return null;
+    const r = (mode === "shotpct" ? g[yi][xi] : xg[yi][xi]) / sv;
+    return r / RATIO_CAP;
+  };
+
+  const legend =
+    mode === "shots" ? ["fewer", "more shots"] :
+    mode === "goals" ? ["fewer", "more goals"] :
+    mode === "shotpct" ? ["0%", "30%+ score"] : ["0", "0.30+ xG/shot"];
+
+  return (
+    <div>
+      <div className="seg heat-seg">
+        {HEAT_MODES.map((m) => (
+          <button key={m.key} className={mode === m.key ? "active" : ""} onClick={() => setMode(m.key)}>
+            {m.label}
+          </button>
+        ))}
+      </div>
+      <svg className="xg-rink" viewBox={`0 0 ${HW} ${HH}`} width="100%" style={{ maxWidth: HW }}>
+        {y.map((_, yi) =>
+          x.map((_, xi) => {
+            const t = intensity(xi, yi);
+            if (t == null || t <= 0.001) return null;
+            return (
+              <rect key={`${xi},${yi}`} x={hpx(x[xi]) - cw / 2} y={hpy(y[yi]) - ch / 2}
+                width={cw + 0.5} height={ch + 0.5} fill={ramp(t)} />
+            );
+          })
+        )}
+        {/* rink markings */}
+        <rect x={0.5} y={0.5} width={HW - 1} height={HH - 1} rx={26 * HFT} ry={26 * HFT} fill="none" stroke="#cfe0f0" />
+        <line x1={hpx(25)} y1={0} x2={hpx(25)} y2={HH} stroke={HBLUE} strokeWidth={2} />
+        <line x1={hpx(89)} y1={hpy(-39)} x2={hpx(89)} y2={hpy(39)} stroke={HRED} strokeWidth={1.5} />
+        <rect x={hpx(89)} y={hpy(-2)} width={6} height={hpy(2) - hpy(-2)} fill="none" stroke={HRED} strokeWidth={1.5} />
+        <path d={`M ${hpx(89)} ${hpy(-4)} Q ${hpx(89) - 6 * HFT} ${hpy(0)} ${hpx(89)} ${hpy(4)} Z`} fill="none" stroke={HBLUE} strokeWidth={1} />
+        <circle cx={hpx(69)} cy={hpy(22)} r={15 * HFT} fill="none" stroke={HRED} strokeWidth={1} opacity={0.6} />
+        <circle cx={hpx(69)} cy={hpy(-22)} r={15 * HFT} fill="none" stroke={HRED} strokeWidth={1} opacity={0.6} />
+        <circle cx={hpx(69)} cy={hpy(22)} r={2} fill={HRED} /><circle cx={hpx(69)} cy={hpy(-22)} r={2} fill={HRED} />
+      </svg>
+      <div className="xg-legend">
+        <span>{legend[0]}</span>
+        <span className="bar" style={{ background: `linear-gradient(90deg, ${ramp(0)}, ${ramp(0.25)}, ${ramp(0.5)}, ${ramp(0.75)}, ${ramp(1)})` }} />
+        <span>{legend[1]}</span>
+      </div>
+    </div>
+  );
+}
+
+// percentile radar across the headline skills (0 = no qualifying ice time / bottom, 100 = best)
+function ProfileRadar({ p }: { p: PlayerDetail }) {
+  const data = [
+    { axis: "EV Off", v: p.impact.ev_off.pct },
+    { axis: "EV Def", v: p.impact.ev_def.pct },
+    { axis: "PP Off", v: p.impact.pp_off.pct },
+    { axis: "PK Def", v: p.impact.pk_def.pct },
+    { axis: "Shot Vol", v: p.individual.shots60.pct },
+    { axis: "Shot Qual", v: p.individual.xg_per_shot.pct },
+    { axis: "Finishing", v: p.individual.fin_per100.pct },
+    { axis: "Playmaking", v: p.individual.a60.pct },
+  ].map((d) => ({ ...d, v: d.v ?? 0 }));
+  return (
+    <ResponsiveContainer width="100%" height={360}>
+      <RadarChart data={data} outerRadius="70%">
+        <PolarGrid stroke="#e7f1fb" />
+        <PolarAngleAxis dataKey="axis" tick={{ fontSize: 11, fill: "#6b7e90" }} />
+        <PolarRadiusAxis domain={[0, 100]} tickCount={5} angle={90} tick={{ fontSize: 9, fill: "#b6c4d2" }} />
+        <Radar dataKey="v" stroke="#2f6cb0" fill="#4a90d9" fillOpacity={0.45} />
+        <Tooltip formatter={(v: unknown) => `${Math.round(v as number)}th pct`} />
+      </RadarChart>
+    </ResponsiveContainer>
+  );
+}
+
+function GameLog({ games }: { games: GameLogRow[] }) {
+  const router = useRouter();
+  if (!games?.length) return null;
+  return (
+    <div className="panel">
+      <h2>Game log</h2>
+      <p className="section-sub">Every game, most recent first — regular season and playoffs.</p>
+      <div className="gamelog-wrap">
+        <table className="players gamelog">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Team</th>
+              <th>Opp</th>
+              <th>Result</th>
+              <th title="Time on ice">TOI</th>
+              <th title="Goals">G</th>
+              <th title="Assists">A</th>
+              <th title="Points">P</th>
+              <th title="Shots on goal">SOG</th>
+              <th title="Penalties taken">PEN</th>
+            </tr>
+          </thead>
+          <tbody>
+            {games.map((g) => (
+              <tr key={g.game_id} className="rowlink" onClick={() => router.push(`/game/${g.game_id}`)}>
+                <td>{g.date ?? "—"}</td>
+                <td><Link href={`/team/${g.team}`} prefetch={false} onClick={(e) => e.stopPropagation()}>{g.team}</Link></td>
+                <td className="muted">{g.home ? "vs" : "@"} <Link href={`/team/${g.opp}`} prefetch={false} onClick={(e) => e.stopPropagation()}>{g.opp}</Link></td>
+                <td className={`result result-${(g.result ?? "").toLowerCase()}`}>
+                  {g.result}{g.gf != null && g.ga != null ? ` ${g.gf}–${g.ga}` : ""}
+                </td>
+                <td className="num">{mmss(g.toi_s)}</td>
+                <td className="num">{g.g}</td>
+                <td className="num">{g.a}</td>
+                <td className="num">{g.p}</td>
+                <td className="num">{g.sog}</td>
+                <td className="num">{g.pen}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export default function Player() {
   const params = useParams<{ id: string }>();
   const id = params.id;
@@ -145,11 +323,28 @@ export default function Player() {
       <Link className="backlink" href="/players">← all players</Link>
 
       <div className="panel">
-        <div className="player-head">
-          <h2 className="player-name">{p.name}</h2>
-          <span className="player-meta">
-            {p.pos} · {p.group === "D" ? "Defenseman" : "Forward"} · {p.teams.join(", ")}
-          </span>
+        <div className="player-hero">
+          {p.bio?.headshot ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img className="player-mug" src={p.bio.headshot} alt={p.name} loading="lazy" />
+          ) : null}
+          <div className="player-hero-main">
+            <h2 className="player-name">{p.name}</h2>
+            <span className="player-meta">
+              {p.bio?.number != null ? `#${p.bio.number} · ` : ""}
+              {p.pos} · {p.group === "D" ? "Defenseman" : "Forward"} · {p.teams.join(", ")}
+            </span>
+            <div className="bio-row">
+              {p.bio?.shoots && <span><b>Shoots</b> {p.bio.shoots}</span>}
+              {heightStr(p.bio?.height_in) && <span><b>Ht</b> {heightStr(p.bio?.height_in)}</span>}
+              {p.bio?.weight_lb && <span><b>Wt</b> {p.bio.weight_lb} lb</span>}
+              {ageFrom(p.bio?.birth_date) != null && <span><b>Age</b> {ageFrom(p.bio?.birth_date)}</span>}
+              {p.bio?.birth_city && (
+                <span><b>Born</b> {p.bio.birth_city}{p.bio.birth_state ? `, ${p.bio.birth_state}` : ""}{p.bio.birth_country ? `, ${p.bio.birth_country}` : ""}</span>
+              )}
+              {p.bio?.draft_overall ? <span><b>Draft</b> {p.bio.draft_year} · #{p.bio.draft_overall}</span> : null}
+            </div>
+          </div>
         </div>
         <div className="statgrid">
           <div className="stat"><span className="v">{p.gp}</span><span className="k">games</span></div>
@@ -219,7 +414,7 @@ export default function Player() {
             </tr>
           </thead>
           <tbody>
-            {p.per_season.map((r) => (
+            {[...p.per_season].reverse().map((r) => (
               <tr key={r.season}>
                 <td>{seasonLabel(r.season)}</td>
                 <td>{r.team}</td>
@@ -248,6 +443,24 @@ export default function Player() {
           ))}
         </div>
       </div>
+
+      <div className="panel">
+        <h2>Shot map &amp; profile</h2>
+        <div className="viz-row">
+          {p.heat && (
+            <div className="viz-cell">
+              <p className="section-sub">Where he shoots from, both ends folded to one — toggle shot volume, goals, shooting %, and average shot quality (xG). Attacking net at right.</p>
+              <ShotMap heat={p.heat} />
+            </div>
+          )}
+          <div className="viz-cell">
+            <p className="section-sub">Percentile rank across key skills, within position ({p.group === "D" ? "defensemen" : "forwards"}). Further out is better.</p>
+            <ProfileRadar p={p} />
+          </div>
+        </div>
+      </div>
+
+      <GameLog games={p.games ?? []} />
     </div>
   );
 }

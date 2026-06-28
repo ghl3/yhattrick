@@ -265,7 +265,7 @@ def main(argv: list[str] | None = None) -> None:
     index = []
     for season in ([args.season] if args.season else C.SEASONS):
         index.extend(build_season(season, args.limit))
-    index.sort(key=lambda r: (r["date"] or "", r["game_id"]))
+    index.sort(key=lambda r: (r["date"] or "", r["game_id"]), reverse=True)  # reverse chronological
     (C.SITE_JSON / "games.json").write_text(_dump(index))
     print(f"[games] index: {len(index)} games -> {C.SITE_JSON / 'games.json'}")
     if not args.no_sync:

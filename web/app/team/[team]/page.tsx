@@ -1,12 +1,14 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import type { GameIndexRow, PlayerRow } from "@/lib/types";
 import { seasonLabel } from "@/lib/format";
+import { teamFullName, teamLogo } from "@/lib/teams";
 
 export default function Team() {
   const params = useParams<{ team: string }>();
+  const router = useRouter();
   const team = (params.team || "").toUpperCase();
   const [players, setPlayers] = useState<PlayerRow[] | null>(null);
   const [games, setGames] = useState<GameIndexRow[] | null>(null);
@@ -27,14 +29,14 @@ export default function Team() {
   );
   const sched = useMemo(
     () => (games ?? []).filter((g) => g.home === team || g.away === team)
-      .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? "")),
+      .sort((a, b) => (b.date ?? "").localeCompare(a.date ?? "")),
     [games, team]
   );
-  // group the schedule by season (sched already date-sorted, so each season stays chronological)
+  // group the schedule by season (sched already date-sorted desc, so each season stays reverse-chron)
   const bySeason = useMemo(() => {
     const m = new Map<number, GameIndexRow[]>();
     for (const g of sched) (m.get(g.season) ?? m.set(g.season, []).get(g.season)!).push(g);
-    return [...m.entries()].sort((a, b) => a[0] - b[0]);
+    return [...m.entries()].sort((a, b) => b[0] - a[0]);
   }, [sched]);
 
   if (error) return <div className="loading">Failed to load data ({error}).</div>;
@@ -45,9 +47,13 @@ export default function Team() {
       <Link className="backlink" href="/teams">← all teams</Link>
 
       <div className="panel">
-        <div className="player-head">
-          <h2 className="player-name">{team}</h2>
-          <span className="player-meta">{roster.length} players · {sched.length} games (regular season, all covered years)</span>
+        <div className="team-hero">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img className="team-logo" src={teamLogo(team)} alt={team} loading="lazy" />
+          <div>
+            <h2 className="player-name">{teamFullName(team)}</h2>
+            <span className="player-meta">{team} · {roster.length} players · {sched.length} games (regular season, all covered years)</span>
+          </div>
         </div>
       </div>
 
@@ -90,12 +96,10 @@ export default function Team() {
                   const them = isHome ? g.away_score : g.home_score;
                   const res = us == null || them == null ? "" : us > them ? "W" : us < them ? "L" : "T";
                   return (
-                    <tr key={g.game_id}>
-                      <td><Link href={`/game/${g.game_id}`}>{g.date ?? "—"}</Link></td>
+                    <tr key={g.game_id} className="rowlink" onClick={() => router.push(`/game/${g.game_id}`)}>
+                      <td>{g.date ?? "—"}</td>
                       <td>
-                        <Link href={`/game/${g.game_id}`}>
-                          {g.away === team ? <strong>{g.away}</strong> : g.away} @ {g.home === team ? <strong>{g.home}</strong> : g.home}
-                        </Link>
+                        {g.away === team ? <strong>{g.away}</strong> : g.away} @ {g.home === team ? <strong>{g.home}</strong> : g.home}
                       </td>
                       <td className={`result result-${res.toLowerCase()}`}>{res}</td>
                       <td className="num">{g.away_score}–{g.home_score}</td>

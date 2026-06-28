@@ -14,17 +14,17 @@ export default function Navbar() {
           <span className="brand-name"><span className="brand-y">ŷ</span>Trick</span>
         </Link>
         <nav className="nav-links">
-          <Link className={isActive("/", true) ? "active" : ""} href="/">
-            Games
-          </Link>
           <Link className={isActive("/players") ? "active" : ""} href="/players">
             Players
           </Link>
           <Link className={isActive("/teams") || isActive("/team") ? "active" : ""} href="/teams">
             Teams
           </Link>
+          <Link className={isActive("/", true) ? "active" : ""} href="/">
+            Games
+          </Link>
           <Link className={isActive("/xg") ? "active" : ""} href="/xg">
-            xG Model
+            Models
           </Link>
           <Link className={isActive("/about") ? "active" : ""} href="/about">
             About

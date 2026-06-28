@@ -21,6 +21,7 @@ import pandas as pd
 from . import config as C
 from . import player_onice_model as model
 from . import finishing
+from . import player_heatmap
 from .aggregates import ONICE_COLS
 
 FULL_MIN_GAMES = 200     # treat a season as "full" (skip tiny dev slices)
@@ -199,6 +200,63 @@ def add_individual_percentiles(df: pd.DataFrame) -> None:
         df[f"{col}_pct"] = ((r if higher else 1 - r) * 100).round(0)
 
 
+def _loc(v):
+    """NHL landing fields like birthCity are {'default': 'Toronto'}; others are plain strings."""
+    return v.get("default") if isinstance(v, dict) else v
+
+
+def player_bios(ids: set[int]) -> dict[int, dict]:
+    """Bio + headshot per player from the cached NHL player-landing json (raw/nhl/players)."""
+    out: dict[int, dict] = {}
+    for pid in ids:
+        p = C.RAW_PLAYERS / f"{pid}.json"
+        if not p.exists():
+            continue
+        try:
+            d = json.loads(p.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        dd = d.get("draftDetails") or {}
+        out[int(pid)] = {
+            "headshot": d.get("headshot"),
+            "height_in": d.get("heightInInches"),
+            "weight_lb": d.get("weightInPounds"),
+            "shoots": d.get("shootsCatches"),
+            "birth_date": d.get("birthDate"),
+            "birth_city": _loc(d.get("birthCity")),
+            "birth_state": _loc(d.get("birthStateProvince")),
+            "birth_country": d.get("birthCountry"),
+            "number": d.get("sweaterNumber"),
+            "draft_year": dd.get("year"),
+            "draft_overall": dd.get("overallPick"),
+        }
+    return out
+
+
+def game_logs(seasons) -> dict[int, list]:
+    """player_id -> their per-game box lines (most-recent-first) from processed/gamelog."""
+    frames = []
+    for s in seasons:
+        p = C.PROCESSED / "gamelog" / f"{s}.parquet"
+        if p.exists():
+            frames.append(pd.read_parquet(p))
+    if not frames:
+        return {}
+    df = pd.concat(frames, ignore_index=True).sort_values(["date", "game_id"], ascending=[False, False])
+    out: dict[int, list] = defaultdict(list)
+    for r in df.itertuples():
+        out[int(r.player_id)].append({
+            "game_id": int(r.game_id), "season": int(r.season),
+            "date": None if pd.isna(r.date) else r.date,
+            "team": r.team, "opp": r.opp, "home": bool(r.home),
+            "gf": None if pd.isna(r.gf) else int(r.gf), "ga": None if pd.isna(r.ga) else int(r.ga),
+            "result": None if (isinstance(r.result, float) and pd.isna(r.result)) else r.result,
+            "toi_s": int(r.toi_s), "g": int(r.g), "a": int(r.a), "p": int(r.p),
+            "sog": int(r.sog), "pen": int(r.pen),
+        })
+    return out
+
+
 def linemates(seasons, names, top=N_LINEMATES) -> dict[int, list]:
     """Top 5v5 linemates per player by shared on-ice time (from stints)."""
     stints = model.load_stints(seasons, model.SPECS["ev"].strengths)
@@ -252,10 +310,13 @@ def main() -> None:
 
     simp = {s: season_impact(s, names) for s in seasons}
     mates = linemates(seasons, names)
+    glog = game_logs(seasons)
+    heat = player_heatmap.build(seasons)
 
     # table players = pooled skaters with enough EV ice time
     table = pooled[pooled.ev_off_toi >= MIN_EV_TOI].copy()
     keep_ids = set(table.player_id)
+    bios = player_bios({int(i) for i in keep_ids})
 
     C.SITE_JSON.mkdir(parents=True, exist_ok=True)
     pdir = C.SITE_JSON / "player"
@@ -333,6 +394,9 @@ def main() -> None:
                          "fin_goals": _rnd(getattr(r, "fin_goals"), 1)},
             "per_season": per_season,
             "linemates": mates.get(pid, [])[:N_LINEMATES],
+            "games": glog.get(pid, []),
+            "heat": heat.get(pid),
+            "bio": bios.get(pid),
         }
         (pdir / f"{pid}.json").write_text(_dump(detail))
 
