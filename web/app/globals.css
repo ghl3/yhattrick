@@ -118,6 +118,10 @@ a:hover { text-decoration: underline; }
 .viz-row { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
 .viz-cell { min-width: 0; }
 @media (max-width: 760px) { .viz-row { grid-template-columns: 1fr; } }
+/* three-up split tables (goalie page: danger / strength / shot type) */
+.split-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; align-items: start; }
+.split-cell { min-width: 0; }
+@media (max-width: 860px) { .split-row { grid-template-columns: 1fr; } }
 /* whole-row click target for game tables */
 .rowlink { cursor: pointer; }
 .rowlink:hover { background: var(--accent-softer); }

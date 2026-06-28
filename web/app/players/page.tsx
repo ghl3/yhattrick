@@ -2,14 +2,16 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { type ColumnDef, type SortingState } from "@tanstack/react-table";
-import type { PlayerRow } from "@/lib/types";
+import type { GoalieRow, PlayerRow } from "@/lib/types";
 import { pctColor } from "@/lib/format";
 import { DataTable } from "@/components/DataTable";
 
 type View = "impact" | "onice" | "individual";
+type Pos = "SKATERS" | "F" | "D" | "G";
 const num3 = (v: number) => v.toFixed(3);
 const num2 = (v: number) => v.toFixed(2);
 const num1 = (v: number) => v.toFixed(1);
+const svFmt = (v: number) => v.toFixed(3).replace(/^0/, ""); // .915
 
 // metric columns per view: modeled (isolated) impact vs raw on-ice rates
 type MetricCol = { key: keyof PlayerRow; label: string; title: string; fmt: (v: number) => string };
@@ -36,7 +38,18 @@ const VIEWS: Record<View, MetricCol[]> = {
   ],
 };
 
-// cell: value tinted by its within-position percentile
+// goalie leaderboard columns (single pool; percentiles among goalies)
+type GMetricCol = { key: keyof GoalieRow; label: string; title: string; fmt: (v: number) => string };
+const GVIEW: GMetricCol[] = [
+  { key: "gsax_per100", label: "GSAx/100", title: "Goals saved above expected per 100 shots (regressed)", fmt: num2 },
+  { key: "gsax60", label: "GSAx/60", title: "Goals saved above expected per 60 minutes", fmt: num2 },
+  { key: "sv_pct", label: "Sv%", title: "Save %", fmt: svFmt },
+  { key: "gaa", label: "GAA", title: "Goals-against average", fmt: num2 },
+  { key: "hd_sv_pct", label: "HDSv%", title: "High-danger save %", fmt: svFmt },
+  { key: "qs_pct", label: "QS%", title: "Quality-start %", fmt: (v) => `${Math.round(v * 100)}%` },
+];
+
+// cell: value tinted by its percentile
 function metricCell(value: number | null, pctile: number | null, fmt: (v: number) => string) {
   if (value == null) return <span className="metric-cell muted">—</span>;
   return (
@@ -46,19 +59,14 @@ function metricCell(value: number | null, pctile: number | null, fmt: (v: number
   );
 }
 
+function teamCell(t: string) {
+  return t ? <Link href={`/team/${t}`} onClick={(e) => e.stopPropagation()}>{t}</Link> : "—";
+}
+
 function buildColumns(view: View): ColumnDef<PlayerRow>[] {
   return [
     { header: "Player", accessorKey: "name", cell: (c) => c.getValue<string>() },
-    {
-      header: "Team",
-      accessorKey: "team",
-      cell: (c) => {
-        const t = c.getValue<string>();
-        return t ? (
-          <Link href={`/team/${t}`} onClick={(e) => e.stopPropagation()}>{t}</Link>
-        ) : "—";
-      },
-    },
+    { header: "Team", accessorKey: "team", cell: (c) => teamCell(c.getValue<string>()) },
     { header: "Pos", accessorKey: "pos" },
     { header: "EV TOI", accessorKey: "ev_toi", cell: (c) => <span className="num">{Math.round(c.getValue<number>())}</span> },
     ...VIEWS[view].map(
@@ -76,65 +84,110 @@ function buildColumns(view: View): ColumnDef<PlayerRow>[] {
   ];
 }
 
+function goalieColumns(): ColumnDef<GoalieRow>[] {
+  return [
+    { header: "Goalie", accessorKey: "name", cell: (c) => c.getValue<string>() },
+    { header: "Team", accessorKey: "team", cell: (c) => teamCell(c.getValue<string>()) },
+    { header: "GP", accessorKey: "gp", cell: (c) => <span className="num">{c.getValue<number>()}</span> },
+    ...GVIEW.map(
+      (m): ColumnDef<GoalieRow> => ({
+        header: m.label,
+        accessorKey: m.key,
+        meta: { title: m.title },
+        cell: (c) => metricCell(
+          c.getValue<number | null>(),
+          c.row.original[`${m.key}_pct` as keyof GoalieRow] as number | null,
+          m.fmt,
+        ),
+      })
+    ),
+  ];
+}
+
 export default function Players() {
   const [rows, setRows] = useState<PlayerRow[] | null>(null);
+  const [goalies, setGoalies] = useState<GoalieRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [globalFilter, setGlobalFilter] = useState("");
-  const [posFilter, setPosFilter] = useState<"ALL" | "F" | "D">("ALL");
+  const [posFilter, setPosFilter] = useState<Pos>("SKATERS");
   const [view, setView] = useState<View>("impact");
   const [sorting, setSorting] = useState<SortingState>([{ id: "ev_off", desc: true }]);
+  const [gsorting, setGsorting] = useState<SortingState>([{ id: "gsax_per100", desc: true }]);
 
   useEffect(() => {
-    fetch(`/data/players.json`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
-      .then(setRows)
+    Promise.all([
+      fetch(`/data/players.json`).then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
+      fetch(`/data/goalies.json`).then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
+    ])
+      .then(([p, g]) => { setRows(p); setGoalies(g); })
       .catch((e) => setError(String(e)));
+    // deep-link from a goalie page (/players?pos=G)
+    const q = new URLSearchParams(window.location.search).get("pos");
+    if (q === "G" || q === "F" || q === "D") setPosFilter(q);
   }, []);
 
+  const isG = posFilter === "G";
   const columns = useMemo(() => buildColumns(view), [view]);
+  const gcolumns = useMemo(() => goalieColumns(), []);
   const switchView = (v: View) => {
     setView(v);
     setSorting([{ id: VIEWS[v][0].key as string, desc: true }]); // sort by the view's first metric
   };
 
   const data = useMemo(
-    () => (rows ?? []).filter((r) => posFilter === "ALL" || r.group === posFilter),
+    () => (rows ?? []).filter((r) => posFilter === "SKATERS" || r.group === posFilter),
     [rows, posFilter]
   );
 
   if (error)
-    return <div className="loading">Failed to load players.json ({error}). Run <code>uv run python -m yhattrick.export_players</code>.</div>;
-  if (!rows) return <div className="loading">Loading players…</div>;
+    return <div className="loading">Failed to load index ({error}). Run <code>make players goalies</code>.</div>;
+  if (!rows || !goalies) return <div className="loading">Loading players…</div>;
 
   return (
     <div className="panel">
       <div className="toolbar">
-        <input className="search" placeholder="Search player…" value={globalFilter} onChange={(e) => setGlobalFilter(e.target.value)} />
+        <input className="search" placeholder={isG ? "Search goalie…" : "Search player…"} value={globalFilter} onChange={(e) => setGlobalFilter(e.target.value)} />
         <div className="seg">
-          {(["ALL", "F", "D"] as const).map((g) => (
+          {(["SKATERS", "F", "D", "G"] as const).map((g) => (
             <button key={g} className={posFilter === g ? "active" : ""} onClick={() => setPosFilter(g)}>
-              {g === "ALL" ? "All" : g}
+              {g === "SKATERS" ? "Skaters" : g}
             </button>
           ))}
         </div>
-        <div className="seg">
-          {(["impact", "individual", "onice"] as const).map((v) => (
-            <button key={v} className={view === v ? "active" : ""} onClick={() => switchView(v)}>
-              {v === "impact" ? "Isolated impact" : v === "individual" ? "Individual rates" : "Team rates"}
-            </button>
-          ))}
-        </div>
-        <span className="muted">{data.length} players · color = percentile vs. position</span>
+        {!isG && (
+          <div className="seg">
+            {(["impact", "individual", "onice"] as const).map((v) => (
+              <button key={v} className={view === v ? "active" : ""} onClick={() => switchView(v)}>
+                {v === "impact" ? "Isolated impact" : v === "individual" ? "Individual rates" : "Team rates"}
+              </button>
+            ))}
+          </div>
+        )}
+        <span className="muted">
+          {isG ? `${goalies.length} goalies` : `${data.length} skaters`} · color = percentile vs. {isG ? "goalies" : "position"}
+        </span>
       </div>
-      <DataTable
-        data={data}
-        columns={columns}
-        sorting={sorting}
-        onSortingChange={setSorting}
-        globalFilter={globalFilter}
-        rowHref={(r) => `/player/${r.id}`}
-        className="games ptable"
-      />
+      {isG ? (
+        <DataTable
+          data={goalies}
+          columns={gcolumns}
+          sorting={gsorting}
+          onSortingChange={setGsorting}
+          globalFilter={globalFilter}
+          rowHref={(r) => `/player/${r.id}`}
+          className="games ptable"
+        />
+      ) : (
+        <DataTable
+          data={data}
+          columns={columns}
+          sorting={sorting}
+          onSortingChange={setSorting}
+          globalFilter={globalFilter}
+          rowHref={(r) => `/player/${r.id}`}
+          className="games ptable"
+        />
+      )}
     </div>
   );
 }

@@ -280,6 +280,126 @@ export interface PlayerHeat {
   xg: number[][]; // smoothed summed xG
 }
 
+// --- goalies (export_goalies.py) ---
+// GSAx = expected goals against (xGA, over the modeled Fenwick set) − goals against; the headline
+// gsax_per100 is the empirical-Bayes-shrunk save-talent rate. Shots-against / Sv% / GAA display over
+// shots on goal; GSAx (and every split's GSAx) is over the calibrated Fenwick set so they reconcile.
+export type GoalieMetricKey =
+  | "gsax_per100" | "gsax60" | "sv_pct" | "gaa" | "hd_sv_pct" | "qs_pct";
+
+export interface GoalieRow {
+  id: number;
+  name: string;
+  team: string;
+  teams: string[];
+  gp: number;
+  starts: number;
+  sa: number;          // shots on goal faced
+  saves: number;
+  ga: number;
+  shutouts: number;
+  sv_pct: number | null;
+  gaa: number | null;
+  xga: number | null;  // expected goals against (Fenwick)
+  gsax: number | null; // xGA − GA
+  gsax_per100: number | null;
+  gsax_per100_se: number | null;
+  gsax60: number | null;
+  hd_sv_pct: number | null;
+  qs: number;
+  rbs: number;
+  qs_pct: number | null;
+  // + `${GoalieMetricKey}_pct` percentile fields
+  gsax_per100_pct: number | null;
+  gsax60_pct: number | null;
+  sv_pct_pct: number | null;
+  gaa_pct: number | null;
+  hd_sv_pct_pct: number | null;
+  qs_pct_pct: number | null;
+}
+
+export interface GoalieSeasonRow {
+  season: number;
+  team: string;
+  gp: number;
+  starts: number;
+  toi_min: number;
+  sa: number;
+  sog_against: number;
+  saves: number;
+  ga: number;
+  shutouts: number;
+  sv_pct: number | null;
+  gaa: number | null;
+  xga: number | null;
+  gsax: number | null;
+  hd_sv_pct: number | null;
+  qs: number;
+  rbs: number;
+  gsax_per100: number | null;
+}
+
+export interface GoalieSplit {
+  sa: number;          // shots on goal in this slice
+  sv_pct: number | null;
+  gsax: number | null; // Fenwick GSAx (reconciles to the total)
+}
+export type GoalieDangerSplit = GoalieSplit & { bucket: "ld" | "md" | "hd" };
+export type GoalieSituationSplit = GoalieSplit & { sit: "ev" | "pk" | "pp" };
+export type GoalieShotTypeSplit = GoalieSplit & { shot_type: string };
+
+export interface GoalieGameLogRow {
+  game_id: number;
+  season: number;
+  date: string | null;
+  team: string;
+  opp: string;
+  home: boolean;
+  decision: string | null; // W | L | OTL | null (relief)
+  toi_s: number;
+  sog_against: number;
+  saves: number;
+  ga: number;
+  xga: number | null;
+  gsax: number | null;
+  started: boolean;
+  shutout: boolean;
+  qs: boolean;
+  rbs: boolean;
+}
+
+export interface GoalieDetail {
+  kind: "goalie";
+  id: number;
+  name: string;
+  current_team: string;
+  teams: string[];
+  seasons: number[];
+  gp: number;
+  starts: number;
+  sa: number;
+  saves: number;
+  ga: number;
+  shutouts: number;
+  sv_pct: number | null;
+  gaa: number | null;
+  gsax: number | null;
+  metric: Record<GoalieMetricKey, { v: number | null; pct: number | null; se?: number }>;
+  danger: GoalieDangerSplit[];
+  situation: GoalieSituationSplit[];
+  shot_types: GoalieShotTypeSplit[];
+  per_season: GoalieSeasonRow[];
+  games: GoalieGameLogRow[];
+  heat: PlayerHeat | null;
+  bio: PlayerBio | null;
+}
+
+// the player detail JSON is one of these two (discriminated on `kind`; skaters omit it)
+export type AnyPlayerDetail = PlayerDetail | GoalieDetail;
+export function isGoalie(d: AnyPlayerDetail): d is GoalieDetail {
+  return (d as GoalieDetail).kind === "goalie";
+}
+
 // --- xG model exploration page (xg.py -> web/public/data/xg_model.json) ---
 export interface XgMetrics {
   auc: number;

@@ -18,4 +18,6 @@ export const gameDetailUrl = (id: string | number) => `${GAME_BASE}/${id}.json`;
 // Index + player JSON stay local to the deploy (small); kept as helpers for one source of truth.
 export const gamesIndexUrl = () => `/data/games.json`;
 export const playersIndexUrl = () => `/data/players.json`;
+export const goaliesIndexUrl = () => `/data/goalies.json`;
+// goalie detail ships in the same player/<id>.json file (discriminated by `kind`)
 export const playerDetailUrl = (id: string | number) => `/data/player/${id}.json`;

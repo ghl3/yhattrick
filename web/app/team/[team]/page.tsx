@@ -3,10 +3,21 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { type ColumnDef, type SortingState } from "@tanstack/react-table";
-import type { GameIndexRow, PlayerRow } from "@/lib/types";
+import type { GameIndexRow, GoalieRow, PlayerRow } from "@/lib/types";
 import { seasonLabel } from "@/lib/format";
 import { teamFullName, teamLogo } from "@/lib/teams";
 import { DataTable } from "@/components/DataTable";
+
+const svFmt = (v: number | null) => (v == null ? "—" : v.toFixed(3).replace(/^0/, ""));
+
+// goalies who appeared for this team (career totals — we don't split goalie stats by team)
+const goalieColumns = (): ColumnDef<GoalieRow>[] => [
+  { header: "Goalie", accessorKey: "name", cell: (c) => c.getValue<string>() },
+  { header: "GP", accessorKey: "gp", id: "gp", cell: (c) => <span className="num">{c.getValue<number>()}</span>, meta: { title: "Career games played (all teams)" } },
+  { header: "Sv%", accessorKey: "sv_pct", id: "sv_pct", cell: (c) => <span className="num">{svFmt(c.getValue<number | null>())}</span>, meta: { title: "Career save %" } },
+  { header: "GAA", accessorKey: "gaa", id: "gaa", cell: (c) => <span className="num">{c.getValue<number | null>()?.toFixed(2) ?? "—"}</span>, meta: { title: "Career goals-against average" } },
+  { header: "GSAx", accessorKey: "gsax", id: "gsax", cell: (c) => { const v = c.getValue<number | null>(); return <span className="num">{v == null ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}`}</span>; }, meta: { title: "Career goals saved above expected" } },
+];
 
 // Roster stats are for THIS team only (from each player's game log), so a traded player shows just
 // their games/production while on this team — not career totals (those live on the player page).
@@ -46,7 +57,10 @@ export default function Team() {
   // default: current players first, then most games played
   const [rosterSort, setRosterSort] = useState<SortingState>([{ id: "status", desc: false }, { id: "gp", desc: true }]);
   const rosterCols = useMemo(() => rosterColumns(team), [team]);
+  const goalieCols = useMemo(() => goalieColumns(), []);
+  const [goalieSort, setGoalieSort] = useState<SortingState>([{ id: "gsax", desc: true }]);
   const [players, setPlayers] = useState<PlayerRow[] | null>(null);
+  const [goalies, setGoalies] = useState<GoalieRow[] | null>(null);
   const [games, setGames] = useState<GameIndexRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -54,14 +68,19 @@ export default function Team() {
     Promise.all([
       fetch(`/data/players.json`).then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
       fetch(`/data/games.json`).then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
+      fetch(`/data/goalies.json`).then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
     ])
-      .then(([p, g]) => { setPlayers(p); setGames(g); })
+      .then(([p, g, go]) => { setPlayers(p); setGames(g); setGoalies(go); })
       .catch((e) => setError(String(e)));
   }, []);
 
   const roster = useMemo(
     () => (players ?? []).filter((p) => !!p.by_team?.[team]),
     [players, team]
+  );
+  const teamGoalies = useMemo(
+    () => (goalies ?? []).filter((g) => g.teams.includes(team)),
+    [goalies, team]
   );
   const sched = useMemo(
     () => (games ?? []).filter((g) => g.home === team || g.away === team)
@@ -156,7 +175,7 @@ export default function Team() {
       </div>
 
       <div className="panel">
-        <h2>Players</h2>
+        <h2>Skaters</h2>
         <DataTable
           data={roster}
           columns={rosterCols}
@@ -165,8 +184,23 @@ export default function Team() {
           rowHref={(p) => `/player/${p.id}`}
           className="games ptable"
         />
-        <p className="muted card-note">Everyone who appeared for {team} in our data. GP, G, A, P and TOI are for {team} only — click a player for full career detail.</p>
+        <p className="muted card-note">Every skater who appeared for {team} in our data. GP, G, A, P and TOI are for {team} only — click a skater for full career detail.</p>
       </div>
+
+      {teamGoalies.length > 0 && (
+        <div className="panel">
+          <h2>Goalies</h2>
+          <DataTable
+            data={teamGoalies}
+            columns={goalieCols}
+            sorting={goalieSort}
+            onSortingChange={setGoalieSort}
+            rowHref={(g) => `/player/${g.id}`}
+            className="games ptable"
+          />
+          <p className="muted card-note">Goalies who appeared for {team}. Stats are career totals across all teams — click a goalie for the full breakdown.</p>
+        </div>
+      )}
 
       <div className="panel">
         <h2>Games</h2>
