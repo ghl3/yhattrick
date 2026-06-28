@@ -258,6 +258,20 @@ table.shot-meta td { padding: 2px 0; font-variant-numeric: tabular-nums; }
 .loading { padding: 40px; text-align: center; color: var(--muted); }
 .backlink { font-size: 13px; margin-bottom: 12px; display: inline-block; }
 
+/* --- loading skeletons (shown while the per-game JSON streams in) --- */
+@keyframes sk-shimmer { 100% { transform: translateX(100%); } }
+.sk {
+  position: relative; overflow: hidden; border-radius: 5px;
+  background: var(--accent-softer); display: inline-block; vertical-align: middle;
+}
+.sk::after {
+  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.65), transparent);
+  animation: sk-shimmer 1.25s infinite;
+}
+.sk-row { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-top: 1px solid var(--border); }
+.sk-row:first-child { border-top: 0; }
+
 /* --- yHatTrick brand + about page --- */
 .brand-name { font-size: 16px; }
 .brand-y { color: var(--accent-deep); font-weight: 800; }

@@ -4,6 +4,10 @@ Small data (the games index, player ratings + cards) ships inside the web deploy
 files (web/public/data/game/*.json, ~850 MB) are synced here to R2, which the production site
 reads via NEXT_PUBLIC_GAME_DATA_BASE=<public-url>/game.
 
+Each object is stored **gzip-compressed** with `Content-Encoding: gzip` (the r2.dev public URL does
+not compress responses itself, so a raw upload ships ~9x more bytes than needed) and a long-lived
+`Cache-Control` (finished-game timelines are immutable). Browsers decode the gzip transparently.
+
 S3-compatible credentials are read from the environment (never commit them):
   R2_ENDPOINT            https://<accountid>.r2.cloudflarestorage.com
   R2_BUCKET              e.g. yhattrick-data
@@ -18,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import gzip
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -25,6 +30,14 @@ from . import config as C
 
 PREFIX = "game"  # objects live at game/<id>.json to match NEXT_PUBLIC_GAME_DATA_BASE=.../game
 _ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY")
+# Per-game timelines for finished games never change, so cache them hard at the browser + CDN.
+CACHE_CONTROL = "public, max-age=31536000, immutable"
+
+
+def _gz(data: bytes) -> bytes:
+    """Deterministic gzip (mtime=0) so a re-run produces byte-identical output → stable size for the
+    incremental-skip check below. Stored with Content-Encoding: gzip; browsers decode transparently."""
+    return gzip.compress(data, compresslevel=9, mtime=0)
 
 
 def _client():
@@ -87,21 +100,28 @@ def main(argv: list[str] | None = None) -> None:
         _set_cors(s3, bucket)
 
     remote = {} if args.force else _remote_sizes(s3, bucket)
-    todo = [f for f in files if remote.get(f"{PREFIX}/{f.name}") != f.stat().st_size]
-    print(f"[publish] {len(files):,} local · {len(remote):,} remote · uploading {len(todo):,}")
+    print(f"[publish] {len(files):,} local · {len(remote):,} remote · checking…")
 
     def up(f):
-        s3.upload_file(str(f), bucket, f"{PREFIX}/{f.name}",
-                       ExtraArgs={"ContentType": "application/json"})
+        """Compress, then upload iff the stored object's size differs (i.e. content changed or it
+        isn't gzipped yet). Returns True if uploaded, False if skipped as unchanged."""
+        key = f"{PREFIX}/{f.name}"
+        body = _gz(f.read_bytes())
+        if not args.force and remote.get(key) == len(body):
+            return False
+        s3.put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/json",
+                      ContentEncoding="gzip", CacheControl=CACHE_CONTROL)
+        return True
 
-    done = 0
+    done = uploaded = 0
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
-        for fut in as_completed(ex.submit(up, f) for f in todo):
-            fut.result()
+        for fut in as_completed(ex.submit(up, f) for f in files):
+            uploaded += 1 if fut.result() else 0
             done += 1
-            if done % 500 == 0:
-                print(f"  {done:,}/{len(todo):,}")
-    print(f"[publish] uploaded {done:,} files -> r2://{bucket}/{PREFIX}/")
+            if done % 1000 == 0:
+                print(f"  checked {done:,}/{len(files):,} · uploaded {uploaded:,}")
+    print(f"[publish] uploaded {uploaded:,} (skipped {len(files) - uploaded:,} unchanged) "
+          f"-> r2://{bucket}/{PREFIX}/  [gzip, {CACHE_CONTROL}]")
 
 
 if __name__ == "__main__":
