@@ -26,6 +26,13 @@ their shift intervals satisfies `start_g <= t < end_g`. A **stint** is a maximal
 consecutive shift boundaries, over which the on-ice set is constant (see
 [04-processing.md](04-processing.md)).
 
+**Shift source.** The JSON shiftcharts feed (`api.nhle.com/stats/rest`) stopped being populated
+~spring 2025 (returns 0 rows for late-2024-25 + 2025-26). For those games `clean_shifts` falls back
+to the **HTML TOI reports** (`TH`=home, `TV`=away; `html_shifts.py`), which list shifts by sweater
+**number** + name — resolved to `playerId` via that game's pbp `rosterSpots` (exact per game, so
+trades/number changes are handled). Both paths produce the identical shift schema. The parser is
+validated by diffing it against the JSON feed on games that have both (matches to the second).
+
 ### Two data quirks handled
 
 1. **Duplicate shift rows.** NHL shiftcharts sometimes emit a player's shift twice (e.g.

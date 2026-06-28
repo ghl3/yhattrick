@@ -9,7 +9,7 @@ own xG entirely from NHL play-by-play.
 |---|---|---|
 | The game list for a season | **NHL standings + club schedule** | `…/v1/standings/<date>`, `…/v1/club-schedule-season/<team>/<season8>` |
 | Play-by-play **events** (shots w/ coords, goals, penalties, faceoffs), strength, rosters | **NHL play-by-play API** | `https://api-web.nhle.com/v1/gamecenter/<id>/play-by-play` |
-| **On-ice player identities + time-on-ice** (→ stints) | **NHL shiftcharts API** | `https://api.nhle.com/stats/rest/en/shiftcharts?cayenneExp=gameId=<id>` |
+| **On-ice player identities + time-on-ice** (→ stints) | **NHL shiftcharts JSON**, with the **HTML TOI reports** as fallback | `https://api.nhle.com/stats/rest/en/shiftcharts?cayenneExp=gameId=<id>` · `https://www.nhl.com/scores/htmlreports/<season8>/T{H,V}<game6>.HTM` |
 | Shooter **handedness** (→ off-wing feature) | **NHL player landing** | `https://api-web.nhle.com/v1/player/<id>/landing` |
 
 Seasons covered: `2021`–`2025`, i.e. 2021-22 through 2025-26 (a "season" is named by its
@@ -23,7 +23,10 @@ starting year).
   faceoffs (zone starts) for the rest of the event timeline.
 - **NHL shiftcharts** supply who was on the ice and for how long, as real shift intervals: the
   substrate for stints and accurate TOI, and how we reconstruct the on-ice five (plus goalie) at
-  the instant of every shot.
+  the instant of every shot. The JSON feed (`stats/rest`) stopped being populated ~spring 2025, so
+  for games where it returns 0 rows we parse the **HTML TOI reports** (`TH`=home, `TV`=away) instead
+  (`html_shifts.py`), resolving sweater number → playerId via that game's pbp rosterSpots. Same shift
+  schema either way. See `docs/03-joins-and-ids.md`.
 - **NHL player landing** gives shooter handedness, the one player attribute the pbp lacks, used
   only for the off-wing shot-geometry feature.
 

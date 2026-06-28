@@ -29,6 +29,7 @@ DATA = REPO_ROOT / "data"
 
 RAW = DATA / "raw"
 RAW_SHIFTS = RAW / "nhl" / "shiftcharts"
+RAW_HTMLSHIFTS = RAW / "nhl" / "htmlshifts"   # TH/TV HTML TOI reports (fallback when JSON is empty)
 RAW_PBP = RAW / "nhl" / "pbp"
 RAW_PLAYERS = RAW / "nhl" / "players"   # per-player landing json (handedness, bio)
 
@@ -45,7 +46,7 @@ SITE_JSON = DATA / "games"
 WEB_DIR = REPO_ROOT / "web"
 WEB_DATA = WEB_DIR / "public" / "data"
 
-_ALL_DIRS = (RAW_SHIFTS, RAW_PBP, RAW_PLAYERS, INTERIM, PROCESSED, SITE_JSON, LOGS, LOGS_MODEL)
+_ALL_DIRS = (RAW_SHIFTS, RAW_HTMLSHIFTS, RAW_PBP, RAW_PLAYERS, INTERIM, PROCESSED, SITE_JSON, LOGS, LOGS_MODEL)
 
 
 def ensure_dirs() -> None:
@@ -57,6 +58,8 @@ def ensure_dirs() -> None:
 NHL_SHIFTCHARTS_URL = "https://api.nhle.com/stats/rest/en/shiftcharts?cayenneExp=gameId={game_id}"
 NHL_PBP_URL = "https://api-web.nhle.com/v1/gamecenter/{game_id}/play-by-play"
 NHL_PLAYER_URL = "https://api-web.nhle.com/v1/player/{player_id}/landing"
+# HTML time-on-ice reports (shift fallback when the JSON shiftcharts feed is empty); hv = H or V
+NHL_HTML_SHIFTS_URL = "https://www.nhl.com/scores/htmlreports/{season8}/T{hv}{game6}.HTM"
 # the season's game list: standings -> the season's teams, then each club's full schedule
 NHL_STANDINGS_URL = "https://api-web.nhle.com/v1/standings/{date}"
 NHL_CLUB_SCHEDULE_URL = "https://api-web.nhle.com/v1/club-schedule-season/{team}/{season8}"
@@ -74,3 +77,8 @@ PERIOD_SECONDS = 1200          # 20:00 regulation period
 def is_regular_season(nhl_game_id: int) -> bool:
     """NHL gameId game-type digits are 02 for regular season, 03 for playoffs."""
     return (nhl_game_id // 10000) % 100 == 2
+
+
+def game6(nhl_game_id: int) -> str:
+    """2024020500 -> '020500' (game-type + number, the 6 digits the HTML reports use)."""
+    return str(nhl_game_id)[4:]

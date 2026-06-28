@@ -12,6 +12,7 @@ make fetch                      # NHL shiftcharts+pbp for all seasons + player h
 # or, granularly:
 make fetch-season SEASON=2024   # NHL per-game data for one season
 make fetch-handedness           # player landing json (handedness)
+make fetch-htmlshifts           # HTML TOI reports where the JSON shift feed is empty
 ```
 
 Under the hood these call `python -m yhattrick.download {games|handedness|all}` (also exposed as
@@ -29,7 +30,8 @@ reads only the JSON the export step writes into `web/public/data/`.
 data/                                   # top-level, shared
   raw/                                  # immutable; exactly as downloaded
     nhl/
-      shiftcharts/<gameId>.json         # on-ice shifts per game (~270 KB)
+      shiftcharts/<gameId>.json         # on-ice shifts per game (~270 KB; empty for late-2024-25+)
+      htmlshifts/T{H,V}<game6>.HTM      # HTML TOI reports — shift fallback where the JSON is empty
       pbp/<gameId>.json                 # play-by-play events per game (~130 KB)
       players/<playerId>.json           # player landing (handedness)
   interim/                              # typed per-source tables (see 04-processing.md)

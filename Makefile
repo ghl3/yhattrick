@@ -6,6 +6,7 @@
 #   make fetch                      # download all NHL seasons + handedness -> data/raw/
 #   make fetch-season SEASON=2024   # NHL shiftcharts+pbp for one season
 #   make fetch-handedness           # NHL player handedness (for off-wing)
+#   make fetch-htmlshifts           # HTML TOI reports where the JSON shift feed is empty
 #   make clean-data                 # parse raw -> data/interim/        (idempotent)
 #   make xg                         # fit the expected-goals model       -> data/processed/xg + web JSON
 #   make stints                     # join      -> data/processed/      (idempotent)
@@ -30,7 +31,7 @@ SEASON ?=
 FAMILY ?= gaussian        # response family for `make model`: gaussian | tweedie
 
 .DEFAULT_GOAL := all
-.PHONY: all fetch fetch-season fetch-handedness clean-data xg stints box model finishing games players publish-data pipeline web-dev web-build
+.PHONY: all fetch fetch-season fetch-handedness fetch-htmlshifts clean-data xg stints box model finishing games players publish-data pipeline web-dev web-build
 
 all: clean-data xg stints box model finishing games players
 
@@ -42,6 +43,9 @@ fetch-season:
 
 fetch-handedness:
 	$(RUN) yhattrick.download handedness 2>&1 | tee $(LOGDIR)/download.log
+
+fetch-htmlshifts:
+	$(RUN) yhattrick.download htmlshifts 2>&1 | tee $(LOGDIR)/download.log
 
 clean-data:
 	$(RUN) yhattrick.clean 2>&1 | tee $(LOGDIR)/clean.log

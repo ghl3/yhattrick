@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 
 from . import config as C
+from . import html_shifts
 from . import shot_geom as G
 
 
@@ -118,18 +119,29 @@ def clean_shifts(season: int) -> int:
     gids = _downloaded_game_ids(season)
     raw: dict[tuple, list[tuple]] = {}   # (gid, player_id) -> [(start,end,period), ...]
     meta: dict[tuple, tuple] = {}        # (gid, player_id) -> (name, team, team_id)
+    html_games = 0
     for gid in gids:
-        data = json.loads((C.RAW_SHIFTS / f"{gid}.json").read_text())["data"]
-        for s in data:
-            if not s.get("duration") or not s.get("startTime") or not s.get("endTime"):
-                continue  # goal-marker / malformed rows carry no interval
-            p = s["period"]
-            start, end = game_sec(p, s["startTime"]), game_sec(p, s["endTime"])
-            if end <= start:
-                continue
-            key = (gid, s["playerId"])
-            raw.setdefault(key, []).append((start, end, int(p)))
-            meta.setdefault(key, (f"{s['firstName']} {s['lastName']}", s["teamAbbrev"], s["teamId"]))
+        data = json.loads((C.RAW_SHIFTS / f"{gid}.json").read_text()).get("data", [])
+        if data:
+            for s in data:
+                if not s.get("duration") or not s.get("startTime") or not s.get("endTime"):
+                    continue  # goal-marker / malformed rows carry no interval
+                p = s["period"]
+                start, end = game_sec(p, s["startTime"]), game_sec(p, s["endTime"])
+                if end <= start:
+                    continue
+                key = (gid, s["playerId"])
+                raw.setdefault(key, []).append((start, end, int(p)))
+                meta.setdefault(key, (f"{s['firstName']} {s['lastName']}", s["teamAbbrev"], s["teamId"]))
+        else:
+            # the JSON shift feed is empty (dead for late-2024-25 on) -> parse the HTML TOI reports
+            hrows = html_shifts.shifts_for_game(gid)
+            if hrows:
+                html_games += 1
+            for pid, name, team, team_id, period, start, end in hrows:
+                key = (gid, pid)
+                raw.setdefault(key, []).append((start, end, period))
+                meta.setdefault(key, (name, team, team_id))
     if not raw:
         print(f"[shifts] {season}: no games on disk yet")
         return 0
@@ -146,7 +158,8 @@ def clean_shifts(season: int) -> int:
     out = C.INTERIM / "shifts" / f"{season}.parquet"
     out.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(out, index=False)
-    print(f"[shifts] {season}: {len(df):,} shifts across {df.nhl_game_id.nunique()} games -> {out.name}")
+    via = f" ({html_games} via HTML TOI reports)" if html_games else ""
+    print(f"[shifts] {season}: {len(df):,} shifts across {df.nhl_game_id.nunique()} games{via} -> {out.name}")
     return len(df)
 
 

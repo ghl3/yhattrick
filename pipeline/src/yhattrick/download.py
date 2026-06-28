@@ -148,6 +148,46 @@ def download_handedness() -> None:
     print(f"[players] done: fetched {fetched}, cached {skipped}, missing {missing}")
 
 
+# --- HTML TOI reports (shift fallback when the JSON feed is empty) ------------
+def _json_shifts_empty(gid: int) -> bool:
+    """True if the JSON shiftchart for a game is missing or carries no shift rows."""
+    p = C.RAW_SHIFTS / f"{gid}.json"
+    if not p.exists():
+        return True
+    try:
+        return len(json.loads(p.read_text()).get("data", [])) == 0
+    except (json.JSONDecodeError, OSError):
+        return True
+
+
+def download_html_shifts(season: int) -> None:
+    """Fetch TH/TV HTML TOI reports for games whose JSON shiftchart feed is empty (the legacy
+    feed stopped updating ~spring 2025). Resumable: skips reports already on disk."""
+    C.ensure_dirs()
+    sess = _session()
+    gids = sorted(int(p.stem) for p in C.RAW_PBP.glob("*.json")
+                  if int(str(p.stem)[:4]) == season and _json_shifts_empty(int(p.stem)))
+    print(f"[htmlshifts] {C.season_label(season)}: {len(gids)} games need HTML TOI reports")
+    fetched = skipped = missing = 0
+    for i, gid in enumerate(gids, 1):
+        for hv in ("H", "V"):
+            path = C.RAW_HTMLSHIFTS / f"T{hv}{C.game6(gid)}.HTM"
+            if path.exists() and path.stat().st_size > 1000:
+                skipped += 1
+                continue
+            txt = _get(sess, C.NHL_HTML_SHIFTS_URL.format(
+                season8=C.nhl_season8(season), hv=hv, game6=C.game6(gid)), binary=False)
+            if txt is None:
+                missing += 1
+                continue
+            path.write_text(txt)
+            fetched += 1
+            time.sleep(C.THROTTLE_SECONDS)
+        if i % 50 == 0:
+            print(f"    {i}/{len(gids)}  (fetched {fetched}, cached {skipped}, missing {missing})")
+    print(f"[htmlshifts] {C.season_label(season)} done: fetched {fetched}, cached {skipped}, missing {missing}")
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description="Download raw NHL data -> data/raw/")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -155,16 +195,22 @@ def main(argv: list[str] | None = None) -> None:
     g.add_argument("--season", type=int, required=True)
     g.add_argument("--limit", type=int, default=None)
     sub.add_parser("handedness", help="download NHL player landing json (handedness)")
-    sub.add_parser("all", help="games for every configured season + handedness")
+    hs = sub.add_parser("htmlshifts", help="download HTML TOI reports for games with an empty JSON shift feed")
+    hs.add_argument("--season", type=int, default=None)
+    sub.add_parser("all", help="games + HTML shift fallback + handedness, every configured season")
 
     args = p.parse_args(argv)
     if args.cmd == "games":
         download_games(args.season, args.limit)
     elif args.cmd == "handedness":
         download_handedness()
+    elif args.cmd == "htmlshifts":
+        for season in ([args.season] if args.season else C.SEASONS):
+            download_html_shifts(season)
     elif args.cmd == "all":
         for season in C.SEASONS:
             download_games(season)
+            download_html_shifts(season)
         download_handedness()
 
 
