@@ -340,8 +340,17 @@ def main() -> None:
         assists = int((career.a1 + career.a2).sum()) if len(career) else 0
         pts = int(career.points.sum()) if len(career) else 0
         team_list = sorted({t for ts in career.teams for t in ts}) if len(career) else []
+        # most-recent team = primary team of the latest season the player appears in
+        current_team = str(career.sort_values("season").iloc[-1].team) if len(career) else (team_list[0] if team_list else "")
+        # per-team games + production (for team-roster views) from this player's game log
+        by_team: dict[str, dict] = {}
+        for grow in glog.get(int(pid), []):
+            acc = by_team.setdefault(grow["team"], {"gp": 0, "g": 0, "a": 0, "p": 0, "toi_s": 0})
+            acc["gp"] += 1
+            acc["g"] += grow["g"]; acc["a"] += grow["a"]; acc["p"] += grow["p"]; acc["toi_s"] += grow["toi_s"]
         index.append({
-            "id": pid, "name": r.name, "pos": r.pos, "group": r.group, "teams": team_list,
+            "id": pid, "name": r.name, "pos": r.pos, "group": r.group,
+            "team": current_team, "teams": team_list, "by_team": by_team,
             "ev_toi": r.ev_off_toi, "gp": gp, "g": goals, "a": assists, "points": pts,
             **{c: getattr(r, c) for c in METRICS},
             **{f"{c}_pct": getattr(r, f"{c}_pct") for c in METRICS},
@@ -381,7 +390,7 @@ def main() -> None:
 
         detail = {
             "id": pid, "name": r.name, "pos": r.pos, "group": r.group,
-            "teams": teams_seen, "seasons": seasons,
+            "current_team": current_team, "teams": teams_seen, "seasons": seasons,
             "gp": gp, "g": goals, "a": assists, "points": pts,
             "impact": {m: {"v": getattr(r, m), "se": getattr(r, f"{m}_se"),
                            "toi": getattr(r, f"{m}_toi"), "pct": getattr(r, f"{m}_pct")} for m in METRICS},

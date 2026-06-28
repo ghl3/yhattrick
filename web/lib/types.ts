@@ -108,7 +108,10 @@ export interface PlayerRow {
   name: string;
   pos: string;
   group: "F" | "D";
+  team: string;
   teams: string[];
+  // per-team games + production for team-roster views (key = team abbrev)
+  by_team: Record<string, { gp: number; g: number; a: number; p: number; toi_s: number }>;
   ev_toi: number;
   gp: number;
   g: number;
@@ -236,6 +239,7 @@ export interface PlayerDetail {
   name: string;
   pos: string;
   group: "F" | "D";
+  current_team: string;
   teams: string[];
   seasons: number[];
   gp: number;

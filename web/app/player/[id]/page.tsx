@@ -8,6 +8,7 @@ import {
 } from "recharts";
 import type { GameLogRow, IndividualKey, MetricKey, OniceKey, PlayerDetail, PlayerHeat, SeasonRow } from "@/lib/types";
 import { mmss, pctColor } from "@/lib/format";
+import { teamFullName, teamLogo } from "@/lib/teams";
 
 const seasonLabel = (s: number) => `${s}-${String(s + 1).slice(-2)}`;
 const heightStr = (inches?: number | null) => (inches ? `${Math.floor(inches / 12)}'${inches % 12}"` : null);
@@ -332,8 +333,31 @@ export default function Player() {
             <h2 className="player-name">{p.name}</h2>
             <span className="player-meta">
               {p.bio?.number != null ? `#${p.bio.number} · ` : ""}
-              {p.pos} · {p.group === "D" ? "Defenseman" : "Forward"} · {p.teams.join(", ")}
+              {p.pos} · {p.group === "D" ? "Defenseman" : "Forward"}
             </span>
+            <div className="player-teams">
+              {p.current_team && (
+                <Link href={`/team/${p.current_team}`} className="cur-team">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={teamLogo(p.current_team)} alt={p.current_team} loading="lazy" />
+                  {teamFullName(p.current_team)}
+                </Link>
+              )}
+              {(() => {
+                const former = p.teams.filter((t) => t !== p.current_team);
+                return former.length > 0 ? (
+                  <span className="muted former-teams">
+                    Formerly{" "}
+                    {former.map((t, i) => (
+                      <span key={t}>
+                        {i > 0 ? ", " : ""}
+                        <Link href={`/team/${t}`}>{t}</Link>
+                      </span>
+                    ))}
+                  </span>
+                ) : null;
+              })()}
+            </div>
             <div className="bio-row">
               {p.bio?.shoots && <span><b>Shoots</b> {p.bio.shoots}</span>}
               {heightStr(p.bio?.height_in) && <span><b>Ht</b> {heightStr(p.bio?.height_in)}</span>}

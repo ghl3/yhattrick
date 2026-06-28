@@ -5,6 +5,7 @@ import useSWRImmutable from "swr/immutable";
 import type { Game, PlayerAgg, Stint, TimelineEvent } from "@/lib/types";
 import { mmss } from "@/lib/format";
 import { gameDetailUrl } from "@/lib/data";
+import { teamFullName, teamLogo } from "@/lib/teams";
 import EventCard from "@/components/EventCard";
 import GameSkeleton, { TimelineSkeleton } from "./GameSkeleton";
 
@@ -322,6 +323,10 @@ export default function GameContent({ gameId }: { gameId: string }) {
   if (error) return <div className="loading">Couldn’t load game {gameId} ({error.message}).</div>;
   if (!game) return <GameSkeleton />;
   const t = game.totals;
+  const maxPeriod = game.stints.length ? Math.max(...game.stints.map((s) => Math.floor(s.start / 1200) + 1)) : 3;
+  const finalLabel = maxPeriod >= 4 ? "Final / OT" : "Final";
+  const awayWin = (game.away_score ?? 0) > (game.home_score ?? 0);
+  const homeWin = (game.home_score ?? 0) > (game.away_score ?? 0);
 
   return (
     <LinkMap.Provider value={nameToId}>
@@ -331,21 +336,28 @@ export default function GameContent({ gameId }: { gameId: string }) {
       </Link>
 
       <div className="panel">
-        <div className="gv-header">
-          <div className="scoreline">
-            <span className="team">
-              {game.away} <span className="score">{game.away_score}</span>
-            </span>
-            <span className="at">@</span>
-            <span className="team">
-              {game.home} <span className="score">{game.home_score}</span>
-            </span>
+        <div className="gv-hero">
+          <Link href={`/team/${game.away}`} className="gv-side">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img className="gv-logo" src={teamLogo(game.away)} alt={game.away} loading="lazy" />
+            <span className="gv-team-name">{teamFullName(game.away)}</span>
+          </Link>
+          <div className="gv-center">
+            <div className="gv-scoreline">
+              <span className={awayWin ? "gv-score win" : "gv-score"}>{game.away_score}</span>
+              <span className="gv-dash">–</span>
+              <span className={homeWin ? "gv-score win" : "gv-score"}>{game.home_score}</span>
+            </div>
+            <span className="gv-final">{finalLabel}</span>
+            <span className="gv-date">{game.date}</span>
           </div>
-          <div className="gv-meta">
-            {game.date} · game {game.game_id}
-          </div>
+          <Link href={`/team/${game.home}`} className="gv-side gv-side-home">
+            <span className="gv-team-name">{teamFullName(game.home)}</span>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img className="gv-logo" src={teamLogo(game.home)} alt={game.home} loading="lazy" />
+          </Link>
         </div>
-        <div className="statgrid">
+        <div className="statgrid gv-stats">
           <div className="stat">
             <span className="v">{t.away_xgf.toFixed(2)} / {t.home_xgf.toFixed(2)}</span>
             <span className="k">xGF away / home</span>

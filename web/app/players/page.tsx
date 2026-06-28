@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { type ColumnDef, type SortingState } from "@tanstack/react-table";
 import type { PlayerRow } from "@/lib/types";
 import { pctColor } from "@/lib/format";
@@ -48,6 +49,16 @@ function metricCell(value: number | null, pctile: number | null, fmt: (v: number
 function buildColumns(view: View): ColumnDef<PlayerRow>[] {
   return [
     { header: "Player", accessorKey: "name", cell: (c) => c.getValue<string>() },
+    {
+      header: "Team",
+      accessorKey: "team",
+      cell: (c) => {
+        const t = c.getValue<string>();
+        return t ? (
+          <Link href={`/team/${t}`} onClick={(e) => e.stopPropagation()}>{t}</Link>
+        ) : "—";
+      },
+    },
     { header: "Pos", accessorKey: "pos" },
     { header: "EV TOI", accessorKey: "ev_toi", cell: (c) => <span className="num">{Math.round(c.getValue<number>())}</span> },
     ...VIEWS[view].map(

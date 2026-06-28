@@ -8,21 +8,44 @@ import { seasonLabel } from "@/lib/format";
 import { teamFullName, teamLogo } from "@/lib/teams";
 import { DataTable } from "@/components/DataTable";
 
-const rosterColumns: ColumnDef<PlayerRow>[] = [
-  { header: "Player", accessorKey: "name", cell: (c) => c.getValue<string>() },
-  { header: "Pos", accessorKey: "pos" },
-  { header: "GP", accessorKey: "gp", cell: (c) => <span className="num">{c.getValue<number>()}</span> },
-  { header: "G", accessorKey: "g", cell: (c) => <span className="num">{c.getValue<number>()}</span> },
-  { header: "A", accessorKey: "a", cell: (c) => <span className="num">{c.getValue<number>()}</span> },
-  { header: "P", accessorKey: "points", cell: (c) => <span className="num">{c.getValue<number>()}</span> },
-  { header: "EV TOI", accessorKey: "ev_toi", cell: (c) => <span className="num">{Math.round(c.getValue<number>())}</span> },
-];
+// Roster stats are for THIS team only (from each player's game log), so a traded player shows just
+// their games/production while on this team — not career totals (those live on the player page).
+const rosterColumns = (team: string): ColumnDef<PlayerRow>[] => {
+  const st = (p: PlayerRow) => p.by_team?.[team];
+  const numCol = (header: string, id: string, get: (p: PlayerRow) => number, title: string): ColumnDef<PlayerRow> => ({
+    header, id, accessorFn: get, meta: { title },
+    cell: (c) => <span className="num">{c.getValue<number>()}</span>,
+  });
+  return [
+    { header: "Player", accessorKey: "name", cell: (c) => c.getValue<string>() },
+    { header: "Pos", accessorKey: "pos" },
+    {
+      header: "Status",
+      id: "status",
+      accessorFn: (p) => (p.team === team ? "Current" : "Former"),
+      cell: (c) => {
+        const v = c.getValue<string>();
+        return <span className={v === "Current" ? "status-current" : "muted"}>{v}</span>;
+      },
+    },
+    numCol("GP", "gp", (p) => st(p)?.gp ?? 0, `Games played for ${team}`),
+    numCol("G", "g", (p) => st(p)?.g ?? 0, `Goals for ${team}`),
+    numCol("A", "a", (p) => st(p)?.a ?? 0, `Assists for ${team}`),
+    numCol("P", "points", (p) => st(p)?.p ?? 0, `Points for ${team}`),
+    {
+      header: "TOI", id: "toi", accessorFn: (p) => st(p)?.toi_s ?? 0, meta: { title: `Total time on ice for ${team} (minutes)` },
+      cell: (c) => <span className="num">{Math.round(c.getValue<number>() / 60)}</span>,
+    },
+  ];
+};
 
 export default function Team() {
   const params = useParams<{ team: string }>();
   const router = useRouter();
   const team = (params.team || "").toUpperCase();
-  const [rosterSort, setRosterSort] = useState<SortingState>([{ id: "points", desc: true }]);
+  // default: current players first, then most games played
+  const [rosterSort, setRosterSort] = useState<SortingState>([{ id: "status", desc: false }, { id: "gp", desc: true }]);
+  const rosterCols = useMemo(() => rosterColumns(team), [team]);
   const [players, setPlayers] = useState<PlayerRow[] | null>(null);
   const [games, setGames] = useState<GameIndexRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -37,7 +60,7 @@ export default function Team() {
   }, []);
 
   const roster = useMemo(
-    () => (players ?? []).filter((p) => (p.teams ?? []).includes(team)).sort((a, b) => b.points - a.points),
+    () => (players ?? []).filter((p) => !!p.by_team?.[team]),
     [players, team]
   );
   const sched = useMemo(
@@ -136,13 +159,13 @@ export default function Team() {
         <h2>Players</h2>
         <DataTable
           data={roster}
-          columns={rosterColumns}
+          columns={rosterCols}
           sorting={rosterSort}
           onSortingChange={setRosterSort}
           rowHref={(p) => `/player/${p.id}`}
           className="games ptable"
         />
-        <p className="muted card-note">Players who appeared for {team} in any covered season (totals are career across all teams).</p>
+        <p className="muted card-note">Everyone who appeared for {team} in our data. GP, G, A, P and TOI are for {team} only — click a player for full career detail.</p>
       </div>
 
       <div className="panel">
