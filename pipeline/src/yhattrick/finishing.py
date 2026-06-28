@@ -1,18 +1,18 @@
 """Finishing: goals scored above the expected-goals value of a player's own shots, regressed.
 
-For each unblocked shot a player takes, MoneyPuck gives an expected-goals value `xGoal` (the
+For each unblocked shot a player takes, our xG model gives an expected-goals value (the
 league-average probability it becomes a goal from that spot). A player's *finishing* is converting
 better than that baseline — scoring more goals than the summed xG of his shots. Per player:
 
-  F   = unblocked shots taken (MoneyPuck = Fenwick; the only attempts that carry xG and can score)
-  ixG = sum of xGoal over those shots (individual expected goals)
+  F   = unblocked shots taken (Fenwick; the only attempts that carry xG and can score)
+  ixG = sum of xg over those shots (individual expected goals)
   G   = goals
   raw finishing = G - ixG   (goals above expected)
 
 Finishing is real but low-repeatability, so the raw number is dominated by luck and must be
 **regressed toward zero** (zero = a league-average finisher — the natural null, no informative
 prior). We use empirical-Bayes shrinkage. Under league-average finishing each shot is a coin flip,
-goal ~ Bernoulli(xGoal), so the per-player sampling noise floor is V = Σ xGoal(1-xGoal). Estimating
+goal ~ Bernoulli(xg), so the per-player sampling noise floor is V = Σ xg(1-xg). Estimating
 the population spread of true per-shot finishing talent τ² by method of moments gives a shot-count
 shrinkage constant k = σ̄²/τ² (σ̄² = mean per-shot Bernoulli variance):
 
@@ -20,8 +20,8 @@ shrinkage constant k = σ̄²/τ² (σ̄² = mean per-shot Bernoulli variance):
   fin_goals  = (G - ixG) * F / (F + k)        # shrunk total goals above expected (WAR-ready)
   SE_per100  = sqrt(V) / (F + k) * 100         # honest, wide CI
 
-All in-play situations are pooled (more shots -> steadier estimate); empty-net shots (trivially
-convertible) and shootout (not in the MoneyPuck shot file) are excluded. Regular season only.
+All in-play situations are pooled (more shots -> steadier estimate); empty-net and shootout shots
+are excluded (they're absent from the xG model's modeled set). Regular season only.
 
 Usage:
   uv run python -m yhattrick.finishing                 # all available seasons, pooled
@@ -45,34 +45,30 @@ SNIFF_MIN_SHOTS = 300    # min shots to appear in the printed leaderboard
 
 
 def available_seasons() -> list[int]:
-    d = C.INTERIM / "shots"
+    d = C.PROCESSED / "xg"
     return sorted(int(p.stem) for p in d.glob("*.parquet")) if d.exists() else []
 
 
 def load_shots(seasons: list[int]) -> pd.DataFrame:
-    """Regular-season, in-play, non-empty-net unblocked shots with a valid shooter and xG."""
+    """The xG model's modeled shots (regular-season, goalie-present, unblocked) with a valid shooter.
+
+    `processed/xg` is already the right universe — empty-net, shootout and malformed-strength shots
+    are excluded upstream — so finishing just reads it."""
     frames = []
     for s in seasons:
-        p = C.INTERIM / "shots" / f"{s}.parquet"
+        p = C.PROCESSED / "xg" / f"{s}.parquet"
         if not p.exists():
             continue
-        df = pd.read_parquet(p, columns=["nhl_game_id", "isHomeTeam", "homeEmptyNet",
-                                         "awayEmptyNet", "shooterPlayerId", "xGoal", "goal"])
-        df = df[df.nhl_game_id.map(C.is_regular_season)]
-        # drop shots at an empty net (shooter's target net is empty): trivially convertible
-        empty_target = ((df.isHomeTeam == 1) & (df.awayEmptyNet == 1)) | \
-                       ((df.isHomeTeam == 0) & (df.homeEmptyNet == 1))
-        df = df[~empty_target]
-        df = df[df.shooterPlayerId.notna() & df.xGoal.notna()]
-        frames.append(df)
+        df = pd.read_parquet(p, columns=["shooter_id", "xg", "goal"])
+        frames.append(df[df.shooter_id.notna() & df.xg.notna()])
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
 def aggregate(shots: pd.DataFrame) -> pd.DataFrame:
-    """Per shooter: F (shots), ixG, G, V (Bernoulli noise floor Σ xGoal(1-xGoal))."""
-    shots = shots.assign(_v=shots.xGoal * (1.0 - shots.xGoal))
-    g = shots.groupby("shooterPlayerId").agg(
-        shots=("xGoal", "size"), ixg=("xGoal", "sum"), goals=("goal", "sum"), v=("_v", "sum"))
+    """Per shooter: F (shots), ixG, G, V (Bernoulli noise floor Σ xg(1-xg))."""
+    shots = shots.assign(_v=shots.xg * (1.0 - shots.xg))
+    g = shots.groupby("shooter_id").agg(
+        shots=("xg", "size"), ixg=("xg", "sum"), goals=("goal", "sum"), v=("_v", "sum"))
     g.index = g.index.astype(int)
     g.index.name = "player_id"
     return g.reset_index()
@@ -145,7 +141,7 @@ def _write_meta(meta: dict) -> None:
 def _cache_fresh(path, seasons: list[int]) -> bool:
     pm = path.stat().st_mtime
     for s in seasons:
-        sp = C.INTERIM / "shots" / f"{s}.parquet"
+        sp = C.PROCESSED / "xg" / f"{s}.parquet"
         if sp.exists() and sp.stat().st_mtime > pm:
             return False
     return True

@@ -83,11 +83,10 @@ export default function About() {
       <div className="panel">
         <h2>Where the data comes from</h2>
         <p>
-          Almost everything is computed from raw NHL sources — play-by-play and shift charts — joined
+          Everything is computed from raw NHL sources — play-by-play and shift charts — joined
           shift-to-shot in-house: box scores, on-ice personnel, shot volume (Corsi/Fenwick/shots on
-          goal), score and zone context, and the impact model. The one borrowed input is the
-          per-shot <em>expected-goals</em> value; replacing it with an in-house xG model is the next
-          step toward a fully independent pipeline.
+          goal), score and zone context, the impact model, and our own per-shot{" "}
+          <em>expected-goals</em> model. No third-party model outputs.
         </p>
       </div>
 

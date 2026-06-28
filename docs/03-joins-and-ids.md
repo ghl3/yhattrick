@@ -1,35 +1,28 @@
 # 03 — IDs and the join contract
 
-Three sources have to be stitched into one per-event, on-ice-aware view. This is the trickiest
-part of the data layer; it was verified before any code was written (game 2021020009 and
-2024020500) and is re-checked every run by the on-ice asserts.
+The NHL pbp, shiftcharts, and our xG have to be stitched into one per-event, on-ice-aware view.
+This is the trickiest part of the data layer and is re-checked every run by the on-ice asserts.
 
-## game_id mapping
+## Game ids
 
-MoneyPuck uses a short 5-digit `game_id`; the NHL APIs use the 10-digit `gameId`. They relate
-by inserting a `0` between the 4-digit season and the 5-digit MoneyPuck id:
-
-```
-nhl_id = int(f"{season}0{mp_game_id:05d}")     # MoneyPuck 20500 + 2024 -> 2024020500
-mp_game_id = int(str(nhl_id)[5:])              # 2024020500 -> 20500
-```
-
-The MoneyPuck leading digit encodes game type (`2` = regular, `3` = playoffs). Implemented in
-`config.mp_to_nhl_game_id` / `config.nhl_to_mp_game_id`. The unique `game_id`s in a season's
-MoneyPuck shots file therefore enumerate every game to fetch from the NHL APIs.
+The NHL 10-digit `gameId` is the only id used. Its game-type digits encode the type
+(`…02…` = regular season, `…03…` = playoffs); `config.is_regular_season` reads them. The game list
+for a season comes from the NHL schedule (the season's teams via the standings endpoint, then each
+club's `club-schedule-season`, keeping `gameType == 2`). Within a game, a shot is identified by its
+pbp `event_idx` — the join key from the shot table to the xG model.
 
 ## Time
 
-- MoneyPuck `time` is **game-elapsed seconds** (0…3600 in regulation).
 - NHL shiftcharts `startTime`/`endTime` and pbp `timeInPeriod` are **period-elapsed `MM:SS`**.
 - Everything is converted to game-elapsed seconds: `game_sec = (period-1)*1200 + mm:ss`
-  (`clean.game_sec`). This single clock is what shots, shifts, and events are joined on.
+  (`clean.game_sec`). This single clock is what shots, shifts, and events are joined on — and since
+  shots and shift boundaries now share it, boundary handling matters (see below).
 
 ## On-ice reconstruction
 
-MoneyPuck shots carry only skater *counts*, not identities. We recover identities from the
-shiftcharts: a player is on the ice at game-second `t` for a team iff one of their shift
-intervals satisfies `start_g <= t < end_g`. A **stint** is a maximal interval between
+Shots come from the pbp (each carries its coordinates and `situationCode`). We recover the on-ice
+identities from the shiftcharts: a player is on the ice at game-second `t` for a team iff one of
+their shift intervals satisfies `start_g <= t < end_g`. A **stint** is a maximal interval between
 consecutive shift boundaries, over which the on-ice set is constant (see
 [04-processing.md](04-processing.md)).
 
@@ -39,21 +32,22 @@ consecutive shift boundaries, over which the on-ice set is constant (see
    shift #21 and #22 with identical times), which would double-count them on the ice. `clean.py`
    merges each player's overlapping/duplicate intervals (`_merge_player_intervals`) before any
    stint is built. This took the rate of illegal (>6-skater) stints from ~0.8% to ~0.01%.
-2. **Shot-at-the-whistle.** A shot that ends a play shares its game-second with the following
-   faceoff (which starts a new stint). `build_games` attaches such pre-whistle events
-   (`shot/goal/missed/blocked/hit`) to the *prior* stint so a shooter always appears on the ice
-   in the stint their shot is listed under.
+2. **Events on a stint boundary.** A shot can share its game-second with the shift change that ends
+   the stint. We use a single half-open rule everywhere — an event at time `t` belongs to the stint
+   `[t0, t1)` that contains it (`bisect_right(starts, t) - 1`) — applied identically in `stints.py`
+   (xGF attribution) and `export_games.py` (timeline display), so a shot's xG is always summed into
+   the same stint it's shown under.
 
 ## Health gate (every run)
 
-`stints.py` compares each shot's reconstructed on-ice skater counts to MoneyPuck's
-`home/awaySkatersOnIce` and reports:
+`stints.py` compares each shot's reconstructed on-ice skater counts to the pbp `situationCode`
+skater counts and reports:
 
-- **exact** — counts match (~97%).
-- **within ±1** — off by one skater on one side (~99.96% cumulative); inherent ambiguity at a
-  line-change second, tolerated.
-- **large** — disagreement >1 (~0.04%); should be ~0, investigated if it climbs.
+- **exact** — counts match.
+- **within ±1** — off by one skater on one side; inherent ambiguity at a line-change second, tolerated.
+- **large** — disagreement >1; should be ~0, investigated if it climbs (floor `ONICE_MATCH_FLOOR`).
 - **overload** — a stint with >6 skaters (~0.01%, durations ~1–8s); flagged on the stint
   (`overload`) and surfaced in the site, safe to drop/downweight in modeling.
 
-Per-shot match category (`exact`/`within1`/`large`) is stored on every shot for inspection.
+Per-shot match category (`exact`/`within1`/`large`) is stored on every shot for inspection. (This is
+now a shifts-vs-pbp consistency check, both NHL sources, rather than an independent cross-source one.)

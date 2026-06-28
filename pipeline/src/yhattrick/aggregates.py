@@ -1,7 +1,7 @@
 """Per-player, per-season descriptive box score, derived entirely from our own NHL data
 (raw play-by-play for event counts; shifts for time-on-ice, games played, and team).
 
-No MoneyPuck here — this is the non-borrowed descriptive layer. Each NHL pbp event exposes the
+This is the descriptive (non-modeled) layer. Each NHL pbp event exposes the
 role-specific player ids we need (scorer, assisters, shooter, blocker, hitter, faceoff winner,
 penalty committer/drawer, give/takeaway player), so the counting stats are attributed correctly.
 

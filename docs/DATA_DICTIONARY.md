@@ -6,34 +6,35 @@ for how each table is produced.
 
 ## raw/ (immutable, as downloaded)
 
-- `moneypuck/shots_<season>.zip` — MoneyPuck per-shot CSV (137 cols; we keep the subset below).
-- `moneypuck/skaters_<season>.csv` — MoneyPuck season box-score per player.
 - `nhl/shiftcharts/<gameId>.json` — NHL shiftcharts API response (`data[]` of shifts).
 - `nhl/pbp/<gameId>.json` — NHL play-by-play API response (`plays[]`, `rosterSpots[]`, teams).
 - `nhl/players/<playerId>.json` — NHL player-landing API response; we use `shootsCatches` (handedness, for off-wing).
 
-## interim/shots/&lt;season&gt;.parquet — one row per shot attempt
+The game list isn't a stored file: it comes from the NHL schedule (the season's teams via the
+standings endpoint, then each club's `club-schedule-season`, regular-season `gameType == 2`).
+
+## interim/shots/&lt;season&gt;.parquet — one row per unblocked (Fenwick) shot
+
+Built from `interim/events` (NHL pbp); model-free (the xG is attached later via `processed/xg`).
+Regular season only; `event_idx` is the per-shot id and the join key to the xG model.
 
 | Column | Type | Meaning |
 |---|---|---|
-| `shotID` | int | MoneyPuck shot id |
-| `mp_game_id`, `nhl_game_id` | int | MoneyPuck (5-digit) and NHL (10-digit) game ids |
-| `season`, `period` | int | season start year; period number |
-| `game_seconds` | int | game-elapsed seconds of the shot |
-| `event` | str | `SHOT` / `MISS` / `GOAL` |
+| `nhl_game_id` | int | NHL (10-digit) game id |
+| `event_idx` | int | pbp event id within the game (unique per game; the xG join key) |
+| `time_g` | int | game-elapsed seconds of the shot |
+| `period` | int | period number |
+| `is_home` | 0/1 | shooting team is home |
+| `home_team` | str | home team abbreviation |
+| `shooter_id`, `shooter` | int/str | shooter id and name |
 | `goal` | 0/1 | was a goal |
-| `isHomeTeam` | 0/1 | shooting team is home |
-| `teamCode`, `homeTeamCode`, `awayTeamCode` | str | team abbreviations |
-| `shooterPlayerId`, `shooterName` | int/str | shooter (rarely null in source data) |
-| `goalieIdForShot`, `goalieNameForShot` | int/str | goalie faced |
-| `xCord`, `yCord`, `xCordAdjusted`, `yCordAdjusted` | int | shot coordinates |
-| `shotDistance`, `shotAngle` | float | geometry |
-| `shotType` | str | WRIST / SNAP / SLAP / … |
-| `homeSkatersOnIce`, `awaySkatersOnIce` | int | skater counts (no goalie) — the join check |
-| `homeEmptyNet`, `awayEmptyNet` | 0/1 | empty net flags |
-| `homeTeamGoals`, `awayTeamGoals` | int | score state before the shot |
-| `shotRebound`, `shotRush` | 0/1 | context flags |
-| `xGoal` | float | **borrowed** expected-goals value |
+| `event` | str | `shot-on-goal` / `missed-shot` / `goal` |
+| `x`, `y` | int | raw shot coordinates (NHL) |
+| `shot_type` | str | wrist / snap / slap / tip-in / … |
+| `distance`, `angle` | float | geometry, oriented to the attacking net |
+| `rebound`, `rush` | 0/1 | pre-shot context flags |
+| `home_n`, `away_n` | int | on-ice skater counts from `situationCode` (the QC baseline) |
+| `empty_net` | 0/1 | the defending goalie is pulled |
 
 ## interim/shifts/&lt;season&gt;.parquet — one row per merged shift interval
 
@@ -72,7 +73,7 @@ within-position percentile.
 
 Finishing (goals above expected, regressed), pooled over all in-play regular-season unblocked
 shots, empty-net + shootout excluded: `player_id`, `name`, `pos`, `shots` (F, unblocked),
-`ixg` (Σ xGoal), `goals` (G), `fin_per100` (= (G−ixG)/(F+k)·100, the shrunk headline),
+`ixg` (Σ xg), `goals` (G), `fin_per100` (= (G−ixG)/(F+k)·100, the shrunk headline),
 `fin_per100_se`, `fin_goals` (= (G−ixG)·F/(F+k), shrunk total for WAR), `fin_goals_se`. Shrinkage
 `k` and its EB diagnostics are logged to `logs/model/finishing_<seasons>.meta.json`.
 
@@ -81,17 +82,17 @@ shots, empty-net + shootout excluded: `player_id`, `name`, `pos`, `shots` (F, un
 Per-shot expected-goals predictions from `xg.py` (regular-season, goalie-present, unblocked shots):
 `nhl_game_id`, `event_idx`, `time_g`, `shooter_id`, `goal`, `distance`, `abs_angle`, `shot_type`,
 `strength_diff`, `rebound`, `rush`, and `xg` (calibrated goal probability). Model artifacts live in
-`data/models/xg_booster.json` + `xg_isotonic.json`; metrics/reliability/importances and the MoneyPuck
-head-to-head are in `logs/model/xg_<seasons>.meta.json`.
+`data/models/xg_booster.json` + `xg_isotonic.json`; metrics/reliability/importances are in
+`logs/model/xg_<seasons>.meta.json`.
 
 ## processed/stints/&lt;season&gt;.parquet — one row per stint
 
 Core: `nhl_game_id`, `stint_idx`, `start_g`, `end_g`, `duration_s`, `home_skaters` (list[int]),
 `away_skaters` (list[int]), `home_goalie`, `away_goalie` (int|null), `home_n`, `away_n` (skater
-counts), `strength` (e.g. `5v5`), `home_xgf`, `away_xgf` (summed borrowed xG), `overload`
-(bool — illegal >6-skater stint, a source shift-timing artifact).
+counts), `strength` (e.g. `5v5`), `home_xgf`, `away_xgf` (summed model xG; empty-net shots, which
+carry no xG, are skipped), `overload` (bool — illegal >6-skater stint, a source shift-timing artifact).
 
-Context & volume (all from our own pbp, not MoneyPuck; stored for current and future modeling):
+Context & volume (all from our own pbp; stored for current and future modeling):
 - `home_corsi`/`away_corsi` — shot attempts (SOG + missed + blocked + goal) by the shooting team.
 - `home_fen`/`away_fen` — unblocked attempts (Fenwick); `home_sog`/`away_sog` — shots on goal.
 - `home_lead` — home goals − away goals **before** the stint (score state).
@@ -100,11 +101,11 @@ Context & volume (all from our own pbp, not MoneyPuck; stored for current and fu
 
 ## processed/shots_onice/&lt;season&gt;.parquet — one row per shot, with on-ice context
 
-`nhl_game_id`, `shotID`, `game_seconds`, `period`, `stint_idx`, `strength`, `shooter_id`,
-`shooter`, `is_home`, `xGoal`, `event` (SHOT/MISS/GOAL), `goal`, `shot_type`, `distance`,
+`nhl_game_id`, `event_idx`, `game_seconds`, `period`, `stint_idx`, `strength`, `shooter_id`,
+`shooter`, `is_home`, `xg` (null for empty-net shots), `event`, `goal`, `shot_type`, `distance`,
 `angle`, `rebound`, `rush`, `x`, `y`, `home_skaters`, `away_skaters`, `home_goalie`,
-`away_goalie`, `mp_home_n`, `mp_away_n` (MoneyPuck counts), `onice_match` ∈ {`exact`,
-`within1`, `large`}.
+`away_goalie`, `sit_home_n`, `sit_away_n` (situationCode skater counts), `onice_match` ∈ {`exact`,
+`within1`, `large`} (reconstruction vs. those counts).
 
 ## data/games/ (site JSON; synced to web/public/data/)
 
@@ -121,7 +122,7 @@ Context & volume (all from our own pbp, not MoneyPuck; stored for current and fu
   `overload`, `home_skaters[]`/`away_skaters[]` (arrays of **player ids**),
   `home_goalie`/`away_goalie` (player id or `null` if pulled), `home_xgf`, `away_xgf`, and
   `events[]`: `t`, `clock`, `type`, `team`, `x`, `y`, `zone`, `player?`, `detail?`, and on shot
-  events `xGoal?`, `onice_match?`, `shot_type?`, `distance?`, `angle?`, `rebound?`, `rush?`.
+  events `xg?`, `onice_match?`, `shot_type?`, `distance?`, `angle?`, `rebound?`, `rush?`.
   On-ice ids are resolved to name/pos/number via the file's `players[]` (normalized to keep the
   per-game files small enough to serve from object storage).
 
@@ -129,7 +130,6 @@ Context & volume (all from our own pbp, not MoneyPuck; stored for current and fu
 
 Written by `xg.py`. `seasons`, `n_shots`, `n_goals`; `metrics` (out-of-fold `auc`, `logloss`,
 `brier`, `total_xg`, `total_goals`, `n`); `reliability[]` (`p_lo`, `p_hi`, `pred`, `obs`, `n`);
-`importances[]` (`feature`, `gain`); `comparison` (`match_rate`, `n_matched`, and `ours`/`moneypuck`,
-each a metrics block + `reliability[]`, on shots both models scored); `heatmap` (`x`, `y` grid axes,
-`shot_types`, `strengths`, and `combos` keyed `"${shot_type}|${rebound}|${rush}|${strength}"` →
-`[y][x]` predicted-xG grid for the offensive zone).
+`importances[]` (`feature`, `gain`); `heatmap` (`x`, `y` grid axes, `shot_types`, `strengths`, and
+`combos` keyed `"${shot_type}|${rebound}|${rush}|${strength}"` → `[y][x]` predicted-xG grid for the
+offensive zone).

@@ -6,7 +6,7 @@ Writes the data the inspection website reads:
                                         players + the events that occurred during it
 
 The per-game timeline is the manual-inspection tool: stints in order, and within each stint
-the play-by-play events (faceoffs, shots w/ borrowed xG + on-ice-match flag, goals, penalties,
+the play-by-play events (faceoffs, shots w/ xG + on-ice-match flag, goals, penalties,
 hits) so the on-ice sets, strength, and shot attribution can be eyeballed against reality.
 
 Usage:
@@ -96,10 +96,6 @@ def _game_meta(gid: int) -> dict:
     }
 
 
-# shot/play events that end at the whistle: at an exact stint boundary they belong to the
-# play *before* the change, not the new stint (whose on-ice line faces off afterwards).
-_PRE_WHISTLE = {"shot-on-goal", "missed-shot", "goal", "blocked-shot", "hit"}
-
 
 def _count_by(series) -> dict:
     s = series.dropna()
@@ -122,7 +118,7 @@ def _game_aggregates(gid, stints, shifts_g, shots_g, events_g, meta, lookup) -> 
     # per-player ice time from shifts, shots + xG from shots_onice
     sh = (shifts_g.groupby("player_id")
           .agg(team=("team", "first"), shifts=("shift_number", "count"), toi_s=("duration_s", "sum")))
-    sc = shots_g.groupby("shooter_id").agg(shots=("shotID", "count"), xg=("xGoal", "sum"))
+    sc = shots_g.groupby("shooter_id").agg(shots=("event_idx", "count"), xg=("xg", "sum"))
     players = []
     for pid, row in sh.iterrows():
         pid = int(pid)
@@ -156,11 +152,11 @@ def build_game(gid: int, stints_g, events_g, shots_g, shifts_g, lookup) -> dict:
     for e in events_g.itertuples():
         if e.type not in _KEEP_EVENTS:
             continue
+        # half-open containment [t0,t1): an event exactly on a boundary belongs to the stint
+        # starting there — the same rule stints.py uses to attribute xGF, so the two never disagree
         j = bisect.bisect_right(starts, e.time_g) - 1
         if j < 0:
             continue
-        if j > 0 and e.time_g == starts[j] and e.type in _PRE_WHISTLE:
-            j -= 1  # attach the shot/hit that ended the prior play to that prior stint
         ev = {
             "t": int(e.time_g), "clock": _clock(int(e.time_g)), "type": e.type,
             "team": None if pd.isna(e.team) else e.team,
@@ -175,7 +171,8 @@ def build_game(gid: int, stints_g, events_g, shots_g, shifts_g, lookup) -> dict:
         if e.type in ("shot-on-goal", "missed-shot", "goal"):
             sk = shot_by_key.get((int(e.primary_player_id), int(e.time_g))) if e.primary_player_id and not pd.isna(e.primary_player_id) else None
             if sk is not None:
-                ev["xGoal"] = round(float(sk.xGoal), 3)
+                if pd.notna(sk.xg):
+                    ev["xg"] = round(float(sk.xg), 3)
                 ev["onice_match"] = sk.onice_match
                 ev["shot_type"] = sk.shot_type
                 ev["distance"] = sk.distance

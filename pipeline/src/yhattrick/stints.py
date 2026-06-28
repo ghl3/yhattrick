@@ -4,14 +4,14 @@ then runs the data-quality asserts that are the whole point of this phase.
 A *stint* is a maximal interval of constant on-ice personnel within a game: between any two
 consecutive shift boundaries (a shift start or end), the set of players on the ice is fixed.
 For each stint we record both teams' on-ice skaters + goalie, the strength state, the duration,
-and the borrowed-xG for/against accumulated from shots in that interval.
+and the model xG for/against accumulated from shots in that interval.
 
 Outputs (parquet, per season):
   processed/stints/<season>.parquet       one row per stint
   processed/shots_onice/<season>.parquet  each shot + the on-ice players at that instant
 
-Health check: every shot's reconstructed on-ice skater counts must match MoneyPuck's
-home/awaySkatersOnIce. We report the match rate per season and fail if it falls below a floor.
+Health check: every shot's reconstructed on-ice skater counts must match the pbp situationCode
+skater counts. We report the match rate per season and fail if it falls below a floor.
 
 Usage:
   uv run python -m yhattrick.stints                 # all seasons present in interim/
@@ -27,7 +27,7 @@ import pandas as pd
 
 from . import config as C
 
-ONICE_MATCH_FLOOR = 0.97  # fraction of shots whose on-ice counts must match MoneyPuck
+ONICE_MATCH_FLOOR = 0.97  # fraction of shots whose on-ice counts must match the pbp situationCode
 
 # shot-attempt event sets (from our own pbp), for Corsi / Fenwick / shots-on-goal
 _CORSI = ("shot-on-goal", "missed-shot", "blocked-shot", "goal")
@@ -43,7 +43,7 @@ def _load(kind: str, season: int) -> pd.DataFrame | None:
 
 def build_stints_for_game(shifts_g: pd.DataFrame, shots_g: pd.DataFrame, events_g: pd.DataFrame,
                           goalie_ids: set[int], home_team: str) -> list[dict]:
-    """Return the ordered list of stint dicts for one game, with on-ice personnel, borrowed xGF,
+    """Return the ordered list of stint dicts for one game, with on-ice personnel, model xGF,
     and context/volume features derived from our own pbp (Corsi/Fenwick/SOG, score state, zone
     start)."""
     bounds = sorted(set(shifts_g.start_g) | set(shifts_g.end_g))
@@ -92,9 +92,11 @@ def build_stints_for_game(shifts_g: pd.DataFrame, shots_g: pd.DataFrame, events_
                     away_g = int(p)
             else:
                 (home_sk if is_home else away_sk).append(int(p))
-        sin = shots_g[(shots_g.game_seconds >= t0) & (shots_g.game_seconds < t1)]
-        home_xgf = float(sin.loc[sin.isHomeTeam == 1, "xGoal"].sum())
-        away_xgf = float(sin.loc[sin.isHomeTeam == 0, "xGoal"].sum())
+        # half-open [t0,t1): a shot exactly on a boundary belongs to the stint starting there —
+        # the same containment used to display it (export_games), so xGF and the timeline agree
+        sin = shots_g[(shots_g.time_g >= t0) & (shots_g.time_g < t1)]
+        home_xgf = float(sin.loc[sin.is_home == 1, "xg"].sum())   # NaN xg (empty-net) skipped
+        away_xgf = float(sin.loc[sin.is_home == 0, "xg"].sum())
         em = (ev_t >= t0) & (ev_t < t1)
         stints.append({
             "stint_idx": idx, "start_g": t0, "end_g": t1, "duration_s": t1 - t0,
@@ -103,7 +105,7 @@ def build_stints_for_game(shifts_g: pd.DataFrame, shots_g: pd.DataFrame, events_
             "home_n": len(home_sk), "away_n": len(away_sk),
             "strength": f"{len(home_sk)}v{len(away_sk)}",
             "home_xgf": round(home_xgf, 4), "away_xgf": round(away_xgf, 4),
-            # shot volume from our pbp (no MoneyPuck)
+            # shot volume from our pbp
             "home_corsi": vol(em, is_corsi, True), "away_corsi": vol(em, is_corsi, False),
             "home_fen": vol(em, is_fen, True), "away_fen": vol(em, is_fen, False),
             "home_sog": vol(em, is_sog, True), "away_sog": vol(em, is_sog, False),
@@ -124,9 +126,16 @@ def process_season(season: int, limit: int | None = None) -> dict:
         print(f"[stints] {season}: missing interim inputs, skipping")
         return {}
 
+    # attach the model xG to each shot (left join — empty-net/penalty shots stay with xg=NaN)
+    xgp = C.PROCESSED / "xg" / f"{season}.parquet"
+    xg = pd.read_parquet(xgp, columns=["nhl_game_id", "event_idx", "xg"]) if xgp.exists() else None
+    if xg is None:
+        print(f"[stints] {season}: missing processed/xg — run `make xg` first")
+        return {}
+    shots = shots.merge(xg, on=["nhl_game_id", "event_idx"], how="left")
+
     goalie_ids = set(roster.loc[roster.position == "G", "player_id"])
-    home_of = (shots.groupby("nhl_game_id")
-               .agg(home=("homeTeamCode", "first")).home.to_dict())
+    home_of = shots.groupby("nhl_game_id").home_team.first().to_dict()
     games = sorted(set(shifts.nhl_game_id) & set(home_of))
     if limit:
         games = games[:limit]
@@ -141,43 +150,46 @@ def process_season(season: int, limit: int | None = None) -> dict:
     matched = within1 = large = total = 0
     for gid in games:
         sh_g = shifts_by[gid]
-        sho_g = shots_by[gid].sort_values("game_seconds")
+        sho_g = shots_by[gid].sort_values("time_g")
         ev_g = events_by.get(gid, empty_ev)
         stints = build_stints_for_game(sh_g, sho_g, ev_g, goalie_ids, home_of[gid])
         starts = [s["start_g"] for s in stints]
         for s in stints:
             s["nhl_game_id"] = gid
             all_stints.append(s)
-        # attach on-ice to each shot via the stint containing its second
+        # attach on-ice to each shot via the stint containing its second (half-open, matches xGF)
         for _, shot in sho_g.iterrows():
-            j = bisect.bisect_right(starts, shot.game_seconds) - 1
+            j = bisect.bisect_right(starts, shot.time_g) - 1
             if j < 0:
                 continue
             st = stints[j]
-            sid = shot.shooterPlayerId
-            mp_h, mp_a = int(shot.homeSkatersOnIce), int(shot.awaySkatersOnIce)
-            dh = abs(st["home_n"] - mp_h)
-            da = abs(st["away_n"] - mp_a)
-            match = "exact" if (dh == 0 and da == 0) else ("within1" if (dh <= 1 and da <= 1) else "large")
+            sid = shot.shooter_id
+            # QC: reconstructed skater counts vs the pbp situationCode counts on the shot row
+            sit_h = int(shot.home_n) if pd.notna(shot.home_n) else None
+            sit_a = int(shot.away_n) if pd.notna(shot.away_n) else None
+            if sit_h is None or sit_a is None:
+                match = "large"          # unverifiable strength (rare) — count as a mismatch
+            else:
+                dh, da = abs(st["home_n"] - sit_h), abs(st["away_n"] - sit_a)
+                match = "exact" if (dh == 0 and da == 0) else ("within1" if (dh <= 1 and da <= 1) else "large")
             all_shot_onice.append({
-                "nhl_game_id": gid, "shotID": int(shot.shotID),
-                "game_seconds": int(shot.game_seconds), "period": int(shot.period),
+                "nhl_game_id": gid, "event_idx": int(shot.event_idx),
+                "game_seconds": int(shot.time_g), "period": int(shot.period),
                 "stint_idx": st["stint_idx"], "strength": st["strength"],
                 "shooter_id": int(sid) if pd.notna(sid) else None,
-                "shooter": shot.shooterName if pd.notna(shot.shooterName) else None,
-                "is_home": int(shot.isHomeTeam), "xGoal": float(shot.xGoal),
-                # shot features (also the core xG-model inputs) for inspection
+                "shooter": shot.shooter if pd.notna(shot.shooter) else None,
+                "is_home": int(shot.is_home), "xg": float(shot.xg) if pd.notna(shot.xg) else None,
+                # shot features for inspection
                 "event": shot.event, "goal": int(shot.goal),
-                "shot_type": shot.shotType if pd.notna(shot.shotType) else None,
-                "distance": round(float(shot.shotDistance), 1) if pd.notna(shot.shotDistance) else None,
-                "angle": round(float(shot.shotAngle), 1) if pd.notna(shot.shotAngle) else None,
-                "rebound": int(shot.shotRebound) if pd.notna(shot.shotRebound) else 0,
-                "rush": int(shot.shotRush) if pd.notna(shot.shotRush) else 0,
-                "x": int(shot.xCord) if pd.notna(shot.xCord) else None,
-                "y": int(shot.yCord) if pd.notna(shot.yCord) else None,
+                "shot_type": shot.shot_type if pd.notna(shot.shot_type) else None,
+                "distance": float(shot.distance) if pd.notna(shot.distance) else None,
+                "angle": float(shot.angle) if pd.notna(shot.angle) else None,
+                "rebound": int(shot.rebound), "rush": int(shot.rush),
+                "x": int(shot.x) if pd.notna(shot.x) else None,
+                "y": int(shot.y) if pd.notna(shot.y) else None,
                 "home_skaters": st["home_skaters"], "away_skaters": st["away_skaters"],
                 "home_goalie": st["home_goalie"], "away_goalie": st["away_goalie"],
-                "mp_home_n": mp_h, "mp_away_n": mp_a, "onice_match": match,
+                "sit_home_n": sit_h, "sit_away_n": sit_a, "onice_match": match,
             })
             total += 1
             if match == "exact":

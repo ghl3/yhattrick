@@ -11,7 +11,7 @@ export interface GameIndexRow {
   n_stints: number;
   n_shots: number;
   n_events: number;
-  onice_exact: number | null; // fraction of shots whose on-ice counts matched MoneyPuck
+  onice_exact: number | null; // fraction of shots whose on-ice counts matched the pbp situationCode
   large_mismatch: number; // shots with a >1 on-ice count disagreement
   overload_stints: number; // stints with an illegal (>6) skater count
 }
@@ -48,7 +48,7 @@ export interface TimelineEvent {
   player?: string | null;
   detail?: string | null;
   zone?: string | null;
-  xGoal?: number;
+  xg?: number;
   onice_match?: OniceMatch;
   shot_type?: string | null;
   distance?: number | null;
@@ -247,15 +247,9 @@ export interface XgModel {
   seasons: number[];
   n_shots: number;
   n_goals: number;
-  metrics: XgMetrics; // full out-of-fold set
+  metrics: XgMetrics; // out-of-fold
   reliability: ReliabilityBin[];
   importances: { feature: string; gain: number }[];
-  comparison: {
-    match_rate: number;
-    n_matched: number;
-    ours: XgMetrics & { reliability: ReliabilityBin[] };
-    moneypuck: XgMetrics & { reliability: ReliabilityBin[] };
-  };
   heatmap: {
     x: number[]; // grid x (ft), attacking net at +89
     y: number[]; // grid y (ft)

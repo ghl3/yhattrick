@@ -24,7 +24,7 @@ const TYPE_COLOR: Record<string, string> = {
 };
 function dotColor(e: TimelineEvent) {
   if (e.type === "goal") return "#cf4f4f";
-  if (e.xGoal != null) return xgColor(e.xGoal);
+  if (e.xg != null) return xgColor(e.xg);
   return TYPE_COLOR[e.type] ?? "#4a90d9";
 }
 
@@ -94,7 +94,7 @@ function Rink({ e }: { e: TimelineEvent }) {
 }
 
 export default function EventCard({ e }: { e: TimelineEvent }) {
-  const isShot = e.xGoal != null;
+  const isShot = e.xg != null;
   const rows: [string, string][] = [
     ["Event", e.type.replace(/-/g, " ")],
     ["Player", e.player ?? "—"],
@@ -106,7 +106,7 @@ export default function EventCard({ e }: { e: TimelineEvent }) {
   if (e.detail) rows.push(["Detail", e.detail]);
   if (isShot) {
     rows.push(
-      ["xGoal", e.xGoal!.toFixed(3)],
+      ["xG", e.xg!.toFixed(3)],
       ["Shot type", e.shot_type ?? "—"],
       ["Distance", e.distance != null ? `${e.distance} ft` : "—"],
       ["Angle", e.angle != null ? `${e.angle}°` : "—"],

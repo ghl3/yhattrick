@@ -30,7 +30,7 @@ per-60 xGF delta so the site framing is unchanged.
 Every fit logs its full provenance + diagnostics (the whole λ sweep with per-fold CV and effective
 degrees of freedom, fit quality, numerical conditioning, residual summary) to logs/model/.
 
-Built on the borrowed MoneyPuck xG attached to each stint; swappable for our own xG later.
+Built on the model xG attached to each stint (see xg.py).
 
 Usage:
   uv run python -m yhattrick.player_onice_model                       # every model, every season

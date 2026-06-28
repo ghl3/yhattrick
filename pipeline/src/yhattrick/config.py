@@ -16,6 +16,11 @@ def season_label(season: int) -> str:
     return f"{season}-{str(season + 1)[-2:]}"
 
 
+def nhl_season8(season: int) -> str:
+    """2024 -> '20242025' (the 8-digit season id NHL schedule endpoints expect)."""
+    return f"{season}{season + 1}"
+
+
 # --- paths -------------------------------------------------------------------
 PKG_DIR = Path(__file__).resolve().parent
 PIPELINE_DIR = PKG_DIR.parent.parent          # .../hockey/pipeline
@@ -23,7 +28,6 @@ REPO_ROOT = PIPELINE_DIR.parent               # .../hockey
 DATA = REPO_ROOT / "data"
 
 RAW = DATA / "raw"
-RAW_MONEYPUCK = RAW / "moneypuck"
 RAW_SHIFTS = RAW / "nhl" / "shiftcharts"
 RAW_PBP = RAW / "nhl" / "pbp"
 RAW_PLAYERS = RAW / "nhl" / "players"   # per-player landing json (handedness, bio)
@@ -41,7 +45,7 @@ SITE_JSON = DATA / "games"
 WEB_DIR = REPO_ROOT / "web"
 WEB_DATA = WEB_DIR / "public" / "data"
 
-_ALL_DIRS = (RAW_MONEYPUCK, RAW_SHIFTS, RAW_PBP, RAW_PLAYERS, INTERIM, PROCESSED, SITE_JSON, LOGS, LOGS_MODEL)
+_ALL_DIRS = (RAW_SHIFTS, RAW_PBP, RAW_PLAYERS, INTERIM, PROCESSED, SITE_JSON, LOGS, LOGS_MODEL)
 
 
 def ensure_dirs() -> None:
@@ -49,13 +53,13 @@ def ensure_dirs() -> None:
         d.mkdir(parents=True, exist_ok=True)
 
 
-# --- remote sources ----------------------------------------------------------
-# moneypuck.com is Cloudflare-blocked; the peter-tanner mirror serves the same zips.
-MONEYPUCK_SHOTS_URL = "https://peter-tanner.com/moneypuck/downloads/shots_{season}.zip"
-MONEYPUCK_SKATERS_URL = "https://moneypuck.com/moneypuck/playerData/seasonSummary/{season}/regular/skaters.csv"
+# --- remote sources (all NHL) ------------------------------------------------
 NHL_SHIFTCHARTS_URL = "https://api.nhle.com/stats/rest/en/shiftcharts?cayenneExp=gameId={game_id}"
 NHL_PBP_URL = "https://api-web.nhle.com/v1/gamecenter/{game_id}/play-by-play"
 NHL_PLAYER_URL = "https://api-web.nhle.com/v1/player/{player_id}/landing"
+# the season's game list: standings -> the season's teams, then each club's full schedule
+NHL_STANDINGS_URL = "https://api-web.nhle.com/v1/standings/{date}"
+NHL_CLUB_SCHEDULE_URL = "https://api-web.nhle.com/v1/club-schedule-season/{team}/{season8}"
 
 USER_AGENT = "Mozilla/5.0 (yhattrick data pipeline; research/personal use)"
 REQUEST_TIMEOUT = 30           # seconds per request
@@ -66,21 +70,7 @@ MAX_RETRIES = 3
 PERIOD_SECONDS = 1200          # 20:00 regulation period
 
 
-# --- game_id mapping (verified on 2024020500; see data-sources memory) --------
-def mp_to_nhl_game_id(mp_game_id: int, season: int) -> int:
-    """MoneyPuck game_id (e.g. 20500) + season (2024) -> NHL gameId 2024020500.
-
-    MoneyPuck game_id is 5 digits: leading 2=regular, 3=playoffs; the NHL id inserts a 0
-    between the 4-digit season and the 5-digit MoneyPuck id.
-    """
-    return int(f"{season}0{int(mp_game_id):05d}")
-
-
-def nhl_to_mp_game_id(nhl_game_id: int) -> int:
-    """2024020500 -> 20500 (drop the 4-digit season + the inserted 0)."""
-    return int(str(nhl_game_id)[5:])
-
-
+# --- game_id helpers ---------------------------------------------------------
 def is_regular_season(nhl_game_id: int) -> bool:
     """NHL gameId game-type digits are 02 for regular season, 03 for playoffs."""
     return (nhl_game_id // 10000) % 100 == 2

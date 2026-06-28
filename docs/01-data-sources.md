@@ -1,34 +1,31 @@
 # 01 — Data sources
 
-We build everything from three public sources. The original plan relied on the `hockeyR-data`
-GitHub dump, but that is **dead** (the repo lists its play-by-play files but every download path
-— raw, raw.githubusercontent, the single-file API, and LFS media — returns 404, with no
-releases; it is a defunct ~25 GB LFS repo). We re-sourced and verified working replacements.
+We build everything from the public NHL APIs — no third-party data. The original plan relied on
+the `hockeyR-data` GitHub dump, but that is **dead** (every download path returns 404). An earlier
+iteration borrowed MoneyPuck's shots file (and its `xGoal`); we now derive shots, geometry, and our
+own xG entirely from NHL play-by-play.
 
 | What we need | Source | URL pattern |
 |---|---|---|
-| Per-shot rows + a **borrowed xG** (`xGoal`) + rich shot features | **MoneyPuck** (via mirror — moneypuck.com itself is Cloudflare-blocked) | `https://peter-tanner.com/moneypuck/downloads/shots_<season>.zip` |
-| Season box-score totals (for validation, penalties) | MoneyPuck | `https://moneypuck.com/moneypuck/playerData/seasonSummary/<season>/regular/skaters.csv` |
+| The game list for a season | **NHL standings + club schedule** | `…/v1/standings/<date>`, `…/v1/club-schedule-season/<team>/<season8>` |
+| Play-by-play **events** (shots w/ coords, goals, penalties, faceoffs), strength, rosters | **NHL play-by-play API** | `https://api-web.nhle.com/v1/gamecenter/<id>/play-by-play` |
 | **On-ice player identities + time-on-ice** (→ stints) | **NHL shiftcharts API** | `https://api.nhle.com/stats/rest/en/shiftcharts?cayenneExp=gameId=<id>` |
-| Play-by-play **events** (goals, penalties, faceoffs), strength, rosters | **NHL play-by-play API** | `https://api-web.nhle.com/v1/gamecenter/<id>/play-by-play` |
+| Shooter **handedness** (→ off-wing feature) | **NHL player landing** | `https://api-web.nhle.com/v1/player/<id>/landing` |
 
 Seasons covered: `2021`–`2025`, i.e. 2021-22 through 2025-26 (a "season" is named by its
 starting year).
 
 ## Why this split
 
-- **MoneyPuck shots** give us a clean, single-download-per-season table of every unblocked shot
-  attempt with 137 columns: coordinates, distance/angle, shot type, rush/rebound flags, score
-  and strength context, the shooter/goalie, and a pre-computed **`xGoal`**. This is both our
-  *borrowed xG baseline* (so we can build the whole WAR pipeline before training our own model)
-  and the feature set we'll later train our own xG on. It does **not** contain on-ice player
-  identities — only skater *counts*.
-- **NHL shiftcharts** supply exactly what MoneyPuck lacks: who was on the ice and for how long,
-  as real shift intervals. This is the substrate for stints and accurate TOI, and it lets us
-  reconstruct the on-ice five (plus goalie) at the instant of every shot.
-- **NHL play-by-play** rounds out the event timeline (penalties explain strength changes,
-  faceoffs mark zone starts, goals confirm on-ice attribution) and is the source for the
-  penalty and zone-start inputs the model will need later.
+- **NHL play-by-play** is the spine: every shot with its coordinates, type, strength
+  (`situationCode`) and attacking side (`homeTeamDefendingSide`) — from which we build the shot
+  table, the geometry/pre-shot features, and our xG — plus goals, penalties (strength changes) and
+  faceoffs (zone starts) for the rest of the event timeline.
+- **NHL shiftcharts** supply who was on the ice and for how long, as real shift intervals: the
+  substrate for stints and accurate TOI, and how we reconstruct the on-ice five (plus goalie) at
+  the instant of every shot.
+- **NHL player landing** gives shooter handedness, the one player attribute the pbp lacks, used
+  only for the off-wing shot-geometry feature.
 
 ## Fallbacks (not currently used)
 
@@ -38,6 +35,5 @@ starting year).
 
 ## Environment notes
 
-Large GitHub-raw and moneypuck.com requests can return HTML/404 behind restrictive network
-sandboxes; the mirror and NHL hosts work directly. Python's `urllib` may fail TLS verification
-for lack of system certs — the pipeline uses `requests`.
+The NHL hosts (`api-web.nhle.com`, `api.nhle.com`) work directly. Python's `urllib` may fail TLS
+verification for lack of system certs — the pipeline uses `requests`.

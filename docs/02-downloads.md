@@ -8,16 +8,17 @@ fetches what's missing.
 
 ```bash
 cd pipeline
-make fetch                      # MoneyPuck zips/skaters + NHL shiftcharts+pbp for all seasons
+make fetch                      # NHL shiftcharts+pbp for all seasons + player handedness
 # or, granularly:
-make fetch-moneypuck            # just the MoneyPuck season files
 make fetch-season SEASON=2024   # NHL per-game data for one season
+make fetch-handedness           # player landing json (handedness)
 ```
 
-Under the hood these call `python -m yhattrick.download {moneypuck|games|all}` (also exposed as
+Under the hood these call `python -m yhattrick.download {games|handedness|all}` (also exposed as
 the `yhattrick-fetch` console script). Minimal parameters by design: seasons come from
-`config.SEASONS`, and the **game list is derived from the data itself** (the unique `game_id`s
-in each MoneyPuck shots file), so there is nothing to configure per game.
+`config.SEASONS`, and the **game list is derived from the NHL schedule** (the season's teams from
+the standings endpoint, then each club's `club-schedule-season`, regular-season games only), so
+there is nothing to configure per game.
 
 ## Where the data goes (the data directory)
 
@@ -27,12 +28,10 @@ reads only the JSON the export step writes into `web/public/data/`.
 ```
 data/                                   # top-level, shared
   raw/                                  # immutable; exactly as downloaded
-    moneypuck/
-      shots_<season>.zip                # ~20 MB each, per-shot rows + borrowed xGoal
-      skaters_<season>.csv              # season box-score / validation totals
     nhl/
       shiftcharts/<gameId>.json         # on-ice shifts per game (~270 KB)
       pbp/<gameId>.json                 # play-by-play events per game (~130 KB)
+      players/<playerId>.json           # player landing (handedness)
   interim/                              # typed per-source tables (see 04-processing.md)
   processed/                            # joined/derived tables
 ```
@@ -48,10 +47,9 @@ resumable and lets us re-pull a single game if needed.
 - NHL API calls are throttled (`config.THROTTLE_SECONDS`, default 0.4 s) with retries
   (`config.MAX_RETRIES`). A clean `404` (e.g. a game with no data) is recorded and skipped, not
   retried forever.
-- Volume: ~1,300 games/season × 2 files ≈ ~2,600 files/season; ~100 MB MoneyPuck zips total.
+- Volume: ~1,300 games/season × 2 files ≈ ~2,600 files/season, plus ~1,700 player files.
 
 ## Sources
 
 See [01-data-sources.md](01-data-sources.md) for the exact URLs and why each source is used,
-and [03-joins-and-ids.md](03-joins-and-ids.md) for how the MoneyPuck `game_id` maps to the NHL
-`gameId` that names the per-game files.
+and [03-joins-and-ids.md](03-joins-and-ids.md) for the game-id / clock conventions.

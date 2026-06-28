@@ -1,27 +1,25 @@
-"""Stage 0: pull raw data into data/raw/ (immutable). Resumable + throttled.
+"""Stage 0: pull raw data into data/raw/ (immutable). Resumable + throttled. All NHL sources.
 
-Three kinds of raw artifact:
-  - MoneyPuck shots_<season>.zip  (per-shot rows + borrowed xGoal; also the game list)
-  - MoneyPuck skaters_<season>.csv (season box-score, validation totals)
+Raw artifacts:
   - NHL shiftcharts/<gameId>.json + pbp/<gameId>.json  (on-ice identities + events)
+  - NHL players/<playerId>.json                         (handedness, for off-wing)
 
-The shots zip's unique game_ids ARE the authoritative game list, so we derive which NHL
-games to fetch from it -- no schedule API needed. Every fetch checks for an existing file
-first, so re-running only pulls what's missing (resumable).
+The game list comes from the NHL schedule: the season's teams (standings) -> each club's
+schedule -> regular-season gameIds. Every fetch checks for an existing file first, so re-running
+only pulls what's missing (resumable).
 
 Usage:
-  uv run python -m yhattrick.download moneypuck            # all season zips + skaters
   uv run python -m yhattrick.download games --season 2024  # shiftcharts+pbp for that season
   uv run python -m yhattrick.download games --season 2024 --limit 25
+  uv run python -m yhattrick.download handedness           # player handedness json
   uv run python -m yhattrick.download all                  # everything, all seasons
 """
 from __future__ import annotations
 
 import argparse
-import io
+import json
 import sys
 import time
-import zipfile
 
 import pandas as pd
 import requests
@@ -52,47 +50,32 @@ def _get(sess: requests.Session, url: str, *, binary: bool) -> bytes | str | Non
     return None
 
 
-# --- MoneyPuck ---------------------------------------------------------------
-def download_moneypuck(seasons=C.SEASONS) -> None:
-    C.ensure_dirs()
-    sess = _session()
-    for season in seasons:
-        dest = C.RAW_MONEYPUCK / f"shots_{season}.zip"
-        if dest.exists():
-            print(f"[shots] {season}: cached ({dest.stat().st_size // 1024} KB)")
-        else:
-            url = C.MONEYPUCK_SHOTS_URL.format(season=season)
-            print(f"[shots] {season}: downloading {url}")
-            data = _get(sess, url, binary=True)
-            if data is None:
-                print(f"    ! 404 for shots_{season} -- skipping")
-                continue
-            dest.write_bytes(data)
-            print(f"    saved {len(data) // 1024} KB")
+# --- NHL schedule (the game list) --------------------------------------------
+def _teams_for_season(sess: requests.Session, season: int) -> list[str]:
+    """Team abbreviations active in `season`, from the standings at a mid-season date.
 
-        skaters = C.RAW_MONEYPUCK / f"skaters_{season}.csv"
-        if skaters.exists():
-            print(f"[skaters] {season}: cached")
-        else:
-            url = C.MONEYPUCK_SKATERS_URL.format(season=season)
-            txt = _get(sess, url, binary=False)
-            if txt is None:
-                print(f"    ! skaters_{season} not available (404)")
-            else:
-                skaters.write_text(txt)
-                print(f"[skaters] {season}: saved {len(txt) // 1024} KB")
-        time.sleep(C.THROTTLE_SECONDS)
+    Using the standings (not a hardcoded list) auto-tracks relocations/expansion per season."""
+    date = f"{season + 1}-01-15"   # mid-season; every active team has a standings row
+    txt = _get(sess, C.NHL_STANDINGS_URL.format(date=date), binary=False)
+    if not txt:
+        raise RuntimeError(f"NHL standings unavailable for {date}")
+    rows = json.loads(txt).get("standings", [])
+    return sorted({r["teamAbbrev"]["default"] for r in rows})
 
 
 def game_ids_for_season(season: int) -> list[int]:
-    """Unique NHL gameIds present in the MoneyPuck shots zip for a season."""
-    zpath = C.RAW_MONEYPUCK / f"shots_{season}.zip"
-    if not zpath.exists():
-        raise FileNotFoundError(f"{zpath} missing -- run `download moneypuck` first")
-    zf = zipfile.ZipFile(zpath)
-    with zf.open(zf.namelist()[0]) as fh:
-        mp_ids = pd.read_csv(fh, usecols=["game_id"]).game_id.unique()
-    return sorted(C.mp_to_nhl_game_id(int(m), season) for m in mp_ids)
+    """Regular-season NHL gameIds for a season, unioned across each club's full schedule."""
+    sess = _session()
+    ids: set[int] = set()
+    for team in _teams_for_season(sess, season):
+        txt = _get(sess, C.NHL_CLUB_SCHEDULE_URL.format(team=team, season8=C.nhl_season8(season)),
+                   binary=False)
+        if txt:
+            for g in json.loads(txt).get("games", []):
+                if g.get("gameType") == 2 and C.is_regular_season(int(g["id"])):
+                    ids.add(int(g["id"]))
+        time.sleep(C.THROTTLE_SECONDS)
+    return sorted(ids)
 
 
 # --- NHL per-game (shiftcharts + pbp) ----------------------------------------
@@ -166,24 +149,20 @@ def download_handedness() -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    p = argparse.ArgumentParser(description="Download raw hockey data -> data/raw/")
+    p = argparse.ArgumentParser(description="Download raw NHL data -> data/raw/")
     sub = p.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("moneypuck", help="download MoneyPuck shots zips + skaters csvs")
     g = sub.add_parser("games", help="download NHL shiftcharts+pbp for a season")
     g.add_argument("--season", type=int, required=True)
     g.add_argument("--limit", type=int, default=None)
     sub.add_parser("handedness", help="download NHL player landing json (handedness)")
-    sub.add_parser("all", help="moneypuck + games for every configured season")
+    sub.add_parser("all", help="games for every configured season + handedness")
 
     args = p.parse_args(argv)
-    if args.cmd == "moneypuck":
-        download_moneypuck()
-    elif args.cmd == "games":
+    if args.cmd == "games":
         download_games(args.season, args.limit)
     elif args.cmd == "handedness":
         download_handedness()
     elif args.cmd == "all":
-        download_moneypuck()
         for season in C.SEASONS:
             download_games(season)
         download_handedness()

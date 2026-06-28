@@ -1,7 +1,7 @@
 """Stage 1: raw/ -> interim/ (parse + type, one tidy table per source, per season).
 
 Outputs (parquet, partitioned by season):
-  interim/shots/<season>.parquet    MoneyPuck shots: selected/typed cols, NHL game_id resolved
+  interim/shots/<season>.parquet    unblocked shots from NHL pbp, with geometry + on-ice strength
   interim/shifts/<season>.parquet   shiftcharts -> tidy shift intervals in game-seconds
   interim/events/<season>.parquet   NHL pbp -> tidy event rows in game-seconds
   interim/roster/<season>.parquet   playerId -> name/position/team/number (from pbp rosterSpots)
@@ -16,22 +16,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import zipfile
 
+import numpy as np
 import pandas as pd
 
 from . import config as C
-
-# MoneyPuck columns we keep (focused subset of the 137).
-_SHOT_COLS = [
-    "shotID", "game_id", "season", "period", "time", "timeLeft",
-    "event", "goal", "isHomeTeam", "teamCode", "homeTeamCode", "awayTeamCode",
-    "shooterPlayerId", "shooterName", "goalieIdForShot", "goalieNameForShot",
-    "xCord", "yCord", "xCordAdjusted", "yCordAdjusted",
-    "shotDistance", "shotAngle", "shotType",
-    "homeSkatersOnIce", "awaySkatersOnIce", "homeEmptyNet", "awayEmptyNet",
-    "homeTeamGoals", "awayTeamGoals", "shotRebound", "shotRush", "xGoal",
-]
+from . import shot_geom as G
 
 
 def _mmss_to_sec(s: str) -> int:
@@ -55,25 +45,53 @@ def _downloaded_game_ids(season: int) -> list[int]:
     return sorted(g for g in (sc & pbp) if season_of(g) == season)
 
 
-# --- shots -------------------------------------------------------------------
-def clean_shots(season: int) -> int:
-    zpath = C.RAW_MONEYPUCK / f"shots_{season}.zip"
-    if not zpath.exists():
-        print(f"[shots] {season}: no zip, skipping")
+# --- shots (unblocked, from NHL pbp events) ----------------------------------
+def build_shots(season: int, names: dict[int, str]) -> int:
+    """interim/events -> interim/shots: one row per regular-season unblocked (Fenwick) shot, with
+    oriented geometry, rebound/rush, and on-ice strength decoded from situationCode. `event_idx` is
+    the per-shot id and the join key for the xG model. Model-free (no xG attached here)."""
+    ep = C.INTERIM / "events" / f"{season}.parquet"
+    if not ep.exists():
+        print(f"[shots] {season}: no events, skipping")
         return 0
-    zf = zipfile.ZipFile(zpath)
-    with zf.open(zf.namelist()[0]) as fh:
-        df = pd.read_csv(fh, usecols=lambda c: c in _SHOT_COLS)
-    df = df[[c for c in _SHOT_COLS if c in df.columns]].copy()
-    df.rename(columns={"game_id": "mp_game_id", "time": "game_seconds"}, inplace=True)
-    df["nhl_game_id"] = [C.mp_to_nhl_game_id(g, season) for g in df.mp_game_id]
-    df["game_seconds"] = df.game_seconds.astype("int32")
-    df["period"] = df.period.astype("int16")
-    out = C.INTERIM / "shots" / f"{season}.parquet"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(out, index=False)
-    print(f"[shots] {season}: {len(df):,} shots across {df.nhl_game_id.nunique()} games -> {out.name}")
-    return len(df)
+    ev = pd.read_parquet(ep).sort_values(["nhl_game_id", "time_g", "event_idx"]).reset_index(drop=True)
+    g = ev.groupby("nhl_game_id", sort=False)
+    tsl = ev.time_g - g.time_g.shift(1)
+    sit = G.decode_situation(ev.situation_code)
+    ev = ev.assign(prev_type=g.type.shift(1), prev_zone=g.zone.shift(1), time_since_last=tsl, **sit)
+    home_team_by = ev[ev.is_home].groupby("nhl_game_id").team.first()
+
+    df = ev[ev.type.isin(G.FENWICK)].copy()
+    df = df[df.nhl_game_id.map(C.is_regular_season)]
+    df = df[(df.period < 5) & df.x.notna() & df.y.notna() & df.primary_player_id.notna()]
+
+    is_home = df.is_home.to_numpy(bool)
+    x_adj, y_adj = G.oriented(df.x, df.y, G.attack_sign(is_home, df.home_defending_side.to_numpy()))
+    dist, ang = G.distance_angle(x_adj, y_adj)
+    def_goalie = np.where(is_home, df.away_goalie, df.home_goalie)
+    sid = df.primary_player_id.astype("int64")
+
+    out = pd.DataFrame({
+        "nhl_game_id": df.nhl_game_id.to_numpy(), "event_idx": df.event_idx.to_numpy(),
+        "time_g": df.time_g.astype("int32").to_numpy(), "period": df.period.astype("int16").to_numpy(),
+        "is_home": is_home.astype(int), "home_team": df.nhl_game_id.map(home_team_by).to_numpy(),
+        "shooter_id": sid.to_numpy(), "shooter": sid.map(names).to_numpy(),
+        "goal": (df.type == "goal").astype(int).to_numpy(), "event": df.type.to_numpy(),
+        "x": df.x.astype("int16").to_numpy(), "y": df.y.astype("int16").to_numpy(),
+        "shot_type": df.shot_type.to_numpy(),
+        "distance": np.round(dist, 1), "angle": np.round(ang, 1),
+        "rebound": G.rebound_flag(df.prev_type, df.time_since_last),
+        "rush": G.rush_flag(df.prev_zone, df.time_since_last),
+        "home_n": df.home_skaters.astype("Int64").to_numpy(), "away_n": df.away_skaters.astype("Int64").to_numpy(),
+        "empty_net": (def_goalie == 0).astype(int),
+    })
+    dup = int(out.duplicated(["nhl_game_id", "event_idx"]).sum())
+    assert dup == 0, f"{season}: {dup} duplicate (game, event_idx) shot keys — not a valid join key"
+    op = C.INTERIM / "shots" / f"{season}.parquet"
+    op.parent.mkdir(parents=True, exist_ok=True)
+    out.to_parquet(op, index=False)
+    print(f"[shots] {season}: {len(out):,} unblocked shots across {out.nhl_game_id.nunique()} games -> {op.name}")
+    return len(out)
 
 
 # --- shifts ------------------------------------------------------------------
@@ -189,7 +207,6 @@ def clean_events_and_roster(season: int) -> tuple[int, pd.DataFrame]:
 
 def clean_season(season: int) -> None:
     print(f"\n=== clean {C.season_label(season)} ===")
-    clean_shots(season)
     clean_shifts(season)
     _, roster = clean_events_and_roster(season)
     if len(roster):
@@ -197,6 +214,9 @@ def clean_season(season: int) -> None:
         out.parent.mkdir(parents=True, exist_ok=True)
         roster.to_parquet(out, index=False)
         print(f"[roster] {season}: {len(roster)} players -> {out.name}")
+    # shots are derived from the just-written events; names resolve shooter ids
+    names = dict(zip(roster.player_id, roster.player_name)) if len(roster) else {}
+    build_shots(season, names)
 
 
 def main(argv: list[str] | None = None) -> None:

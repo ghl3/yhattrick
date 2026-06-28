@@ -71,7 +71,7 @@ function EventRow({ e }: { e: TimelineEvent }) {
   const [open, setOpen] = useState(false);
   const cls =
     e.type === "goal" ? "ev-goal" : e.type === "penalty" ? "ev-penalty" : e.type.includes("shot") ? "ev-shot" : "";
-  const isShot = e.xGoal != null;
+  const isShot = e.xg != null;
   const located = e.x != null && e.y != null;
   return (
     <li className={located ? "clickable" : ""}>
@@ -84,7 +84,7 @@ function EventRow({ e }: { e: TimelineEvent }) {
         {isShot && (
           <span className="ev-xg">
             {e.shot_type ? `${e.shot_type} ` : ""}
-            {e.distance != null ? `${e.distance}ft · ` : ""}xG {e.xGoal!.toFixed(3)}
+            {e.distance != null ? `${e.distance}ft · ` : ""}xG {e.xg!.toFixed(3)}
           </span>
         )}
         {located && <span className="ev-expand">{open ? "▾" : "▸"}</span>}
@@ -226,7 +226,7 @@ const PLAYER_COLS: { key: PlayerSortKey; label: string; title?: string }[] = [
   { key: "a2", label: "A2", title: "Secondary assists" },
   { key: "pts", label: "P", title: "Points (G + A1 + A2)" },
   { key: "shots", label: "Sh", title: "Shot attempts" },
-  { key: "xg", label: "xG", title: "Borrowed expected goals" },
+  { key: "xg", label: "xG", title: "Expected goals (our model)" },
 ];
 
 function PlayerTable({ side, players }: { side: "home" | "away"; players: PlayerAgg[] }) {

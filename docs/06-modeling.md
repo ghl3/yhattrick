@@ -92,15 +92,16 @@ skater counts for 3v3/4v4/OT, score margin, period, game time, home/away); and *
 
 Model: XGBoost (`binary:logistic`), GroupKFold-by-game out-of-fold predictions, then an **isotonic
 recalibration** on the OOF probabilities — this flattens the per-bin bias and makes the league total
-xG equal goals. Validation (AUC / log-loss / Brier / reliability) is on the OOF predictions; the fit
-also reports a head-to-head with MoneyPuck's `xGoal` on the same shots. Pooled over all seasons it is
-calibrated to the goal total and on par on discrimination, using only play-level, double-count-safe
-inputs.
+xG equal goals. Validation (AUC / log-loss / Brier / reliability) is on the OOF predictions. Pooled
+over all seasons it is calibrated to the goal total, using only play-level, double-count-safe inputs.
+This `xg` is the canonical expected-goals value across the pipeline — the on-ice xGF the RAPM
+regresses on, the `ixg` finishing uses, and the per-shot value in the game timelines.
 
-Outputs `data/processed/xg/<season>.parquet` (per-shot predictions), `data/models/xg_booster.json` +
-`xg_isotonic.json`, full meta in `logs/model/`, and `web/public/data/xg_model.json` for the
-exploration page (`/xg`: shot-danger heatmap, calibration vs MoneyPuck, feature importances).
-Run: `uv run python -m yhattrick.xg --pool` (needs `make fetch-handedness` for off-wing).
+Outputs `data/processed/xg/<season>.parquet` (per-shot predictions; joined downstream on
+`nhl_game_id`+`event_idx`), `data/models/xg_booster.json` + `xg_isotonic.json`, full meta in
+`logs/model/`, and `web/public/data/xg_model.json` for the exploration page (`/xg`: shot-danger
+heatmap, calibration, feature importances). Run: `uv run python -m yhattrick.xg --pool` (runs after
+`clean-data`, before `stints`; needs `make fetch-handedness` for off-wing).
 
 ## The three per-player metric families (site)
 
@@ -120,11 +121,6 @@ view-toggle:
 - **Penalties value** — (drawn − taken) × a goal value (rates already shown).
 - **GAR → WAR** — convert the impact coefficients to goals over ice time, subtract a
   position-specific replacement baseline, divide by goals-per-win; then percentiles.
-- **Swap in our xG downstream** — our calibrated `xg` (above) now exists per shot; the remaining step
-  is to make it the canonical value the stints → RAPM, finishing, on-ice rates, and game/player
-  exports consume (currently still the borrowed MoneyPuck `xGoal`), then drop the MoneyPuck shots
-  dependency entirely. This fixes the S-shaped per-bin bias that loads into `xG/shot`, finishing, and
-  the RAPM.
 - **Arena coordinate adjustment** — correct rink-scorer bias in shot x/y before computing distance/
-  angle (its own per-rink calibration project).
+  angle (its own per-rink calibration project). The only shot feature MoneyPuck had that we don't.
 - A leaderboard + player-card route on the website surfacing these with their confidence.

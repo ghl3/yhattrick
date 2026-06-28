@@ -117,20 +117,6 @@ function Heatmap({ m }: { m: XgModel }) {
   );
 }
 
-function MetricRow({ label, ours, mp, better, fmt }: {
-  label: string; ours: number; mp: number; better: "high" | "low" | "none"; fmt: (v: number) => string;
-}) {
-  const oursWin = better === "high" ? ours > mp : better === "low" ? ours < mp : false;
-  const mpWin = better === "high" ? mp > ours : better === "low" ? mp < ours : false;
-  return (
-    <tr>
-      <td>{label}</td>
-      <td className={`num ${oursWin ? "win" : ""}`}>{fmt(ours)}</td>
-      <td className={`num ${mpWin ? "win" : ""}`}>{fmt(mp)}</td>
-    </tr>
-  );
-}
-
 export default function XgPage() {
   const [m, setM] = useState<XgModel | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -144,23 +130,15 @@ export default function XgPage() {
 
   const reliData = useMemo(() => {
     if (!m) return [];
-    const byPred = new Map<number, { pred: number; ours?: number; mp?: number; ideal?: number }>();
-    const put = (pred: number, key: "ours" | "mp", obs: number) => {
-      const e = byPred.get(pred) ?? { pred };
-      e[key] = obs;
-      byPred.set(pred, e);
-    };
-    m.comparison.ours.reliability.forEach((b) => put(b.pred, "ours", b.obs));
-    m.comparison.moneypuck.reliability.forEach((b) => put(b.pred, "mp", b.obs));
-    const max = Math.max(...[...byPred.keys()], 0.4);
-    const arr = [...byPred.values()].sort((a, b) => a.pred - b.pred);
-    return [{ pred: 0, ideal: 0 }, ...arr, { pred: max, ideal: max }];
+    const max = Math.max(...m.reliability.map((b) => b.pred), 0.4);
+    const pts = m.reliability.map((b) => ({ pred: b.pred, ours: b.obs }));
+    return [{ pred: 0, ideal: 0 }, ...pts, { pred: max, ideal: max }];
   }, [m]);
 
   if (error) return <div className="loading">Failed to load the xG model ({error}). Run <code>make xg</code>.</div>;
   if (!m) return <div className="loading">Loading xG model…</div>;
 
-  const c = m.comparison;
+  const mt = m.metrics;
   const maxGain = Math.max(...m.importances.map((i) => i.gain));
 
   return (
@@ -176,7 +154,7 @@ export default function XgPage() {
         <p className="section-sub">
           A gradient-boosted model that scores each unblocked shot by its chance of going in, from shot
           geometry and pre-shot context in the NHL play-by-play. Below: the danger map, how well the
-          predictions match real goal rates, and what the model leans on — alongside MoneyPuck&apos;s xG.
+          predictions match real goal rates, and what the model leans on.
         </p>
       </div>
 
@@ -201,36 +179,32 @@ export default function XgPage() {
                 <Tooltip formatter={(v: unknown) => (typeof v === "number" ? v.toFixed(3) : String(v))} />
                 <Line dataKey="ideal" name="ideal" stroke="#9aa7b4" strokeWidth={1} strokeDasharray="4 4" dot={false} connectNulls />
                 <Line dataKey="ours" name="our xG" stroke="#2f6cb0" strokeWidth={2.5} dot={{ r: 3 }} connectNulls />
-                <Line dataKey="mp" name="MoneyPuck" stroke="#cf7a2f" strokeWidth={2} dot={{ r: 2 }} connectNulls />
               </LineChart>
             </ResponsiveContainer>
           </div>
           <div className="xg-key">
             <span><i style={{ background: "#2f6cb0" }} /> our xG</span>
-            <span><i style={{ background: "#cf7a2f" }} /> MoneyPuck</span>
             <span><i style={{ background: "#9aa7b4" }} /> perfect</span>
           </div>
         </div>
 
         <div className="panel">
-          <h2>How it stacks up</h2>
-          <p className="section-sub">Out-of-sample, on {c.n_matched.toLocaleString()} shots both models scored. Bold = better.</p>
+          <h2>Accuracy</h2>
+          <p className="section-sub">Out-of-fold, on all {mt.n.toLocaleString()} modeled shots.</p>
           <table className="games xg-metrics">
-            <thead><tr><th>Metric</th><th className="num">Our xG</th><th className="num">MoneyPuck</th></tr></thead>
             <tbody>
-              <MetricRow label="AUC (discrimination)" ours={c.ours.auc} mp={c.moneypuck.auc} better="high" fmt={(v) => v.toFixed(4)} />
-              <MetricRow label="Log-loss" ours={c.ours.logloss} mp={c.moneypuck.logloss} better="low" fmt={(v) => v.toFixed(4)} />
-              <MetricRow label="Brier score" ours={c.ours.brier} mp={c.moneypuck.brier} better="low" fmt={(v) => v.toFixed(4)} />
+              <tr><td>AUC (discrimination)</td><td className="num">{mt.auc.toFixed(4)}</td></tr>
+              <tr><td>Log-loss</td><td className="num">{mt.logloss.toFixed(4)}</td></tr>
+              <tr><td>Brier score</td><td className="num">{mt.brier.toFixed(4)}</td></tr>
               <tr>
-                <td>Total xG vs. {c.ours.total_goals.toLocaleString()} goals</td>
-                <td className="num">{Math.round(c.ours.total_xg).toLocaleString()}</td>
-                <td className="num">{Math.round(c.moneypuck.total_xg).toLocaleString()}</td>
+                <td>Total xG vs. {mt.total_goals.toLocaleString()} goals</td>
+                <td className="num">{Math.round(mt.total_xg).toLocaleString()}</td>
               </tr>
             </tbody>
           </table>
           <p className="muted card-note">
             AUC measures ranking dangerous shots above safe ones; log-loss and Brier reward sharp,
-            calibrated probabilities. Total xG should land on the real goal count.
+            calibrated probabilities. Total xG lands on the real goal count.
           </p>
         </div>
       </div>
