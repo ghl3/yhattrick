@@ -227,6 +227,44 @@ export interface PlayerDetail {
   linemates: Linemate[];
 }
 
+// --- xG model exploration page (xg.py -> web/public/data/xg_model.json) ---
+export interface XgMetrics {
+  auc: number;
+  logloss: number;
+  brier: number;
+  total_xg: number;
+  total_goals: number;
+  n: number;
+}
+export interface ReliabilityBin {
+  p_lo: number;
+  p_hi: number;
+  pred: number;
+  obs: number;
+  n: number;
+}
+export interface XgModel {
+  seasons: number[];
+  n_shots: number;
+  n_goals: number;
+  metrics: XgMetrics; // full out-of-fold set
+  reliability: ReliabilityBin[];
+  importances: { feature: string; gain: number }[];
+  comparison: {
+    match_rate: number;
+    n_matched: number;
+    ours: XgMetrics & { reliability: ReliabilityBin[] };
+    moneypuck: XgMetrics & { reliability: ReliabilityBin[] };
+  };
+  heatmap: {
+    x: number[]; // grid x (ft), attacking net at +89
+    y: number[]; // grid y (ft)
+    combos: Record<string, number[][]>; // key `${shot_type}|${rebound}|${rush}|${strength}` -> [y][x] xG
+    shot_types: string[];
+    strengths: string[];
+  };
+}
+
 export interface Game {
   game_id: number;
   date: string | null;

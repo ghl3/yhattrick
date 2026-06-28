@@ -75,6 +75,33 @@ Pooled over all in-play situations (regular season), excluding empty-net and sho
 → a 95% CI. Output `data/models/finishing_<seasons>.parquet`; full meta (k, τ², σ̄², league G/ixG)
 in `logs/model/`. Run: `uv run python -m yhattrick.finishing --pool`.
 
+## Implemented: expected goals (`xg.py`)
+
+The probability an unblocked shot becomes a goal, trained on the NHL play-by-play event stream
+(`interim/events`). Every feature describes the **play itself** (geometry + pre-shot context + game
+state), never who is on the ice: player/team/goalie quality and deployment are deliberately excluded
+so the xG stays a pure chance-quality measure and isn't double-counted by the downstream RAPM /
+finishing layer.
+
+Features: distance & angle (oriented to the attacking net via `homeTeamDefendingSide`), shot type,
+zone; pre-shot context (last-event type/coords, time/distance/speed since last event, time since the
+last shot attempt, rebound, rush, angle change = goalie's lateral sweep, royal-road cross-slot,
+possession continuity, since-faceoff, 15-second shot-attempt flurry); state (strength differential,
+skater counts for 3v3/4v4/OT, score margin, period, game time, home/away); and **off-wing**
+(handedness × shot side, from the NHL player-landing endpoint — a geometry term, not skill).
+
+Model: XGBoost (`binary:logistic`), GroupKFold-by-game out-of-fold predictions, then an **isotonic
+recalibration** on the OOF probabilities — this flattens the per-bin bias and makes the league total
+xG equal goals. Validation (AUC / log-loss / Brier / reliability) is on the OOF predictions; the fit
+also reports a head-to-head with MoneyPuck's `xGoal` on the same shots. Pooled over all seasons it is
+calibrated to the goal total and on par on discrimination, using only play-level, double-count-safe
+inputs.
+
+Outputs `data/processed/xg/<season>.parquet` (per-shot predictions), `data/models/xg_booster.json` +
+`xg_isotonic.json`, full meta in `logs/model/`, and `web/public/data/xg_model.json` for the
+exploration page (`/xg`: shot-danger heatmap, calibration vs MoneyPuck, feature importances).
+Run: `uv run python -m yhattrick.xg --pool` (needs `make fetch-handedness` for off-wing).
+
 ## The three per-player metric families (site)
 
 Each player is described by three parallel families, shown as separate card sections and an index
@@ -93,13 +120,11 @@ view-toggle:
 - **Penalties value** — (drawn − taken) × a goal value (rates already shown).
 - **GAR → WAR** — convert the impact coefficients to goals over ice time, subtract a
   position-specific replacement baseline, divide by goals-per-win; then percentiles.
-- **Our own xG (high priority)** — the borrowed MoneyPuck `xGoal` is calibrated in aggregate
-  (league predicted 0.068 ≈ actual 0.068) but has a systematic **S-shaped per-bin bias**: it
-  *under*-rates mid-danger shots (0.02–0.10 xG convert at 1.1–1.3× predicted) and *over*-rates
-  high-danger shots (0.15–0.50 convert at 0.7–0.9×). This biases `xG/shot` by shot-mix and loads
-  the residual into finishing (inflated for perimeter shooters like Panarin, deflated for
-  slot-chance players), and rides along in on-ice xG + the RAPM. Fix: a gradient-boosted model on
-  our shot features + pre-shot context (time/distance since last event, rush sequences, score
-  state), then isotonic/Platt **calibration** so the per-bin curve is flat. Swap in under the whole
-  stack.
+- **Swap in our xG downstream** — our calibrated `xg` (above) now exists per shot; the remaining step
+  is to make it the canonical value the stints → RAPM, finishing, on-ice rates, and game/player
+  exports consume (currently still the borrowed MoneyPuck `xGoal`), then drop the MoneyPuck shots
+  dependency entirely. This fixes the S-shaped per-bin bias that loads into `xG/shot`, finishing, and
+  the RAPM.
+- **Arena coordinate adjustment** — correct rink-scorer bias in shot x/y before computing distance/
+  angle (its own per-rink calibration project).
 - A leaderboard + player-card route on the website surfacing these with their confidence.

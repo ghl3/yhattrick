@@ -12,6 +12,8 @@
 #   make model                      # fit isolated-impact models        -> data/models + logs/model
 #   make model FAMILY=tweedie       # same, but the Tweedie-GLM response (default: gaussian)
 #   make finishing                  # fit finishing (goals above expected) -> data/models + logs/model
+#   make xg                         # fit the expected-goals model       -> data/processed/xg + web JSON
+#   make fetch-handedness           # NHL player handedness (for off-wing) -> data/raw/nhl/players
 #   make games                      # per-game timelines (site JSON)    -> data/games (+ web sync)
 #   make players                    # player ratings + box (site JSON)  -> web/public/data
 #   make web-dev                    # run the website dev server
@@ -29,9 +31,9 @@ SEASON ?=
 FAMILY ?= gaussian        # response family for `make model`: gaussian | tweedie
 
 .DEFAULT_GOAL := all
-.PHONY: all fetch fetch-moneypuck fetch-season clean-data stints box model finishing games players publish-data pipeline web-dev web-build
+.PHONY: all fetch fetch-moneypuck fetch-season fetch-handedness clean-data stints box model finishing xg games players publish-data pipeline web-dev web-build
 
-all: clean-data stints box model finishing games players
+all: clean-data stints box model finishing xg games players
 
 fetch:
 	$(RUN) yhattrick.download all 2>&1 | tee $(LOGDIR)/download.log
@@ -41,6 +43,9 @@ fetch-moneypuck:
 
 fetch-season:
 	$(RUN) yhattrick.download games --season $(SEASON) 2>&1 | tee $(LOGDIR)/download.log
+
+fetch-handedness:
+	$(RUN) yhattrick.download handedness 2>&1 | tee $(LOGDIR)/download.log
 
 clean-data:
 	$(RUN) yhattrick.clean 2>&1 | tee $(LOGDIR)/clean.log
@@ -56,6 +61,9 @@ model:
 
 finishing:
 	$(RUN) yhattrick.finishing --pool 2>&1 | tee $(LOGDIR)/finishing.log
+
+xg:
+	$(RUN) yhattrick.xg --pool 2>&1 | tee $(LOGDIR)/xg.log
 
 games:
 	$(RUN) yhattrick.export_games 2>&1 | tee $(LOGDIR)/games.log

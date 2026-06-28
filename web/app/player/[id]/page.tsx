@@ -9,10 +9,10 @@ import { pctColor } from "@/lib/format";
 const seasonLabel = (s: number) => `${s}-${String(s + 1).slice(-2)}`;
 
 const IMPACT: { key: MetricKey; name: string; explain: string }[] = [
-  { key: "ev_off", name: "Even-Strength Offense", explain: "Expected goals added per 60 when on the ice at 5-on-5." },
-  { key: "ev_def", name: "Even-Strength Defense", explain: "Expected goals allowed per 60 when on the ice at 5-on-5." },
-  { key: "pp_off", name: "Power-Play Offense", explain: "Expected goals added per 60 on the power play." },
-  { key: "pk_def", name: "Penalty-Kill Defense", explain: "Expected goals allowed per 60 on the penalty kill." },
+  { key: "ev_off", name: "Even-Strength Offense", explain: "Expected goals he adds per 60 at 5-on-5, vs. an average player." },
+  { key: "ev_def", name: "Even-Strength Defense", explain: "Change in expected goals allowed per 60 at 5-on-5, vs. an average player — negative means fewer." },
+  { key: "pp_off", name: "Power-Play Offense", explain: "Expected goals he adds per 60 on the power play, vs. an average player." },
+  { key: "pk_def", name: "Penalty-Kill Defense", explain: "Change in expected goals allowed per 60 on the penalty kill, vs. an average player — negative means fewer." },
 ];
 
 // on-ice (raw, descriptive) metrics — the team's rate while the player is on the ice

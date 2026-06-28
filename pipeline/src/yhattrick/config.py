@@ -26,6 +26,7 @@ RAW = DATA / "raw"
 RAW_MONEYPUCK = RAW / "moneypuck"
 RAW_SHIFTS = RAW / "nhl" / "shiftcharts"
 RAW_PBP = RAW / "nhl" / "pbp"
+RAW_PLAYERS = RAW / "nhl" / "players"   # per-player landing json (handedness, bio)
 
 INTERIM = DATA / "interim"
 PROCESSED = DATA / "processed"
@@ -40,7 +41,7 @@ SITE_JSON = DATA / "games"
 WEB_DIR = REPO_ROOT / "web"
 WEB_DATA = WEB_DIR / "public" / "data"
 
-_ALL_DIRS = (RAW_MONEYPUCK, RAW_SHIFTS, RAW_PBP, INTERIM, PROCESSED, SITE_JSON, LOGS, LOGS_MODEL)
+_ALL_DIRS = (RAW_MONEYPUCK, RAW_SHIFTS, RAW_PBP, RAW_PLAYERS, INTERIM, PROCESSED, SITE_JSON, LOGS, LOGS_MODEL)
 
 
 def ensure_dirs() -> None:
@@ -54,6 +55,7 @@ MONEYPUCK_SHOTS_URL = "https://peter-tanner.com/moneypuck/downloads/shots_{seaso
 MONEYPUCK_SKATERS_URL = "https://moneypuck.com/moneypuck/playerData/seasonSummary/{season}/regular/skaters.csv"
 NHL_SHIFTCHARTS_URL = "https://api.nhle.com/stats/rest/en/shiftcharts?cayenneExp=gameId={game_id}"
 NHL_PBP_URL = "https://api-web.nhle.com/v1/gamecenter/{game_id}/play-by-play"
+NHL_PLAYER_URL = "https://api-web.nhle.com/v1/player/{player_id}/landing"
 
 USER_AGENT = "Mozilla/5.0 (yhattrick data pipeline; research/personal use)"
 REQUEST_TIMEOUT = 30           # seconds per request

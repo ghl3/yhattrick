@@ -23,6 +23,9 @@ export default function Navbar() {
           <Link className={isActive("/teams") || isActive("/team") ? "active" : ""} href="/teams">
             Teams
           </Link>
+          <Link className={isActive("/xg") ? "active" : ""} href="/xg">
+            xG Model
+          </Link>
           <Link className={isActive("/about") ? "active" : ""} href="/about">
             About
           </Link>

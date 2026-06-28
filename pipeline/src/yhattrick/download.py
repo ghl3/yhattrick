@@ -130,6 +130,41 @@ def download_games(season: int, limit: int | None = None) -> None:
     print(f"[games] {C.season_label(season)} done: fetched {fetched}, cached {skipped}, missing {missing}")
 
 
+# --- NHL per-player landing (handedness) -------------------------------------
+def _shooter_ids() -> list[int]:
+    """All skaters who took a shot, from the cleaned roster tables."""
+    ids: set[int] = set()
+    for p in sorted((C.INTERIM / "roster").glob("*.parquet")):
+        ids.update(int(x) for x in pd.read_parquet(p, columns=["player_id"]).player_id.dropna())
+    return sorted(ids)
+
+
+def download_handedness() -> None:
+    """Fetch each player's landing json (for shootsCatches). Resumable; needs cleaned rosters."""
+    C.ensure_dirs()
+    sess = _session()
+    ids = _shooter_ids()
+    if not ids:
+        raise FileNotFoundError("no interim rosters -- run `make clean-data` first")
+    print(f"[players] ensuring landing json for {len(ids)} players")
+    fetched = skipped = missing = 0
+    for i, pid in enumerate(ids, 1):
+        path = C.RAW_PLAYERS / f"{pid}.json"
+        if path.exists():
+            skipped += 1
+            continue
+        txt = _get(sess, C.NHL_PLAYER_URL.format(player_id=pid), binary=False)
+        if txt is None:
+            missing += 1
+        else:
+            path.write_text(txt)
+            fetched += 1
+        time.sleep(C.THROTTLE_SECONDS)
+        if i % 100 == 0:
+            print(f"    {i}/{len(ids)}  (fetched {fetched}, cached {skipped}, missing {missing})")
+    print(f"[players] done: fetched {fetched}, cached {skipped}, missing {missing}")
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description="Download raw hockey data -> data/raw/")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -137,6 +172,7 @@ def main(argv: list[str] | None = None) -> None:
     g = sub.add_parser("games", help="download NHL shiftcharts+pbp for a season")
     g.add_argument("--season", type=int, required=True)
     g.add_argument("--limit", type=int, default=None)
+    sub.add_parser("handedness", help="download NHL player landing json (handedness)")
     sub.add_parser("all", help="moneypuck + games for every configured season")
 
     args = p.parse_args(argv)
@@ -144,10 +180,13 @@ def main(argv: list[str] | None = None) -> None:
         download_moneypuck()
     elif args.cmd == "games":
         download_games(args.season, args.limit)
+    elif args.cmd == "handedness":
+        download_handedness()
     elif args.cmd == "all":
         download_moneypuck()
         for season in C.SEASONS:
             download_games(season)
+        download_handedness()
 
 
 if __name__ == "__main__":

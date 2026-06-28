@@ -163,7 +163,7 @@ def clean_events_and_roster(season: int) -> tuple[int, pd.DataFrame]:
                 gid, pl.get("sortOrder", pl.get("eventId")), int(period), game_sec(period, tip),
                 pl.get("typeDescKey"), team_abbr.get(owner), owner == home_id,
                 d.get("xCoord"), d.get("yCoord"), d.get("zoneCode"),
-                pl.get("situationCode"),
+                pl.get("situationCode"), pl.get("homeTeamDefendingSide"),
                 d.get("scoringPlayerId") or d.get("shootingPlayerId") or d.get("hittingPlayerId")
                 or d.get("committedByPlayerId") or d.get("winningPlayerId"),
                 d.get("assist1PlayerId"), d.get("assist2PlayerId"),  # populated on goal events
@@ -174,7 +174,7 @@ def clean_events_and_roster(season: int) -> tuple[int, pd.DataFrame]:
         return 0, pd.DataFrame()
     ev = pd.DataFrame(ev_rows, columns=[
         "nhl_game_id", "event_idx", "period", "time_g", "type", "team", "is_home",
-        "x", "y", "zone", "situation_code", "primary_player_id",
+        "x", "y", "zone", "situation_code", "home_defending_side", "primary_player_id",
         "assist1_player_id", "assist2_player_id", "shot_type", "detail_key"])
     ev.sort_values(["nhl_game_id", "time_g", "event_idx"], inplace=True)
     out = C.INTERIM / "events" / f"{season}.parquet"
