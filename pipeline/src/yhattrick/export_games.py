@@ -16,7 +16,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import bisect
 import json
 import math
 import shutil
@@ -25,6 +24,7 @@ import numpy as np
 import pandas as pd
 
 from . import config as C
+from .stints import shot_stint_index, other_stint_index, _SHOTLIKE
 
 
 def _sanitize(o):
@@ -152,9 +152,11 @@ def build_game(gid: int, stints_g, events_g, shots_g, shifts_g, lookup) -> dict:
     for e in events_g.itertuples():
         if e.type not in _KEEP_EVENTS:
             continue
-        # half-open containment [t0,t1): an event exactly on a boundary belongs to the stint
-        # starting there — the same rule stints.py uses to attribute xGF, so the two never disagree
-        j = bisect.bisect_right(starts, e.time_g) - 1
+        # a shot/goal on a boundary belongs to the stint ENDING there (the personnel who took it);
+        # other events (faceoff, penalty, …) open the next stint. Reuses stints.py's single source of
+        # truth so the timeline and the per-stint xGF never disagree.
+        j = (shot_stint_index(starts, e.time_g) if e.type in _SHOTLIKE
+             else other_stint_index(starts, e.time_g))
         if j < 0:
             continue
         ev = {

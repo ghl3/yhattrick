@@ -4,6 +4,7 @@
 /data/processed/
 /data/games/
 /data/models/
+/data/golden/
 /web/public/data/
 
 # run logs + model-fit metadata (regenerated each run)
