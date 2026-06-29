@@ -373,7 +373,6 @@ function SkaterView({ p }: { p: PlayerDetail }) {
         <h2>Modeled Impact</h2>
         <p className="section-sub">
           What our models credit him with, adjusted for the linemates and competition he played with.
-          Per 60 of the situation named unless noted.
         </p>
 
         <div className="metric-grid">
@@ -409,7 +408,7 @@ function SkaterView({ p }: { p: PlayerDetail }) {
 
       <div className="panel">
         <h2>On-Ice Team Rates</h2>
-        <p className="section-sub">His team&apos;s rates while he was on the ice, not adjusted for teammates — 5-on-5 unless a box says power play or penalty kill.</p>
+        <p className="section-sub">His team&apos;s rates while he was on the ice, not adjusted for teammates.</p>
         <div className="metric-grid">
           {ONICE.map((m) => {
             const d = p.onice[m.key];

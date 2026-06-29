@@ -106,6 +106,12 @@ negative "playmaking"), whereas the proportional partition is always positive an
 a partition of his isolated value, not a marginal teammate-uplift estimate (which would reintroduce
 negatives for shot-heavy players).
 
+**Linemate-context caveat.** The offense *total* is linemate-adjusted (RAPM), but the scoring-vs-
+playmaking *split fraction* `φ = own ixG ÷ team on-ice xGF` uses raw on-ice shares. So a low-shot-volume
+winger on a strong line (few of his own shots, many on-ice chances) tilts toward Playmaking even if the
+chances are mostly his linemates' doing — e.g. a bottom-six winger riding a star center. For high-usage
+players this is negligible; it mainly flatters low-volume role players' Playmaking.
+
 Note on penalty-kill: a PK skater is on the ice for goals against, so his Penalty-Kill Defense number is
 large by role; his *skill* shows as being **below** the PK baseline (a low number). Good penalty-killers
 minimize an unavoidably negative-attribution role.
