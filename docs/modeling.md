@@ -202,6 +202,50 @@ the two stages. Output `data/models/goal_accounting_<seasons>.parquet` + league 
 Goalies get their own page: shrunk **GSAx/100** (shooter-adjusted, from the shooting model) plus
 descriptive Sv%/GAA and danger/situation/shot-type splits (`goalie_aggregates.py`).
 
+## Alternative approach (experimental): generative model (`generative_model.py`)
+
+The additive linear model above is our **main model** — and deliberately so (see "Why the linear model
+stays primary" below). `models/generative_model.py` is an **experimental alternative** we explored: a
+**marked Poisson process with Bernoulli thinning** that, given a stint's lineup/context/length, *draws* the
+number of chances, each chance's xG, and each outcome, so it can be **simulated** as well as fit. It is
+**not wired into the site**; it's a proof of concept. The full likelihood (all parameters labelled) lives
+in the module docstring — that file is the source of truth.
+
+Three layers, fit independently (the likelihood factorizes — counts, qualities, and outcomes are all
+observed, with disjoint parameter blocks):
+- **rate** — shots per stint side ~ Poisson(λ·t), `log λ = μ_λ + Σ offense(a_p) + Σ defense(d_p) + ctx`;
+- **quality** — each shot's xG via a mean-calibrated **fractional logistic** `E[xG] = σ(μ_q + Σ u_p + Σ w_p + ctx)`
+  (simulated from a Beta with that mean);
+- **conversion** — the production shooting model (`α`, `γ`, `μ_c`), reused.
+
+Fit by **MAP / penalized MLE in JAX** (autodiff gradients + scipy L-BFGS-B; ridge = the EB prior),
+**not** MCMC — point estimates with **Hessian-based (Laplace) ±95% CIs** (`SE = sqrt(diag(H⁻¹))`,
+`H = XᵀWX + penalty`). Notably it splits what RAPM estimates as one xG/60 number into **volume** (`a_p`)
+× **quality** (`u_p`), distinguishing high-volume from high-danger creators.
+
+A posterior-predictive check (re-simulate every real stint) confirms shots and goals reconcile to actuals.
+It also surfaced that **real shot counts are overdispersed vs Poisson** (variance > mean), so the count
+layer is **configurable** (`--count poisson|nb`): the **negative-binomial** option adds one global
+dispersion `r` (the per-stint Gamma rate-multiplier is integrated out, so the three layers still fit
+independently) and matches the data — e.g. on 2024 it lifts the simulated per-side count variance from
+0.119 (Poisson) to 0.139 (≈ actual 0.136), fixes the zero-fraction, and tightens the goals reconciliation
+(+0.7% vs +3.5%). The only cost is that Poisson's *exact* Σμ = Σcount becomes approximate (off by ~2 shots
+in 89k here). Going further — a Cox process with a *shared* latent intensity driving both volume and
+quality — would couple the rate and quality fits (the separability tradeoff discussed above). Run:
+`uv run --group experimental python -m yhattrick.models.generative_model --count nb` (needs the JAX
+`experimental` dep group; `make generative-model`).
+
+**Why the linear model stays primary.** The generative model is more *faithful* (goals are produced
+multiplicatively — rate × quality × conversion — and it yields full predictive distributions and a
+volume-vs-quality split), but that multiplicative composition is exactly what makes **per-player
+attribution harder**: a player's goals/60 then depends on his linemates and context, so there is no single
+context-free number — you have to average over deployment or Shapley-decompose the product into additive
+shares. The **additive linear model is additive by construction**: each player's contribution is one
+context-free number and they *sum* to the team total (`goals = ΣxG + μ + finishing + goalie`). For the
+ultimate goal — clean, independent, summable per-player WAR components — that additivity is the feature we
+want, so the linear model is the workhorse. The generative model's value is as a complementary lens
+(realism, simulation/uncertainty, the volume/quality decomposition) rather than the attribution engine.
+
 ## Next (not yet built)
 
 - **Penalties value** — (drawn − taken) × a goal value (rates already shown).

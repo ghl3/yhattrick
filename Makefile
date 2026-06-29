@@ -36,7 +36,7 @@ SEASON ?=
 FAMILY ?= gaussian        # response family for `make model`: gaussian | tweedie
 
 .DEFAULT_GOAL := all
-.PHONY: all fetch fetch-season fetch-handedness fetch-htmlshifts clean-data xg stints box model shooting goal-accounting games gamelog players goalie-box goalie-gamelog goalies publish-data pipeline web-dev web-build
+.PHONY: all fetch fetch-season fetch-handedness fetch-htmlshifts clean-data xg stints box model shooting goal-accounting games gamelog players goalie-box goalie-gamelog goalies generative-model publish-data pipeline web-dev web-build
 
 all: clean-data xg stints box model shooting goal-accounting games gamelog players goalie-gamelog goalie-box goalies
 
@@ -93,6 +93,11 @@ goalie-box:
 
 goalies:
 	$(RUN) yhattrick.export.export_goalies 2>&1 | tee $(LOGDIR)/goalies.log
+
+# EXPERIMENTAL: generative (Poisson marked-process) proof-of-concept model. Needs the experimental
+# dep group (JAX); NOT part of `all` and not wired into the site. See docs/modeling.md.
+generative-model:
+	mkdir -p $(LOGDIR) && cd pipeline && uv run --group experimental python -m yhattrick.models.generative_model --count nb 2>&1 | tee $(LOGDIR)/generative_model.log
 
 # upload the heavy per-game JSON to Cloudflare R2 (needs R2_* env vars; see yhattrick.export.publish)
 publish-data:

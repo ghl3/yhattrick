@@ -21,6 +21,9 @@ yhattrick-fetch = "yhattrick.data.download:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]
+# experimental: the generative (Poisson) proof-of-concept model only (models/generative_model.py).
+# Kept out of the core pipeline deps so JAX isn't required for the production build.
+experimental = ["jax>=0.4"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
