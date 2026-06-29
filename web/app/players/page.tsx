@@ -6,7 +6,7 @@ import type { GoalieRow, PlayerRow } from "@/lib/types";
 import { pctColor } from "@/lib/format";
 import { DataTable } from "@/components/DataTable";
 
-type View = "impact" | "onice" | "individual";
+type View = "value" | "impact" | "onice" | "individual";
 type Pos = "SKATERS" | "F" | "D" | "G";
 const num3 = (v: number) => v.toFixed(3);
 const num2 = (v: number) => v.toFixed(2);
@@ -16,6 +16,15 @@ const svFmt = (v: number) => v.toFixed(3).replace(/^0/, ""); // .915
 // metric columns per view: modeled (isolated) impact vs raw on-ice rates
 type MetricCol = { key: keyof PlayerRow; label: string; title: string; fmt: (v: number) => string };
 const VIEWS: Record<View, MetricCol[]> = {
+  value: [
+    { key: "gnet_pg", label: "Net G/G", title: "Net goals added per game (top-line modeled value)", fmt: num2 },
+    { key: "g_net", label: "Net G", title: "Net goals added — window total, all situations", fmt: num1 },
+    { key: "create60", label: "EV Off", title: "Even-strength offense: expected goals created per 60, his share", fmt: num2 },
+    { key: "allow60", label: "EV Def", title: "Even-strength defense: expected goals allowed per 60, his share (lower is better)", fmt: num2 },
+    { key: "pp_create60", label: "PP Off", title: "Power-play offense: expected goals created per 60, his share", fmt: num2 },
+    { key: "pk_allow60", label: "PK Def", title: "Penalty-kill defense: expected goals allowed per 60, his share (lower is better)", fmt: num2 },
+    { key: "pen_net60", label: "Pen", title: "Net penalty goals per 60 (drawn − taken × penalty value)", fmt: num2 },
+  ],
   impact: [
     { key: "ev_off", label: "EV O", title: "Even-strength offense impact, isolated (xGF/60 added)", fmt: num2 },
     { key: "ev_def", label: "EV D", title: "Even-strength defense impact, isolated (xGA/60 suppressed)", fmt: num2 },
@@ -29,7 +38,7 @@ const VIEWS: Record<View, MetricCol[]> = {
     { key: "ev_ca60", label: "CA/60", title: "5v5 on-ice Corsi against / 60", fmt: num1 },
   ],
   individual: [
-    { key: "fin_per100", label: "Fin/100", title: "Finishing: goals above expected per 100 shots (regressed)", fmt: num2 },
+    { key: "fin_per100", label: "Finishing", title: "Finishing: goals above expected per 100 shots (shrunk)", fmt: num2 },
     { key: "shots60", label: "Sh/60", title: "Unblocked shots per 60", fmt: num1 },
     { key: "xg_per_shot", label: "xG/sh", title: "Average shot quality (xG per shot)", fmt: num3 },
     { key: "ixg60", label: "ixG/60", title: "Individual expected goals per 60", fmt: num2 },
@@ -110,8 +119,8 @@ export default function Players() {
   const [error, setError] = useState<string | null>(null);
   const [globalFilter, setGlobalFilter] = useState("");
   const [posFilter, setPosFilter] = useState<Pos>("SKATERS");
-  const [view, setView] = useState<View>("impact");
-  const [sorting, setSorting] = useState<SortingState>([{ id: "ev_off", desc: true }]);
+  const [view, setView] = useState<View>("value");
+  const [sorting, setSorting] = useState<SortingState>([{ id: "gnet_pg", desc: true }]);
   const [gsorting, setGsorting] = useState<SortingState>([{ id: "gsax_per100", desc: true }]);
 
   useEffect(() => {
@@ -156,9 +165,9 @@ export default function Players() {
         </div>
         {!isG && (
           <div className="seg">
-            {(["impact", "individual", "onice"] as const).map((v) => (
+            {(["value", "impact", "individual", "onice"] as const).map((v) => (
               <button key={v} className={view === v ? "active" : ""} onClick={() => switchView(v)}>
-                {v === "impact" ? "Isolated impact" : v === "individual" ? "Individual rates" : "Team rates"}
+                {v === "value" ? "Value" : v === "impact" ? "Isolated impact" : v === "individual" ? "Individual rates" : "Team rates"}
               </button>
             ))}
           </div>

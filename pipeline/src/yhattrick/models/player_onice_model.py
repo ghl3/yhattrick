@@ -388,6 +388,9 @@ def fit(stints: pd.DataFrame, names: dict, spec: Spec,
     else:
         coef_d, se_d = beta, se
 
+    # league baseline xGF/60 for the attacking team (the free intercept). Carried as a constant
+    # column so export can fold each player's share of it back into the coefficient — turning the
+    # "vs average" deviation into an absolute attributed share. See docs/metrics.md.
     rows = []
     for i, p in enumerate(players):
         info = names.get(int(p), {"name": f"#{p}", "pos": None})
@@ -397,6 +400,7 @@ def fit(stints: pd.DataFrame, names: dict, spec: Spec,
             f"{spec.off}_toi": round(off_toi.get(p, 0.0) / 60.0, 1),
             spec.deff: round(float(coef_d[P + i]), 4), f"{spec.deff}_se": round(float(se_d[P + i]), 4),
             f"{spec.deff}_toi": round(def_toi.get(p, 0.0) / 60.0, 1),
+            f"{spec.off}_base": round(base_rate, 4),
         })
 
     # covariates kept in natural-parameter units (xGF/60 for Gaussian, log-rate for Tweedie) for
@@ -483,7 +487,9 @@ def fit_cached(seasons: list[int], spec: Spec, names: dict | None = None,
     if present and fresh, so per-season and pooled fits are computed once and reused by export."""
     path = _cache_path(spec, seasons, family)
     if path.exists() and _cache_fresh(path, seasons):
-        return pd.read_parquet(path)
+        cached = pd.read_parquet(path)
+        if f"{spec.off}_base" in cached.columns:   # else stale schema (pre-baseline) → re-fit
+            return cached
     stints = load_stints(seasons, spec.strengths)
     if stints.empty:
         return pd.DataFrame()

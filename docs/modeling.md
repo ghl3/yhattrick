@@ -202,6 +202,59 @@ the two stages. Output `data/models/goal_accounting_<seasons>.parquet` + league 
 Goalies get their own page: shrunk **GSAx/100** (shooter-adjusted, from the shooting model) plus
 descriptive Sv%/GAA and danger/situation/shot-type splits (`goalie_aggregates.py`).
 
+## Player value — goals attributed (`export_players.value_table`)
+
+The headline value layer synthesizes the component fits into **goals attributed**: the goals we credit
+each player with creating, allowing, finishing, and drawing/taking, such that the shares reconcile to
+actual goals leaguewide. It is built **only** from the existing linear fits — no new model.
+
+The key move is **absorbing the RAPM intercept**. Stage 1 fits `xGF/60 = intercept + Σ ev_off + Σ ev_def
++ ctx` with the intercept *free*, so the exported `ev_off`/`ev_def` are *deviations* from the league
+baseline (they read as "vs. average"). Folding each player's share of that baseline back in —
+`baseline ÷ (on-ice skaters) + coef` — turns the deviation into an **absolute attributed share** (≥0)
+that sums, across the on-ice skaters, back to the stint's xG:
+
+```
+5v5 created /60:  create60    = ev_off_base/5 + ev_off      his share of 5v5 xG created
+5v5 allowed /60:  allow60     = ev_off_base/5 + ev_def      his share of 5v5 xG allowed (lower better)
+5v5 NET /60:      ev5_net60   = create60 + fin5 − allow60   = ev_off + fin5 − ev_def (baseline cancels)
+PP created /60:   pp_create60 = pp_off_base/5 + pp_off      (5 PP skaters share the PP baseline)
+PK allowed /60:   pk_allow60  = pp_off_base/4 + pk_def      (4 PK skaters share it; lower better)
+```
+
+`ev_off_base`/`pp_off_base` are the model intercepts (`baseline_xgf60`), carried on the coefficient
+frame. The baseline is split equally among that side's on-ice skaters; this is exactly the split that
+makes the shares reconcile to Σ xG (the per-player deviations already encode F-vs-D differences).
+
+**Actual goals** (season totals): scale each per-60 share by *real* role-TOI and sum across situations:
+
+```
+g_created   = create60·(T5/60) + pp_create60·(Tpp/60)
+g_allowed   = allow60·(T5/60)  + pk_allow60·(Tpk/60)
+g_fin       = fin_goals                                   finishing (goals − xG on his shots)
+g_pen       = drawn·V − taken·V                           net penalty goals
+g_net       = g_created + g_fin − g_allowed + g_pen
+gnet_pg     = g_net / GP        ← TOP-LINE METRIC: Net Goals Added per game
+```
+
+At 5v5 the baseline cancels in `g_created − g_allowed` (same slice on offense and defense, equal TOI), so
+the 5v5 contribution to the net is the pure marginal differential `ev_off − ev_def`; only the
+specialist-role special-teams shares carry a baseline into the net. `V` ≈ 0.14 is the net goal value of a
+drawn minor, derived from our own data (`penalty_value`: league 5v4 GF − 4v5 GA per drawn penalty).
+
+**Why no double-count.** `create60` is *on-ice* xG — it already contains the goal-value of his own shot
+volume × quality (his individual xG). So `ixG`/`shots60`/`xg_per_shot` are **not** added; only
+**finishing** (the goals-above-xG residual) is new. For his own shots, `create60` credits the xG and
+finishing credits (goals − xG) → exactly full goal credit, no more. (There is deliberately no combined
+"scoring = ixG + finishing" metric — it would double-count the own-shot xG already inside `create60`.)
+
+**Reader-facing definitions** — what each player-page card means, the worked baseline example, and why a
+net centered at 0 is *not* "vs average" — live in **[`docs/metrics.md`](metrics.md)**.
+
+**Caveats.** Attribution is approximate per-stint (ridge shrinkage, tiny `μ`) but calibrated in
+aggregate; a roster's `g_net` does **not** sum to the team's goal differential. **Goalie analog:** no
+offense; `g_net = g_prevented = gsax_saved` (shrunk GSAx above expected), `gprev60 = GSAx/60`.
+
 ## Alternative approach (experimental): generative model (`generative_model.py`)
 
 The additive linear model above is our **main model** — and deliberately so (see "Why the linear model
@@ -248,7 +301,8 @@ want, so the linear model is the workhorse. The generative model's value is as a
 
 ## Next (not yet built)
 
-- **Penalties value** — (drawn − taken) × a goal value (rates already shown).
+- **Above replacement** — the value layer above is *goals attributed* (net centered at break-even);
+  subtract a replacement-level baseline (a constant per-60 shift by position) for goals-above-replacement.
 - **GAR → WAR** — convert the additive goal components (creation, finishing, goalie saves) to goals
   over replacement, divide by goals-per-win; then percentiles. The additive identity makes the
   components directly summable into a single goals-based value.

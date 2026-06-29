@@ -102,6 +102,9 @@ export type OniceKey =
 export type IndividualKey =
   | "shots60" | "xg_per_shot" | "ixg60" | "fin_per100"
   | "g60" | "a60" | "pen_drawn60" | "pen_taken60";
+// player value: goals attributed, play-time-independent per-60 shares (by situation)
+export type ValueRateKey =
+  | "create60" | "allow60" | "ev5_net60" | "pp_create60" | "pk_allow60" | "pen_net60";
 
 export interface PlayerRow {
   id: number;
@@ -160,6 +163,29 @@ export interface PlayerRow {
   a60_pct: number | null;
   pen_drawn60_pct: number | null;
   pen_taken60_pct: number | null;
+  // value: goals attributed — net per game (top line) + per-60 shares + window totals
+  gnet_pg: number | null;
+  gcreate_pg: number | null;
+  gallow_pg: number | null;
+  ev5_net60: number | null;
+  create60: number | null;
+  allow60: number | null;
+  pp_create60: number | null;
+  pk_allow60: number | null;
+  pen_net60: number | null;
+  g_created: number | null;
+  g_allowed: number | null;
+  g_fin: number | null;
+  g_pen: number | null;
+  g_net: number | null;
+  gnet_pg_pct: number | null;
+  ev5_net60_pct: number | null;
+  create60_pct: number | null;
+  allow60_pct: number | null;
+  pp_create60_pct: number | null;
+  pk_allow60_pct: number | null;
+  pen_net60_pct: number | null;
+  g_net_pct: number | null;
 }
 
 export interface PlayerMetric {
@@ -250,11 +276,31 @@ export interface PlayerDetail {
   onice: Record<OniceKey, OniceMetric>;
   individual: Record<IndividualKey, IndividualMetric>;
   shooting: { shots: number; ixg: number | null; fin_goals: number | null };
+  value: PlayerValue;
   per_season: SeasonRow[];
   linemates: Linemate[];
   games: GameLogRow[];
   heat: PlayerHeat | null;
   bio: PlayerBio | null;
+}
+
+// player value (export_players.py): GOALS ATTRIBUTED. `rates` are deployment-free per-60 shares by
+// situation (created/allowed = baseline ÷ on-ice skaters + RAPM coef; ≥0; allow lower is better);
+// `actual` are season totals (rates × real role-TOI, summed across situations). Net = created +
+// finishing − allowed + penalties. See docs/metrics.md.
+export interface PlayerValue {
+  rates: {
+    create60: OniceMetric;
+    allow60: OniceMetric;
+    ev5_net60: OniceMetric;
+    pp_create60: OniceMetric;
+    pk_allow60: OniceMetric;
+    pen_net60: OniceMetric;
+  };
+  actual: {
+    create_pg: number | null; allow_pg: number | null; net_pg: number | null; net_pg_pct: number | null;
+    created: number | null; allowed: number | null; fin: number | null; pen: number | null; net: number | null;
+  };
 }
 
 export interface PlayerBio {
@@ -309,6 +355,12 @@ export interface GoalieRow {
   qs: number;
   rbs: number;
   qs_pct: number | null;
+  // player-value analog (added=0; prevented=net=shrunk GSAx total; gprev60 = GSAx/60)
+  g_added: number;
+  g_prevented: number | null;
+  g_net: number | null;
+  gnet_pg: number | null;
+  gprev60: number | null;
   // + `${GoalieMetricKey}_pct` percentile fields
   gsax_per100_pct: number | null;
   gsax60_pct: number | null;
@@ -385,6 +437,10 @@ export interface GoalieDetail {
   gaa: number | null;
   gsax: number | null;
   metric: Record<GoalieMetricKey, { v: number | null; pct: number | null; se?: number }>;
+  value: {
+    rates: { gprev60: OniceMetric };
+    actual: { added: number; prevented: number | null; net: number | null; net_pg: number | null };
+  };
   danger: GoalieDangerSplit[];
   situation: GoalieSituationSplit[];
   shot_types: GoalieShotTypeSplit[];

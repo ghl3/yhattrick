@@ -28,11 +28,11 @@ export default function About() {
             unblocked shot by its chance of going in, using shot geometry and pre-shot context.
           </li>
           <li>
-            <strong>Player Impact Models.</strong>{" "}
-            For each skater, how much they raise their team&apos;s expected-goal rate and suppress the
-            opponent&apos;s — at even strength, on the power play, and on the penalty kill — separated
-            from linemates and competition, plus finishing (goals scored above what the shots were
-            worth), with within-position percentiles.
+            <strong>Modeled impact.</strong>{" "}
+            For each skater, the goals we credit to him — the chances he creates and allows while on
+            the ice (his share, separated from linemates and competition), his finishing (goals above
+            what his shots were worth), and penalties. Across the league these credits sum to actual
+            goals; each is shown with units and a within-position percentile.
           </li>
           <li>
             <strong>Descriptive stats.</strong> Box score, on-ice team rates (xG, Corsi, shares), and
@@ -82,6 +82,13 @@ export default function About() {
         <p>
           Finishing is a related player model: a skater&apos;s goals above what their shots were
           expected to yield, shrunk toward zero until the sample is large enough to trust.
+        </p>
+        <p>
+          On the player page these become <strong>goals attributed</strong>: we fold each model&apos;s
+          baseline back in so the offense and defense terms read as the goals a player is credited with
+          creating and allowing (his share of on-ice expected goals), rather than a difference from an
+          average player. The full method — how the baseline is split, why the numbers reconcile to
+          actual goals, and what each card means — is in <code>docs/metrics.md</code>.
         </p>
       </div>
 

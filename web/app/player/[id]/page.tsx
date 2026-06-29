@@ -8,7 +8,7 @@ import {
 } from "recharts";
 import type {
   AnyPlayerDetail, GameLogRow, GoalieDetail, GoalieMetricKey, GoalieSeasonRow,
-  IndividualKey, MetricKey, OniceKey, PlayerBio, PlayerDetail, PlayerHeat, SeasonRow,
+  IndividualKey, OniceKey, PlayerBio, PlayerDetail, PlayerHeat, SeasonRow,
 } from "@/lib/types";
 import { isGoalie } from "@/lib/types";
 import { mmss, pctColor } from "@/lib/format";
@@ -31,33 +31,30 @@ const num1 = (v: number) => v.toFixed(1);
 const signed = (v: number, fmt: (n: number) => string) => `${v >= 0 ? "+" : ""}${fmt(v)}`;
 const svFmt = (v: number) => v.toFixed(3).replace(/^0/, ""); // .915
 
-const IMPACT: { key: MetricKey; name: string; explain: string }[] = [
-  { key: "ev_off", name: "Even-Strength Offense", explain: "Expected goals he adds per 60 at 5-on-5, vs. an average player." },
-  { key: "ev_def", name: "Even-Strength Defense", explain: "Change in expected goals allowed per 60 at 5-on-5, vs. an average player — negative means fewer." },
-  { key: "pp_off", name: "Power-Play Offense", explain: "Expected goals he adds per 60 on the power play, vs. an average player." },
-  { key: "pk_def", name: "Penalty-Kill Defense", explain: "Change in expected goals allowed per 60 on the penalty kill, vs. an average player — negative means fewer." },
-];
-
 // 5-on-5 unless the name says otherwise, so no "EV" prefix is needed
-const ONICE: { key: OniceKey; name: string; explain: string; fmt: (v: number) => string }[] = [
-  { key: "ev_xgf60", name: "Expected Goals For", explain: "Team's expected goals per 60 at 5-on-5 when he's on the ice.", fmt: num2 },
-  { key: "ev_xga60", name: "Expected Goals Against", explain: "Team's expected goals allowed per 60 at 5-on-5 when he's on the ice.", fmt: num2 },
-  { key: "ev_cf60", name: "Shot Attempts For", explain: "Team's shot attempts (Corsi) per 60 at 5-on-5 when he's on the ice.", fmt: num1 },
-  { key: "ev_ca60", name: "Shot Attempts Against", explain: "Opponent shot attempts per 60 at 5-on-5 when he's on the ice.", fmt: num1 },
-  { key: "pp_xgf60", name: "Power-Play Expected Goals For", explain: "Team's expected goals per 60 on the power play when he's on the ice.", fmt: num2 },
-  { key: "pk_xga60", name: "Penalty-Kill Expected Goals Against", explain: "Team's expected goals allowed per 60 on the penalty kill when he's on the ice.", fmt: num2 },
+const ONICE: { key: OniceKey; name: string; explain: string; fmt: (v: number) => string; unit: string }[] = [
+  { key: "ev_xgf60", name: "Expected Goals For", explain: "His team's expected goals per 60 at 5-on-5 while he's on the ice — a team rate, not isolated to him.", fmt: num2, unit: "xG/60" },
+  { key: "ev_xga60", name: "Expected Goals Against", explain: "His team's expected goals allowed per 60 at 5-on-5 while he's on the ice — a team rate, not isolated. Lower is better.", fmt: num2, unit: "xG/60" },
+  { key: "ev_cf60", name: "Shot Attempts For", explain: "His team's shot attempts (Corsi) per 60 at 5-on-5 while he's on the ice — a team rate.", fmt: num1, unit: "attempts/60" },
+  { key: "ev_ca60", name: "Shot Attempts Against", explain: "Opponent shot attempts per 60 at 5-on-5 while he's on the ice — a team rate. Lower is better.", fmt: num1, unit: "attempts/60" },
+  { key: "pp_xgf60", name: "Power-Play Expected Goals For", explain: "His team's expected goals per 60 on the power play while he's on the ice — a team rate.", fmt: num2, unit: "xG/60" },
+  { key: "pk_xga60", name: "Penalty-Kill Expected Goals Against", explain: "His team's expected goals allowed per 60 on the penalty kill while he's on the ice — a team rate. Lower is better.", fmt: num2, unit: "xG/60" },
 ];
 
-const INDIV: { key: IndividualKey; name: string; explain: string; fmt: (v: number) => string; signed?: boolean; ci?: boolean }[] = [
-  { key: "shots60", name: "Shot Rate", explain: "His own unblocked shots per 60.", fmt: num1 },
-  { key: "xg_per_shot", name: "Shot Quality", explain: "Average danger of his shots (xG per shot).", fmt: num3 },
-  { key: "ixg60", name: "Expected Goal Rate", explain: "Expected goals from his own shots per 60.", fmt: num2 },
-  { key: "fin_per100", name: "Finishing", explain: "Goals above expected per 100 of his shots.", fmt: num2, signed: true, ci: true },
-  { key: "g60", name: "Goal Rate", explain: "His goals per 60 (all situations).", fmt: num2 },
-  { key: "a60", name: "Assist Rate", explain: "His assists per 60 (all situations).", fmt: num2 },
-  { key: "pen_drawn60", name: "Penalty Draw Rate", explain: "Penalties he drew per 60.", fmt: num2 },
-  { key: "pen_taken60", name: "Penalty Take Rate", explain: "Penalties he took per 60.", fmt: num2 },
+const INDIV: { key: IndividualKey; name: string; explain: string; fmt: (v: number) => string; unit: string; signed?: boolean; ci?: boolean }[] = [
+  { key: "shots60", name: "Shot Rate", explain: "His own unblocked shots per 60.", fmt: num1, unit: "shots/60" },
+  { key: "xg_per_shot", name: "Shot Quality", explain: "Average danger of his shots (expected goals per shot).", fmt: num3, unit: "xG/shot" },
+  { key: "ixg60", name: "Expected Goal Rate", explain: "Expected goals from his own shots per 60.", fmt: num2, unit: "xG/60" },
+  { key: "fin_per100", name: "Finishing", explain: "Goals he scores above expected on his own shots, per 100 shots.", fmt: num2, unit: "goals/100 shots", signed: true, ci: true },
+  { key: "g60", name: "Goal Rate", explain: "His goals per 60 (all situations).", fmt: num2, unit: "goals/60" },
+  { key: "a60", name: "Assist Rate", explain: "His assists per 60 (all situations).", fmt: num2, unit: "assists/60" },
+  { key: "pen_drawn60", name: "Penalty Draw Rate", explain: "Penalties he drew per 60.", fmt: num2, unit: "drawn/60" },
+  { key: "pen_taken60", name: "Penalty Take Rate", explain: "Penalties he took per 60.", fmt: num2, unit: "taken/60" },
 ];
+
+// Player-stats section = metrics counted straight from raw events (the xG/finishing ones are modeled
+// and live in the Modeled-impact section instead)
+const STAT_KEYS: IndividualKey[] = ["shots60", "g60", "a60", "pen_drawn60", "pen_taken60"];
 
 // per-season columns; `graph` ones are clickable to chart over time
 type Col = { key: string; label: string; title: string; get: (r: SeasonRow) => number | null; fmt?: (v: number) => string; graph: boolean };
@@ -104,28 +101,28 @@ function BoxShell({ name, pctile, groupLabel, explain, value, footer }: {
   );
 }
 
-// modeled, isolated impact: signed per-60 delta with a 95% CI
-function MetricBox({ name, explain, v, se, toi, pctile, group }: {
-  name: string; explain: string; v: number | null; se: number | null; toi: number | null; pctile: number | null; group: string;
-}) {
-  const has = v != null && pctile != null;
-  return (
-    <BoxShell name={name} pctile={has ? pctile : null} groupLabel={group === "D" ? "defensemen" : "forwards"} explain={explain}
-      value={has ? <>{v! >= 0 ? "+" : ""}{v!.toFixed(3)} <span className="mb-ci">± {(1.96 * (se ?? 0)).toFixed(3)}</span></> : <span className="muted">—</span>}
-      footer={toi ? <span className="mb-toi"> · {Math.round(toi)} min</span> : null} />
-  );
-}
-
-// descriptive rate: plain value (optionally signed, optionally with a 95% CI for finishing)
-function OniceBox({ name, explain, v, pctile, group, fmt, se, signed: sgn }: {
+// descriptive / attributed-share box: a value with a unit, optionally signed, optionally with a 95% CI
+function OniceBox({ name, explain, v, pctile, group, fmt, se, signed: sgn, unit }: {
   name: string; explain: string; v: number | null; pctile: number | null; group: string;
-  fmt: (v: number) => string; se?: number; signed?: boolean;
+  fmt: (v: number) => string; se?: number; signed?: boolean; unit?: string;
 }) {
   return (
     <BoxShell name={name} pctile={v != null ? pctile : null} groupLabel={group === "D" ? "defensemen" : "forwards"} explain={explain}
       value={v != null
-        ? <>{sgn && v >= 0 ? "+" : ""}{fmt(v)}{se != null && <span className="mb-ci"> ± {(1.96 * se).toFixed(2)}</span>}</>
+        ? <>{sgn && v >= 0 ? "+" : ""}{fmt(v)}{se != null && <span className="mb-ci"> ± {(1.96 * se).toFixed(2)}</span>}{unit && <span className="mb-unit">{unit}</span>}</>
         : <span className="muted">—</span>} />
+  );
+}
+
+// player-value box: a goals number (per-60 share, per-game, or season total) + unit, colored by
+// percentile. `signed` (default true) prepends + on differential metrics (net, penalties).
+function ValueBox({ name, explain, v, pctile, group, fmt, footer, unit, signed: sgn = true }: {
+  name: string; explain: string; v: number | null; pctile: number | null; group: string;
+  fmt: (v: number) => string; footer?: React.ReactNode; unit?: string; signed?: boolean;
+}) {
+  return (
+    <BoxShell name={name} pctile={v != null ? pctile : null} groupLabel={group === "D" ? "defensemen" : "forwards"} explain={explain}
+      value={v != null ? <>{sgn && v >= 0 ? "+" : ""}{fmt(v)}{unit && <span className="mb-unit">{unit}</span>}</> : <span className="muted">—</span>} footer={footer} />
   );
 }
 
@@ -224,23 +221,34 @@ function ShotMap({ heat, variant = "skater" }: { heat: PlayerHeat; variant?: "sk
   );
 }
 
-// percentile radar across the headline skills (0 = no qualifying ice time / bottom, 100 = best)
+// wrap long axis labels onto multiple lines (one word per line), vertically centered on the anchor
+function RadarTick({ x, y, textAnchor, payload }: { x: number; y: number; textAnchor: "start" | "middle" | "end"; payload: { value: string } }) {
+  const words = String(payload.value).split(" ");
+  return (
+    <text x={x} y={y} textAnchor={textAnchor} fontSize={10} fill="#6b7e90">
+      {words.map((w, i) => (
+        <tspan key={i} x={x} dy={i === 0 ? -(words.length - 1) * 5 : 10}>{w}</tspan>
+      ))}
+    </text>
+  );
+}
+
+// percentile radar across the headline skills (0 = no qualifying ice time / bottom, 100 = best).
+// Axis names match the cards above (modeled impact + player stats).
 function ProfileRadar({ p }: { p: PlayerDetail }) {
   const data = [
-    { axis: "EV Off", v: p.impact.ev_off.pct },
-    { axis: "EV Def", v: p.impact.ev_def.pct },
-    { axis: "PP Off", v: p.impact.pp_off.pct },
-    { axis: "PK Def", v: p.impact.pk_def.pct },
-    { axis: "Shot Vol", v: p.individual.shots60.pct },
-    { axis: "Shot Qual", v: p.individual.xg_per_shot.pct },
+    { axis: "Even-Strength Offense", v: p.impact.ev_off.pct },
+    { axis: "Power-Play Offense", v: p.impact.pp_off.pct },
     { axis: "Finishing", v: p.individual.fin_per100.pct },
-    { axis: "Playmaking", v: p.individual.a60.pct },
+    { axis: "Penalties", v: p.value.rates.pen_net60?.pct ?? null },
+    { axis: "Penalty-Kill Defense", v: p.impact.pk_def.pct },
+    { axis: "Even-Strength Defense", v: p.impact.ev_def.pct },
   ].map((d) => ({ ...d, v: d.v ?? 0 }));
   return (
     <ResponsiveContainer width="100%" height={360}>
-      <RadarChart data={data} outerRadius="70%">
+      <RadarChart data={data} outerRadius="68%">
         <PolarGrid stroke="#e7f1fb" />
-        <PolarAngleAxis dataKey="axis" tick={{ fontSize: 11, fill: "#6b7e90" }} />
+        <PolarAngleAxis dataKey="axis" tick={<RadarTick x={0} y={0} textAnchor="middle" payload={{ value: "" }} />} />
         <PolarRadiusAxis domain={[0, 100]} tickCount={5} angle={90} tick={{ fontSize: 9, fill: "#b6c4d2" }} />
         <Radar dataKey="v" stroke="#2f6cb0" fill="#4a90d9" fillOpacity={0.45} />
         <Tooltip formatter={(v: unknown) => `${Math.round(v as number)}th pct`} />
@@ -361,23 +369,40 @@ function SkaterView({ p }: { p: PlayerDetail }) {
       </div>
 
       <div className="panel">
-        <h2>Isolated impact</h2>
-        <p className="section-sub">His effect on the game, adjusted for the teammates and competition he played with. ± is a 95% range.</p>
+        <h2>Modeled Impact</h2>
+        <p className="section-sub">
+          What our models credit him with, adjusted for the linemates and competition he played with.
+          Per 60 of the situation named unless noted.
+        </p>
+
         <div className="metric-grid">
-          {IMPACT.map((m) => {
-            const d = p.impact[m.key];
-            return <MetricBox key={m.key} name={m.name} explain={m.explain} v={d.v} se={d.se} toi={d.toi} pctile={d.pct} group={p.group} />;
-          })}
+          <ValueBox name="Net Goals Added per Game" group={p.group} v={p.value.actual.net_pg} pctile={p.value.actual.net_pg_pct} fmt={num2} unit="goals/game"
+            explain="Net goals created (team + personal scoring) minus goals allowed, per game."
+            footer={p.value.actual.net != null ? <span className="mb-toi"> · {signed(p.value.actual.net, num1)} total</span> : null} />
+          <OniceBox name="Even-Strength Offense" group={p.group} v={p.value.rates.create60?.v ?? null} pctile={p.value.rates.create60?.pct ?? null} fmt={num2} unit="goals/60" se={p.impact.ev_off.se} signed={false}
+            explain="His share of the expected goals created at 5-on-5 while he's on the ice." />
+          <OniceBox name="Even-Strength Defense" group={p.group} v={p.value.rates.allow60?.v ?? null} pctile={p.value.rates.allow60?.pct ?? null} fmt={num2} unit="goals/60" se={p.impact.ev_def.se} signed={false}
+            explain="His share of the expected goals allowed at 5-on-5 while he's on the ice. Lower is better." />
+          <ValueBox name="Two-Way Rating" group={p.group} v={p.value.rates.ev5_net60?.v ?? null} pctile={p.value.rates.ev5_net60?.pct ?? null} fmt={num2} unit="goals/60"
+            explain="His all-around value at 5-on-5 per 60 — offense plus finishing, minus defense." />
+          <OniceBox name="Power-Play Offense" group={p.group} v={p.value.rates.pp_create60?.v ?? null} pctile={p.value.rates.pp_create60?.pct ?? null} fmt={num2} unit="goals/60" se={p.impact.pp_off.se} signed={false}
+            explain="His share of the expected goals created on the power play while he's on the ice." />
+          <OniceBox name="Penalty-Kill Defense" group={p.group} v={p.value.rates.pk_allow60?.v ?? null} pctile={p.value.rates.pk_allow60?.pct ?? null} fmt={num2} unit="goals/60" se={p.impact.pk_def.se} signed={false}
+            explain="His share of the expected goals allowed on the penalty kill while he's on the ice. Lower is better." />
+          <OniceBox name="Finishing" group={p.group} v={p.individual.fin_per100.v} pctile={p.individual.fin_per100.pct} fmt={num2} unit="goals/100 shots" se={p.individual.fin_per100.se} signed
+            explain="Goals he scores above expected on his own shots." />
+          <ValueBox name="Penalties" group={p.group} v={p.value.rates.pen_net60?.v ?? null} pctile={p.value.rates.pen_net60?.pct ?? null} fmt={num2} unit="goals/60"
+            explain="Net goals from penalties he draws minus takes." />
         </div>
       </div>
 
       <div className="panel">
-        <h2>Individual Rates</h2>
-        <p className="section-sub">His own play with the puck — all situations, per 60 minutes unless noted.</p>
+        <h2>Player stats</h2>
+        <p className="section-sub">Counted straight from his game events — per 60 minutes, all situations.</p>
         <div className="metric-grid">
-          {INDIV.map((m) => {
+          {INDIV.filter((m) => STAT_KEYS.includes(m.key)).map((m) => {
             const d = p.individual[m.key];
-            return <OniceBox key={m.key} name={m.name} explain={m.explain} v={d.v} pctile={d.pct} group={p.group} fmt={m.fmt} se={m.ci ? d.se : undefined} signed={m.signed} />;
+            return <OniceBox key={m.key} name={m.name} explain={m.explain} v={d.v} pctile={d.pct} group={p.group} fmt={m.fmt} unit={m.unit} se={m.ci ? d.se : undefined} signed={m.signed} />;
           })}
         </div>
       </div>
@@ -388,7 +413,7 @@ function SkaterView({ p }: { p: PlayerDetail }) {
         <div className="metric-grid">
           {ONICE.map((m) => {
             const d = p.onice[m.key];
-            return <OniceBox key={m.key} name={m.name} explain={m.explain} v={d.v} pctile={d.pct} group={p.group} fmt={m.fmt} />;
+            return <OniceBox key={m.key} name={m.name} explain={m.explain} v={d.v} pctile={d.pct} group={p.group} fmt={m.fmt} unit={m.unit} />;
           })}
         </div>
       </div>
@@ -465,23 +490,23 @@ function SkaterView({ p }: { p: PlayerDetail }) {
 
 // ============================ GOALIE VIEW ============================
 
-const GMETRICS: { key: GoalieMetricKey; name: string; explain: string; fmt: (v: number) => string; signed?: boolean; ci?: boolean }[] = [
-  { key: "gsax_per100", name: "Goals Saved Above Expected /100", explain: "Goals saved vs. expected per 100 shots faced, regressed toward average. ± is a 95% range.", fmt: num2, signed: true, ci: true },
-  { key: "gsax60", name: "GSAx per 60", explain: "Goals saved above expected per 60 minutes played.", fmt: num2, signed: true },
+const GMETRICS: { key: GoalieMetricKey; name: string; explain: string; fmt: (v: number) => string; unit?: string; signed?: boolean; ci?: boolean }[] = [
+  { key: "gsax_per100", name: "Goals Saved Above Expected /100", explain: "Goals he prevents above expected per 100 shots faced (shrunk for sample size). 0 = saved exactly what the shots' xG predicted. ± is a 95% range.", fmt: num2, unit: "goals/100 shots", signed: true, ci: true },
+  { key: "gsax60", name: "GSAx per 60", explain: "Goals he prevents above expected per 60 minutes played. 0 = saved as expected.", fmt: num2, unit: "goals/60", signed: true },
   { key: "sv_pct", name: "Save %", explain: "Saves per shot on goal.", fmt: svFmt },
-  { key: "gaa", name: "Goals-Against Average", explain: "Goals allowed per 60 minutes (empty-net excluded).", fmt: num2 },
+  { key: "gaa", name: "Goals-Against Average", explain: "Goals allowed per 60 minutes (empty-net excluded). Lower is better.", fmt: num2, unit: "goals/60" },
   { key: "hd_sv_pct", name: "High-Danger Save %", explain: "Save % on high-danger shots (xG ≥ 0.15).", fmt: svFmt },
   { key: "qs_pct", name: "Quality-Start %", explain: "Share of starts that were quality starts (Sv% ≥ .917, or ≤2 GA on <20 shots).", fmt: (v) => `${Math.round(v * 100)}%` },
 ];
 
-function GoalieBox({ name, explain, m, fmt, signed: sgn, ci }: {
+function GoalieBox({ name, explain, m, fmt, signed: sgn, ci, unit }: {
   name: string; explain: string; m: { v: number | null; pct: number | null; se?: number };
-  fmt: (v: number) => string; signed?: boolean; ci?: boolean;
+  fmt: (v: number) => string; signed?: boolean; ci?: boolean; unit?: string;
 }) {
   return (
     <BoxShell name={name} pctile={m.v != null ? m.pct : null} groupLabel="goalies" explain={explain}
       value={m.v != null
-        ? <>{sgn && m.v >= 0 ? "+" : ""}{fmt(m.v)}{ci && m.se != null && <span className="mb-ci"> ± {(1.96 * m.se).toFixed(2)}</span>}</>
+        ? <>{sgn && m.v >= 0 ? "+" : ""}{fmt(m.v)}{ci && m.se != null && <span className="mb-ci"> ± {(1.96 * m.se).toFixed(2)}</span>}{unit && <span className="mb-unit">{unit}</span>}</>
         : <span className="muted">—</span>} />
   );
 }
@@ -597,7 +622,7 @@ function GoalieView({ p }: { p: GoalieDetail }) {
         <p className="section-sub">How he stops the puck vs. the expected-goal value of the shots he faced — percentiles are among goalies. ± is a 95% range.</p>
         <div className="metric-grid">
           {GMETRICS.map((m) => (
-            <GoalieBox key={m.key} name={m.name} explain={m.explain} m={p.metric[m.key]} fmt={m.fmt} signed={m.signed} ci={m.ci} />
+            <GoalieBox key={m.key} name={m.name} explain={m.explain} m={p.metric[m.key]} fmt={m.fmt} unit={m.unit} signed={m.signed} ci={m.ci} />
           ))}
         </div>
       </div>

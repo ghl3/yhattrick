@@ -67,6 +67,29 @@ INDIVIDUAL = {
     "pen_drawn60": (True,  "toi_all", INDIV_TOI_MIN),  # penalties drawn / 60
     "pen_taken60": (False, "toi_all", INDIV_TOI_MIN),  # penalties taken / 60 (lower is better)
 }
+# --- player value: GOALS ATTRIBUTED. Every figure is goals we credit to the player; across the
+# league the shares reconcile to actual goals (xG is calibrated, finishing = goals − xG). Built from
+# the on-ice model: created/allowed = baseline ÷ on-ice skaters + RAPM coef (absolute attributed
+# share, ≥0), plus the shooting model's finishing (goals − xG) and net penalties. Net = created +
+# finishing − allowed + penalties; at 5v5 the baseline cancels in the difference (same slice on
+# offense and defense). Two layers: deployment-free per-60 rates, and actual goals (rates × real
+# role-TOI, summed across situations, then per game). See docs/metrics.md.
+# name -> (higher_is_better, eligibility_toi_col, threshold) ---
+VALUE = {
+    "gnet_pg":     (True,  "ev_off_toi", MIN_EV_TOI),  # NET GOALS ADDED PER GAME — top-line metric
+    "ev5_net60":   (True,  "ev_off_toi", MIN_EV_TOI),  # 5v5 net goals added/60 (create+fin−allow)
+    "create60":    (True,  "ev_off_toi", MIN_EV_TOI),  # 5v5 goals created/60 (attributed share, ≥0)
+    "allow60":     (False, "ev_def_toi", MIN_EV_TOI),  # 5v5 goals allowed/60 (share, lower is better)
+    "pp_create60": (True,  "pp_off_toi", 40),          # power-play goals created/60 (attributed share)
+    "pk_allow60":  (False, "pk_def_toi", 40),          # penalty-kill goals allowed/60 (lower is better)
+    "pen_net60":   (True,  "toi_all", INDIV_TOI_MIN),  # net penalty goals/60 ((drawn−taken)×value)
+    "g_net":       (True,  "ev_off_toi", MIN_EV_TOI),  # actual net goals (window total, all situations)
+}
+# value fields carried into the index row (scalars; percentiles added for the VALUE keys above)
+VALUE_COLS = ["gnet_pg", "gcreate_pg", "gallow_pg", "ev5_net60", "create60", "allow60",
+              "pp_create60", "pk_allow60", "pen_net60", "g_created", "g_allowed", "g_fin",
+              "g_pen", "g_net"]
+
 # box-score columns carried into the per-season detail
 BOX_COLS = ["gp", "toi_min", "g", "a1", "a2", "points", "sog", "icf", "blocks",
             "hits", "takeaways", "giveaways", "fo_won", "fo_lost", "pen_taken", "pen_drawn"]
@@ -200,6 +223,114 @@ def add_individual_percentiles(df: pd.DataFrame) -> None:
         df[f"{col}_pct"] = ((r if higher else 1 - r) * 100).round(0)
 
 
+def shots_by_strength(seasons) -> pd.DataFrame:
+    """Per-shooter own-shot Fenwick counts split into 5v5 and power-play (shooter on a 5v4) buckets.
+
+    Finishing is one pooled per-shot rate (alpha) per player; to credit 5v5 and PP finishing to the
+    right situational rate we apportion it by where the player's shots were taken. The modeled shot set
+    (non-null xg) already excludes empty-net, so PP here matches pp_off's 5v4/4v5 universe."""
+    frames = []
+    for s in seasons:
+        p = C.PROCESSED / "shots_onice" / f"{s}.parquet"
+        if p.exists():
+            df = pd.read_parquet(p, columns=["shooter_id", "is_home", "strength", "xg"])
+            frames.append(df[df.shooter_id.notna() & df.xg.notna()])
+    if not frames:
+        return pd.DataFrame(columns=["player_id", "shots5", "shotspp"])
+    df = pd.concat(frames, ignore_index=True)
+    parts = df.strength.str.split("v", n=1, expand=True)
+    hn, an = pd.to_numeric(parts[0], errors="coerce"), pd.to_numeric(parts[1], errors="coerce")
+    shooter_n = np.where(df.is_home == 1, hn, an)
+    opp_n = np.where(df.is_home == 1, an, hn)
+    out = pd.DataFrame({"player_id": df.shooter_id.astype(int).values,
+                        "shots5": (df.strength.values == "5v5").astype(float),
+                        "shotspp": ((shooter_n == 5) & (opp_n == 4)).astype(float)})
+    return out.groupby("player_id", as_index=False)[["shots5", "shotspp"]].sum()
+
+
+def penalty_value(seasons, allbox: pd.DataFrame) -> float:
+    """Net goal value of one drawn minor penalty, derived from our own data: league goals scored on
+    the power play (shooter on a 5v4) minus goals allowed shorthanded (shooter on a 4v5), per drawn
+    penalty. Used to convert a skater's net penalties (drawn − taken) into goals on the same scale."""
+    pp_gf = sh_gf = 0
+    for s in seasons:
+        p = C.PROCESSED / "shots_onice" / f"{s}.parquet"
+        if not p.exists():
+            continue
+        g = pd.read_parquet(p, columns=["is_home", "strength", "goal"]).query("goal == 1")
+        parts = g.strength.str.split("v", n=1, expand=True)
+        hn, an = pd.to_numeric(parts[0], errors="coerce"), pd.to_numeric(parts[1], errors="coerce")
+        shooter_n = np.where(g.is_home == 1, hn, an)
+        opp_n = np.where(g.is_home == 1, an, hn)
+        pp_gf += int(((shooter_n == 5) & (opp_n == 4)).sum())
+        sh_gf += int(((shooter_n == 4) & (opp_n == 5)).sum())
+    n_pen = float(allbox.pen_drawn.sum()) if len(allbox) and "pen_drawn" in allbox.columns else 0.0
+    v = (pp_gf - sh_gf) / n_pen if n_pen > 0 else 0.0
+    print(f"[value] penalty value V = {v:.4f} goals/penalty  (PP GF {pp_gf} − SH GF {sh_gf}) / {n_pen:.0f} drawn")
+    return v
+
+
+def value_table(pooled: pd.DataFrame, shots_strength: pd.DataFrame, pen_v: float) -> pd.DataFrame:
+    """Goals attributed: absolute attributed shares (per 60) + actual-goal totals.
+
+    Each player is credited his share of the expected goals created and allowed while on the ice —
+    his on-ice xG split among the on-ice skaters (baseline ÷ skaters + his RAPM coefficient) — so the
+    shares are ≥0 and reconcile to actual goals leaguewide (xG is calibrated). Finishing (goals − xG
+    on his shots) and net penalties complete the ledger. Net = created + finishing − allowed +
+    penalties; at 5v5 the baseline cancels in the difference (same slice on offense and defense), so
+    the 5v5 net is his pure marginal differential. Actual goals scale each per-60 rate by real
+    role-TOI and sum across situations, then per game (g_net/gp). All approximate per-stint (ridge
+    shrinkage, tiny μ) but calibrated in aggregate; a roster's g_net does NOT sum to team
+    differential. `pooled` must carry the model baselines (ev_off_base, pp_off_base) and `gp`.
+    See docs/metrics.md."""
+    cols = ["player_id", "ev_off", "ev_def", "ev_off_toi", "pp_off", "pk_def", "pp_off_toi",
+            "pk_def_toi", "ev_off_base", "pp_off_base", "fin_per100", "fin_goals", "gp",
+            "toi_all", "pen_drawn60", "pen_taken60"]
+    df = pooled[cols].merge(shots_strength, on="player_id", how="left")
+    for c in cols[1:] + ["shots5", "shotspp"]:
+        df[c] = df[c].fillna(0.0)
+    safe = lambda num, den: np.where(den > 0, num / np.where(den == 0, np.nan, den), 0.0)
+    alpha = df.fin_per100 / 100.0                 # finishing goals per shot
+    blocks5 = df.ev_off_toi / 60.0                # 5v5 ice time in 60-min blocks (ev_off_toi==ev_def_toi)
+    ppblocks = df.pp_off_toi / 60.0
+    pkblocks = df.pk_def_toi / 60.0
+    fin5_60 = safe(alpha * df.shots5, blocks5)     # 5v5 finishing goals / 60
+    pen_blocks = df.toi_all / 60.0                 # all-situations ice time in 60-min blocks (pen rates' base)
+    pen_add = df.pen_drawn60 * pen_blocks * pen_v   # goals from penalties drawn (= drawn count × V)
+    pen_sub = df.pen_taken60 * pen_blocks * pen_v   # goal cost of penalties taken
+    # absolute attributed shares: the league baseline split among that side's on-ice skaters (5 at
+    # even strength / on the PP, 4 on the PK) + the player's RAPM coefficient. ≥0 in practice.
+    create60 = df.ev_off_base / 5.0 + df.ev_off    # 5v5 xG he creates (his share); incl. his own shots
+    allow60 = df.ev_off_base / 5.0 + df.ev_def     # 5v5 opponent xG he allows (his share); lower better
+    pp_create60 = df.pp_off_base / 5.0 + df.pp_off  # power-play xG created (5 PP skaters share)
+    pk_allow60 = df.pp_off_base / 4.0 + df.pk_def   # penalty-kill xG allowed (4 PK skaters share)
+    out = pd.DataFrame({"player_id": df.player_id})
+    out["create60"] = create60
+    out["allow60"] = allow60
+    out["pp_create60"] = pp_create60
+    out["pk_allow60"] = pk_allow60
+    out["ev5_net60"] = create60 + fin5_60 - allow60   # baseline cancels: = ev_off + fin − ev_def
+    out["pen_net60"] = (df.pen_drawn60 - df.pen_taken60) * pen_v   # net penalty goals / 60 (all situations)
+    # actual-goal totals (deployment-weighted, summed across situations) — the attribution ledger
+    out["g_created"] = create60 * blocks5 + pp_create60 * ppblocks
+    out["g_allowed"] = allow60 * blocks5 + pk_allow60 * pkblocks
+    out["g_fin"] = df.fin_goals                        # finishing goals (all situations)
+    out["g_pen"] = pen_add - pen_sub                   # net penalty goals
+    out["g_net"] = out.g_created + out.g_fin - out.g_allowed + out.g_pen
+    out["gcreate_pg"] = safe(out.g_created, df.gp)
+    out["gallow_pg"] = safe(out.g_allowed, df.gp)
+    out["gnet_pg"] = safe(out.g_net, df.gp)            # top-line: net goals attributed per game
+    return out
+
+
+def add_value_percentiles(df: pd.DataFrame) -> None:
+    """Add `<metric>_pct` (within position group, eligible pool only) for every VALUE metric."""
+    for col, (higher, toi_col, thr) in VALUE.items():
+        elig = df[df[toi_col] >= thr]
+        r = elig.groupby("group")[col].rank(pct=True)
+        df[f"{col}_pct"] = ((r if higher else 1 - r) * 100).round(0)
+
+
 def _loc(v):
     """NHL landing fields like birthCity are {'default': 'Toronto'}; others are plain strings."""
     return v.get("default") if isinstance(v, dict) else v
@@ -310,6 +441,15 @@ def main() -> None:
     add_individual_percentiles(pooled)
     fin_season = {s: shooting_model.season_finishing(s, names, fin_lams) for s in seasons}
 
+    # player value: net goals added — per-game top line + deployment-free per-60 rates + totals
+    gp_df = (allbox.groupby("player_id", as_index=False).gp.sum() if len(allbox)
+             else pd.DataFrame(columns=["player_id", "gp"]))
+    pooled = pooled.merge(gp_df, on="player_id", how="left")
+    pooled["gp"] = pooled.gp.fillna(0)
+    pen_v = penalty_value(seasons, allbox)
+    pooled = pooled.merge(value_table(pooled, shots_by_strength(seasons), pen_v), on="player_id", how="left")
+    add_value_percentiles(pooled)
+
     simp = {s: season_impact(s, names) for s in seasons}
     mates = linemates(seasons, names)
     glog = game_logs(seasons)
@@ -332,6 +472,9 @@ def main() -> None:
 
     def indval(r, c):  # round an individual value (xg_per_shot is small -> more precision)
         return _rnd(getattr(r, c), 4 if c == "xg_per_shot" else 2)
+
+    def valval(r, c):  # round a value metric: actual-goal totals to 1 dp, rates/per-game to 3 dp
+        return _rnd(getattr(r, c), 1 if c.startswith("g_") else 3)  # g_created/g_allowed/g_fin/g_pen/g_net
 
     index = []
     for r in table.itertuples():
@@ -360,6 +503,8 @@ def main() -> None:
             **{f"{c}_pct": getattr(r, f"{c}_pct") for c in ONICE},
             **{c: indval(r, c) for c in INDIVIDUAL},
             **{f"{c}_pct": getattr(r, f"{c}_pct") for c in INDIVIDUAL},
+            **{c: valval(r, c) for c in VALUE_COLS},
+            **{f"{c}_pct": getattr(r, f"{c}_pct") for c in VALUE},
         })
 
         # --- detail ---
@@ -403,6 +548,22 @@ def main() -> None:
             "shooting": {"shots": int(_rnd(getattr(r, "shots"), 0) or 0),
                          "ixg": _rnd(getattr(r, "ixg"), 1),
                          "fin_goals": _rnd(getattr(r, "fin_goals"), 1)},
+            "value": {
+                "rates": {
+                    "create60":    {"v": valval(r, "create60"), "pct": getattr(r, "create60_pct")},
+                    "allow60":     {"v": valval(r, "allow60"), "pct": getattr(r, "allow60_pct")},
+                    "ev5_net60":   {"v": valval(r, "ev5_net60"), "pct": getattr(r, "ev5_net60_pct")},
+                    "pp_create60": {"v": valval(r, "pp_create60"), "pct": getattr(r, "pp_create60_pct")},
+                    "pk_allow60":  {"v": valval(r, "pk_allow60"), "pct": getattr(r, "pk_allow60_pct")},
+                    "pen_net60":   {"v": valval(r, "pen_net60"), "pct": getattr(r, "pen_net60_pct")},
+                },
+                "actual": {
+                    "create_pg": valval(r, "gcreate_pg"), "allow_pg": valval(r, "gallow_pg"),
+                    "net_pg": valval(r, "gnet_pg"), "net_pg_pct": getattr(r, "gnet_pg_pct"),
+                    "created": valval(r, "g_created"), "allowed": valval(r, "g_allowed"),
+                    "fin": valval(r, "g_fin"), "pen": valval(r, "g_pen"), "net": valval(r, "g_net"),
+                },
+            },
             "per_season": per_season,
             "linemates": mates.get(pid, [])[:N_LINEMATES],
             "games": glog.get(pid, []),
@@ -411,7 +572,7 @@ def main() -> None:
         }
         (pdir / f"{pid}.json").write_text(_dump(detail))
 
-    index.sort(key=lambda x: -x["ev_off"])
+    index.sort(key=lambda x: -(x["gnet_pg"] if x["gnet_pg"] is not None else -1e9))
     (C.SITE_JSON / "players.json").write_text(_dump(index))
     print(f"[export] {len(index)} players -> players.json + player/<id>.json")
 

@@ -142,6 +142,10 @@ def main() -> None:
     talent = shooting_model.fit_cached(seasons, names)[1][
         ["player_id", "gsax_per100", "gsax_per100_se", "gsax_saved"]]
     g = g.merge(talent, on="player_id", how="left")
+    # goals attributed (defense only): a goalie adds no offense; his value IS goals prevented above
+    # expected = shrunk GSAx (zero = saved exactly as the shots' xG predicted, an absolute attribution
+    # — not vs the average goalie). gprev60 is the per-60 rate; g_net the actual season total.
+    g["gprev60"] = np.where(g.toi_s > 0, g.gsax_saved * 3600.0 / g.toi_s, np.nan)
 
     # percentiles within the single goalie pool (eligible = enough shots faced)
     elig = g[g.sa >= MIN_SHOTS_FACED]
@@ -178,6 +182,9 @@ def main() -> None:
             "gsax60": _f(r.gsax60, 2), "hd_sv_pct": _f(r.hd_sv_pct, 4),
             "qs": int(r.qs), "rbs": int(r.rbs), "qs_pct": _f(r.qs_pct, 3),
             **{f"{m}_pct": _f(getattr(r, f"{m}_pct"), 0) for m in GOALIE_METRICS},
+            # player-value fields (parallel to skaters): added=0, prevented=net=shrunk GSAx total
+            "g_added": 0.0, "g_prevented": _f(r.gsax_saved, 1), "g_net": _f(r.gsax_saved, 1),
+            "gnet_pg": _f(r.gsax_saved / r.gp if r.gp else None, 3), "gprev60": _f(r.gprev60, 3),
         })
 
         # danger + situation splits — shots/Sv% over shots on goal, GSAx over the Fenwick set
@@ -222,6 +229,10 @@ def main() -> None:
             "ga": int(r.ga), "shutouts": int(r.shutouts),
             "sv_pct": _f(r.sv_pct, 4), "gaa": _f(r.gaa, 2), "gsax": _f(r.xga - r.ga, 1),
             "metric": metric, "danger": danger, "situation": situation,
+            "value": {"rates": {"gprev60": {"v": _f(r.gprev60, 3), "pct": _f(r.gsax60_pct, 0)}},
+                      "actual": {"added": 0.0, "prevented": _f(r.gsax_saved, 1),
+                                 "net": _f(r.gsax_saved, 1),
+                                 "net_pg": _f(r.gsax_saved / r.gp if r.gp else None, 3)}},
             "shot_types": st.get(pid, []), "per_season": per_season,
             "games": glog.get(pid, []), "heat": heat.get(pid), "bio": bios.get(pid),
         }
