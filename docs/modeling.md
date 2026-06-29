@@ -226,6 +226,12 @@ PK allowed /60:   pk_allow60  = pp_off_base/4 + pk_def      (4 PK skaters share 
 frame. The baseline is split equally among that side's on-ice skaters; this is exactly the split that
 makes the shares reconcile to Σ xG (the per-player deviations already encode F-vs-D differences).
 
+On the site, each offense share is **presented split** into *scoring* (his own shots) and *playmaking*
+(creation for teammates) by a **proportional partition**: `φ = own ixG ÷ team on-ice xGF`, then
+`scoring = φ·create60 + finishing`, `playmaking = (1−φ)·create60`. Both are ≥0 and sum to
+`create60 + finishing`, so the net is unchanged. (Subtracting raw own ixG instead would be zero-sum and
+go negative for volume shooters — see [`metrics.md`](metrics.md).)
+
 **Actual goals** (season totals): scale each per-60 share by *real* role-TOI and sum across situations:
 
 ```

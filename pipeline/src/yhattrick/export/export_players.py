@@ -76,19 +76,20 @@ INDIVIDUAL = {
 # role-TOI, summed across situations, then per game). See docs/metrics.md.
 # name -> (higher_is_better, eligibility_toi_col, threshold) ---
 VALUE = {
-    "gnet_pg":     (True,  "ev_off_toi", MIN_EV_TOI),  # NET GOALS ADDED PER GAME — top-line metric
-    "ev5_net60":   (True,  "ev_off_toi", MIN_EV_TOI),  # 5v5 net goals added/60 (create+fin−allow)
-    "create60":    (True,  "ev_off_toi", MIN_EV_TOI),  # 5v5 goals created/60 (attributed share, ≥0)
-    "allow60":     (False, "ev_def_toi", MIN_EV_TOI),  # 5v5 goals allowed/60 (share, lower is better)
-    "pp_create60": (True,  "pp_off_toi", 40),          # power-play goals created/60 (attributed share)
-    "pk_allow60":  (False, "pk_def_toi", 40),          # penalty-kill goals allowed/60 (lower is better)
-    "pen_net60":   (True,  "toi_all", INDIV_TOI_MIN),  # net penalty goals/60 ((drawn−taken)×value)
-    "g_net":       (True,  "ev_off_toi", MIN_EV_TOI),  # actual net goals (window total, all situations)
+    "gnet_pg":         (True,  "ev_off_toi", MIN_EV_TOI),  # NET GOALS ADDED PER GAME — top-line metric
+    "scoring60":       (True,  "ev_off_toi", MIN_EV_TOI),  # 5v5 own-shot production/60 (ixG + finishing)
+    "playmaking60":    (True,  "ev_off_toi", MIN_EV_TOI),  # 5v5 creation for teammates/60 (on-ice − own ixG)
+    "allow60":         (False, "ev_def_toi", MIN_EV_TOI),  # 5v5 goals allowed/60 (share, lower is better)
+    "pp_scoring60":    (True,  "pp_off_toi", 40),          # power-play own-shot production/60
+    "pp_playmaking60": (True,  "pp_off_toi", 40),          # power-play creation for teammates/60
+    "pk_allow60":      (False, "pk_def_toi", 40),          # penalty-kill goals allowed/60 (lower is better)
+    "pen_net60":       (True,  "toi_all", INDIV_TOI_MIN),  # net penalty goals/60 ((drawn−taken)×value)
+    "g_net":           (True,  "ev_off_toi", MIN_EV_TOI),  # actual net goals (window total, all situations)
 }
 # value fields carried into the index row (scalars; percentiles added for the VALUE keys above)
-VALUE_COLS = ["gnet_pg", "gcreate_pg", "gallow_pg", "ev5_net60", "create60", "allow60",
-              "pp_create60", "pk_allow60", "pen_net60", "g_created", "g_allowed", "g_fin",
-              "g_pen", "g_net"]
+VALUE_COLS = ["gnet_pg", "gcreate_pg", "gallow_pg", "scoring60", "playmaking60", "allow60",
+              "pp_scoring60", "pp_playmaking60", "pk_allow60", "pen_net60",
+              "g_created", "g_allowed", "g_fin", "g_pen", "g_net"]
 
 # box-score columns carried into the per-season detail
 BOX_COLS = ["gp", "toi_min", "g", "a1", "a2", "points", "sog", "icf", "blocks",
@@ -242,10 +243,14 @@ def shots_by_strength(seasons) -> pd.DataFrame:
     hn, an = pd.to_numeric(parts[0], errors="coerce"), pd.to_numeric(parts[1], errors="coerce")
     shooter_n = np.where(df.is_home == 1, hn, an)
     opp_n = np.where(df.is_home == 1, an, hn)
+    is5 = (df.strength.values == "5v5").astype(float)
+    ispp = ((shooter_n == 5) & (opp_n == 4)).astype(float)
+    # shot counts and own expected goals (ixG), split 5v5 / power play — ixG isolates the player's
+    # own-shot offense so Playmaking = on-ice offense − own ixG (see value_table / docs/metrics.md)
     out = pd.DataFrame({"player_id": df.shooter_id.astype(int).values,
-                        "shots5": (df.strength.values == "5v5").astype(float),
-                        "shotspp": ((shooter_n == 5) & (opp_n == 4)).astype(float)})
-    return out.groupby("player_id", as_index=False)[["shots5", "shotspp"]].sum()
+                        "shots5": is5, "shotspp": ispp,
+                        "ixg5": is5 * df.xg.values, "ixgpp": ispp * df.xg.values})
+    return out.groupby("player_id", as_index=False)[["shots5", "shotspp", "ixg5", "ixgpp"]].sum()
 
 
 def penalty_value(seasons, allbox: pd.DataFrame) -> float:
@@ -285,9 +290,9 @@ def value_table(pooled: pd.DataFrame, shots_strength: pd.DataFrame, pen_v: float
     See docs/metrics.md."""
     cols = ["player_id", "ev_off", "ev_def", "ev_off_toi", "pp_off", "pk_def", "pp_off_toi",
             "pk_def_toi", "ev_off_base", "pp_off_base", "fin_per100", "fin_goals", "gp",
-            "toi_all", "pen_drawn60", "pen_taken60"]
+            "toi_all", "pen_drawn60", "pen_taken60", "ev_xgf60", "pp_xgf60"]
     df = pooled[cols].merge(shots_strength, on="player_id", how="left")
-    for c in cols[1:] + ["shots5", "shotspp"]:
+    for c in cols[1:] + ["shots5", "shotspp", "ixg5", "ixgpp"]:
         df[c] = df[c].fillna(0.0)
     safe = lambda num, den: np.where(den > 0, num / np.where(den == 0, np.nan, den), 0.0)
     alpha = df.fin_per100 / 100.0                 # finishing goals per shot
@@ -295,6 +300,9 @@ def value_table(pooled: pd.DataFrame, shots_strength: pd.DataFrame, pen_v: float
     ppblocks = df.pp_off_toi / 60.0
     pkblocks = df.pk_def_toi / 60.0
     fin5_60 = safe(alpha * df.shots5, blocks5)     # 5v5 finishing goals / 60
+    finpp_60 = safe(alpha * df.shotspp, ppblocks)  # power-play finishing goals / 60
+    ixg5_60 = safe(df.ixg5, blocks5)               # his own 5v5 expected goals / 60
+    ixgpp_60 = safe(df.ixgpp, ppblocks)            # his own power-play expected goals / 60
     pen_blocks = df.toi_all / 60.0                 # all-situations ice time in 60-min blocks (pen rates' base)
     pen_add = df.pen_drawn60 * pen_blocks * pen_v   # goals from penalties drawn (= drawn count × V)
     pen_sub = df.pen_taken60 * pen_blocks * pen_v   # goal cost of penalties taken
@@ -304,12 +312,20 @@ def value_table(pooled: pd.DataFrame, shots_strength: pd.DataFrame, pen_v: float
     allow60 = df.ev_off_base / 5.0 + df.ev_def     # 5v5 opponent xG he allows (his share); lower better
     pp_create60 = df.pp_off_base / 5.0 + df.pp_off  # power-play xG created (5 PP skaters share)
     pk_allow60 = df.pp_off_base / 4.0 + df.pk_def   # penalty-kill xG allowed (4 PK skaters share)
+    # Offense split into scoring (his own shots) and playmaking (creation for teammates) by
+    # PROPORTION: φ = his own ixG ÷ team on-ice xGF = the fraction of on-ice chances that were his
+    # own shots. Scoring = φ·offense + finishing; Playmaking = (1−φ)·offense. Both ≥0, and they sum
+    # to offense + finishing, so this is a positive partition with no double-count and the net is
+    # unchanged. φ is a partition of his ISOLATED offense (not a marginal estimate). See docs/metrics.md.
+    phi5 = np.clip(safe(ixg5_60, df.ev_xgf60), 0.0, 1.0)
+    phipp = np.clip(safe(ixgpp_60, df.pp_xgf60), 0.0, 1.0)
     out = pd.DataFrame({"player_id": df.player_id})
-    out["create60"] = create60
+    out["scoring60"] = phi5 * create60 + fin5_60
+    out["playmaking60"] = (1.0 - phi5) * create60
     out["allow60"] = allow60
-    out["pp_create60"] = pp_create60
+    out["pp_scoring60"] = phipp * pp_create60 + finpp_60
+    out["pp_playmaking60"] = (1.0 - phipp) * pp_create60
     out["pk_allow60"] = pk_allow60
-    out["ev5_net60"] = create60 + fin5_60 - allow60   # baseline cancels: = ev_off + fin − ev_def
     out["pen_net60"] = (df.pen_drawn60 - df.pen_taken60) * pen_v   # net penalty goals / 60 (all situations)
     # actual-goal totals (deployment-weighted, summed across situations) — the attribution ledger
     out["g_created"] = create60 * blocks5 + pp_create60 * ppblocks
@@ -550,12 +566,13 @@ def main() -> None:
                          "fin_goals": _rnd(getattr(r, "fin_goals"), 1)},
             "value": {
                 "rates": {
-                    "create60":    {"v": valval(r, "create60"), "pct": getattr(r, "create60_pct")},
-                    "allow60":     {"v": valval(r, "allow60"), "pct": getattr(r, "allow60_pct")},
-                    "ev5_net60":   {"v": valval(r, "ev5_net60"), "pct": getattr(r, "ev5_net60_pct")},
-                    "pp_create60": {"v": valval(r, "pp_create60"), "pct": getattr(r, "pp_create60_pct")},
-                    "pk_allow60":  {"v": valval(r, "pk_allow60"), "pct": getattr(r, "pk_allow60_pct")},
-                    "pen_net60":   {"v": valval(r, "pen_net60"), "pct": getattr(r, "pen_net60_pct")},
+                    "scoring60":       {"v": valval(r, "scoring60"), "pct": getattr(r, "scoring60_pct")},
+                    "playmaking60":    {"v": valval(r, "playmaking60"), "pct": getattr(r, "playmaking60_pct")},
+                    "allow60":         {"v": valval(r, "allow60"), "pct": getattr(r, "allow60_pct")},
+                    "pp_scoring60":    {"v": valval(r, "pp_scoring60"), "pct": getattr(r, "pp_scoring60_pct")},
+                    "pp_playmaking60": {"v": valval(r, "pp_playmaking60"), "pct": getattr(r, "pp_playmaking60_pct")},
+                    "pk_allow60":      {"v": valval(r, "pk_allow60"), "pct": getattr(r, "pk_allow60_pct")},
+                    "pen_net60":       {"v": valval(r, "pen_net60"), "pct": getattr(r, "pen_net60_pct")},
                 },
                 "actual": {
                     "create_pg": valval(r, "gcreate_pg"), "allow_pg": valval(r, "gallow_pg"),

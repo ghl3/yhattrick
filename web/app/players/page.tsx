@@ -19,9 +19,9 @@ const VIEWS: Record<View, MetricCol[]> = {
   value: [
     { key: "gnet_pg", label: "Net G/G", title: "Net goals added per game (top-line modeled value)", fmt: num2 },
     { key: "g_net", label: "Net G", title: "Net goals added — window total, all situations", fmt: num1 },
-    { key: "create60", label: "EV Off", title: "Even-strength offense: expected goals created per 60, his share", fmt: num2 },
-    { key: "allow60", label: "EV Def", title: "Even-strength defense: expected goals allowed per 60, his share (lower is better)", fmt: num2 },
-    { key: "pp_create60", label: "PP Off", title: "Power-play offense: expected goals created per 60, his share", fmt: num2 },
+    { key: "scoring60", label: "Scoring", title: "Scoring: goals from his own shots per 60 (expected value + finishing)", fmt: num2 },
+    { key: "playmaking60", label: "Playmaking", title: "Playmaking: expected goals he creates for teammates per 60 (on-ice offense − own shots)", fmt: num2 },
+    { key: "allow60", label: "Defense", title: "Defense: expected goals allowed per 60 at 5-on-5, his share (lower is better)", fmt: num2 },
     { key: "pk_allow60", label: "PK Def", title: "Penalty-kill defense: expected goals allowed per 60, his share (lower is better)", fmt: num2 },
     { key: "pen_net60", label: "Pen", title: "Net penalty goals per 60 (drawn − taken × penalty value)", fmt: num2 },
   ],

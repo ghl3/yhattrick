@@ -102,9 +102,11 @@ export type OniceKey =
 export type IndividualKey =
   | "shots60" | "xg_per_shot" | "ixg60" | "fin_per100"
   | "g60" | "a60" | "pen_drawn60" | "pen_taken60";
-// player value: goals attributed, play-time-independent per-60 shares (by situation)
+// player value: goals attributed, play-time-independent per-60 shares (by situation). Offense is
+// split into scoring (own shots) and playmaking (creation for teammates).
 export type ValueRateKey =
-  | "create60" | "allow60" | "ev5_net60" | "pp_create60" | "pk_allow60" | "pen_net60";
+  | "scoring60" | "playmaking60" | "allow60"
+  | "pp_scoring60" | "pp_playmaking60" | "pk_allow60" | "pen_net60";
 
 export interface PlayerRow {
   id: number;
@@ -167,10 +169,11 @@ export interface PlayerRow {
   gnet_pg: number | null;
   gcreate_pg: number | null;
   gallow_pg: number | null;
-  ev5_net60: number | null;
-  create60: number | null;
+  scoring60: number | null;
+  playmaking60: number | null;
   allow60: number | null;
-  pp_create60: number | null;
+  pp_scoring60: number | null;
+  pp_playmaking60: number | null;
   pk_allow60: number | null;
   pen_net60: number | null;
   g_created: number | null;
@@ -179,10 +182,11 @@ export interface PlayerRow {
   g_pen: number | null;
   g_net: number | null;
   gnet_pg_pct: number | null;
-  ev5_net60_pct: number | null;
-  create60_pct: number | null;
+  scoring60_pct: number | null;
+  playmaking60_pct: number | null;
   allow60_pct: number | null;
-  pp_create60_pct: number | null;
+  pp_scoring60_pct: number | null;
+  pp_playmaking60_pct: number | null;
   pk_allow60_pct: number | null;
   pen_net60_pct: number | null;
   g_net_pct: number | null;
@@ -290,10 +294,11 @@ export interface PlayerDetail {
 // finishing − allowed + penalties. See docs/metrics.md.
 export interface PlayerValue {
   rates: {
-    create60: OniceMetric;
+    scoring60: OniceMetric;
+    playmaking60: OniceMetric;
     allow60: OniceMetric;
-    ev5_net60: OniceMetric;
-    pp_create60: OniceMetric;
+    pp_scoring60: OniceMetric;
+    pp_playmaking60: OniceMetric;
     pk_allow60: OniceMetric;
     pen_net60: OniceMetric;
   };

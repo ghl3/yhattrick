@@ -237,12 +237,13 @@ function RadarTick({ x, y, textAnchor, payload }: { x: number; y: number; textAn
 // Axis names match the cards above (modeled impact + player stats).
 function ProfileRadar({ p }: { p: PlayerDetail }) {
   const data = [
-    { axis: "Even-Strength Offense", v: p.impact.ev_off.pct },
-    { axis: "Power-Play Offense", v: p.impact.pp_off.pct },
-    { axis: "Finishing", v: p.individual.fin_per100.pct },
+    { axis: "Scoring", v: p.value.rates.scoring60?.pct ?? null },
+    { axis: "Playmaking", v: p.value.rates.playmaking60?.pct ?? null },
+    { axis: "Power-Play Scoring", v: p.value.rates.pp_scoring60?.pct ?? null },
+    { axis: "Power-Play Playmaking", v: p.value.rates.pp_playmaking60?.pct ?? null },
     { axis: "Penalties", v: p.value.rates.pen_net60?.pct ?? null },
-    { axis: "Penalty-Kill Defense", v: p.impact.pk_def.pct },
-    { axis: "Even-Strength Defense", v: p.impact.ev_def.pct },
+    { axis: "Penalty-Kill Defense", v: p.value.rates.pk_allow60?.pct ?? null },
+    { axis: "Defense", v: p.value.rates.allow60?.pct ?? null },
   ].map((d) => ({ ...d, v: d.v ?? 0 }));
   return (
     <ResponsiveContainer width="100%" height={360}>
@@ -377,20 +378,19 @@ function SkaterView({ p }: { p: PlayerDetail }) {
 
         <div className="metric-grid">
           <ValueBox name="Net Goals Added per Game" group={p.group} v={p.value.actual.net_pg} pctile={p.value.actual.net_pg_pct} fmt={num2} unit="goals/game"
-            explain="Net goals created (team + personal scoring) minus goals allowed, per game."
-            footer={p.value.actual.net != null ? <span className="mb-toi"> · {signed(p.value.actual.net, num1)} total</span> : null} />
-          <OniceBox name="Even-Strength Offense" group={p.group} v={p.value.rates.create60?.v ?? null} pctile={p.value.rates.create60?.pct ?? null} fmt={num2} unit="goals/60" se={p.impact.ev_off.se} signed={false}
-            explain="His share of the expected goals created at 5-on-5 while he's on the ice." />
-          <OniceBox name="Even-Strength Defense" group={p.group} v={p.value.rates.allow60?.v ?? null} pctile={p.value.rates.allow60?.pct ?? null} fmt={num2} unit="goals/60" se={p.impact.ev_def.se} signed={false}
+            explain="Net goals created (scoring + playmaking) minus goals allowed, per game." />
+          <OniceBox name="Scoring" group={p.group} v={p.value.rates.scoring60?.v ?? null} pctile={p.value.rates.scoring60?.pct ?? null} fmt={num2} unit="goals/60" signed={false}
+            explain="Goals from his own shots — their expected value plus his finishing." />
+          <OniceBox name="Playmaking" group={p.group} v={p.value.rates.playmaking60?.v ?? null} pctile={p.value.rates.playmaking60?.pct ?? null} fmt={num2} unit="goals/60" signed={false}
+            explain="Expected goals he creates for teammates at 5-on-5 — the part of his offense that isn't his own shots." />
+          <OniceBox name="Defense" group={p.group} v={p.value.rates.allow60?.v ?? null} pctile={p.value.rates.allow60?.pct ?? null} fmt={num2} unit="goals/60" se={p.impact.ev_def.se} signed={false}
             explain="His share of the expected goals allowed at 5-on-5 while he's on the ice. Lower is better." />
-          <ValueBox name="Two-Way Rating" group={p.group} v={p.value.rates.ev5_net60?.v ?? null} pctile={p.value.rates.ev5_net60?.pct ?? null} fmt={num2} unit="goals/60"
-            explain="His all-around value at 5-on-5 per 60 — offense plus finishing, minus defense." />
-          <OniceBox name="Power-Play Offense" group={p.group} v={p.value.rates.pp_create60?.v ?? null} pctile={p.value.rates.pp_create60?.pct ?? null} fmt={num2} unit="goals/60" se={p.impact.pp_off.se} signed={false}
-            explain="His share of the expected goals created on the power play while he's on the ice." />
+          <OniceBox name="Power-Play Scoring" group={p.group} v={p.value.rates.pp_scoring60?.v ?? null} pctile={p.value.rates.pp_scoring60?.pct ?? null} fmt={num2} unit="goals/60" signed={false}
+            explain="Goals from his own shots on the power play — their expected value plus his finishing." />
+          <OniceBox name="Power-Play Playmaking" group={p.group} v={p.value.rates.pp_playmaking60?.v ?? null} pctile={p.value.rates.pp_playmaking60?.pct ?? null} fmt={num2} unit="goals/60" signed={false}
+            explain="Expected goals he creates for teammates on the power play — the part of his offense that isn't his own shots." />
           <OniceBox name="Penalty-Kill Defense" group={p.group} v={p.value.rates.pk_allow60?.v ?? null} pctile={p.value.rates.pk_allow60?.pct ?? null} fmt={num2} unit="goals/60" se={p.impact.pk_def.se} signed={false}
             explain="His share of the expected goals allowed on the penalty kill while he's on the ice. Lower is better." />
-          <OniceBox name="Finishing" group={p.group} v={p.individual.fin_per100.v} pctile={p.individual.fin_per100.pct} fmt={num2} unit="goals/100 shots" se={p.individual.fin_per100.se} signed
-            explain="Goals he scores above expected on his own shots." />
           <ValueBox name="Penalties" group={p.group} v={p.value.rates.pen_net60?.v ?? null} pctile={p.value.rates.pen_net60?.pct ?? null} fmt={num2} unit="goals/60"
             explain="Net goals from penalties he draws minus takes." />
         </div>

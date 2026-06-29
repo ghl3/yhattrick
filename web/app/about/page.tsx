@@ -29,10 +29,10 @@ export default function About() {
           </li>
           <li>
             <strong>Modeled impact.</strong>{" "}
-            For each skater, the goals we credit to him — the chances he creates and allows while on
-            the ice (his share, separated from linemates and competition), his finishing (goals above
-            what his shots were worth), and penalties. Across the league these credits sum to actual
-            goals; each is shown with units and a within-position percentile.
+            For each skater, the goals we credit to him — split into scoring (his own shots),
+            playmaking (chances he creates for teammates), defense (chances he prevents), and
+            penalties, separated from linemates and competition. Across the league these credits sum
+            to actual goals; each is shown with units and a within-position percentile.
           </li>
           <li>
             <strong>Descriptive stats.</strong> Box score, on-ice team rates (xG, Corsi, shares), and

@@ -86,18 +86,25 @@ All modeled cards show a **unit** in small text after the number, a **within-pos
 | Card | Formula | Unit | Scope | Zero means |
 |---|---|---|---|---|
 | **Net Goals Added per Game** | `(g_created + g_fin − g_allowed + g_pen) / GP` | goals/game | all situations, deployment-weighted | break-even |
-| **Two-Way Rating** | `create60 + finishing − allow60` | goals/60 | 5v5 | break-even |
-| **Even-Strength Offense** | `baseline/5 + ev_off` | goals/60 | 5v5, on-ice share (incl. his own shots) | created no chances |
-| **Even-Strength Defense** | `baseline/5 + ev_def` | goals/60 | 5v5, on-ice share; **lower is better** | allowed no chances |
-| **Power-Play Offense** | `pp_baseline/5 + pp_off` | goals/60 | power play | created no chances |
+| **Scoring** | `φ · offense + finishing` | goals/60 | 5v5, his own shots | no own-shot value |
+| **Playmaking** | `(1 − φ) · offense` | goals/60 | 5v5, creation for teammates | no creation for teammates |
+| **Defense** | `baseline/5 + ev_def` | goals/60 | 5v5, on-ice share; **lower is better** | allowed no chances |
+| **Power-Play Scoring** | `φ_pp · pp_offense + pp finishing` | goals/60 | power play, his own shots | no own-shot value |
+| **Power-Play Playmaking** | `(1 − φ_pp) · pp_offense` | goals/60 | power play, creation for teammates | no creation for teammates |
 | **Penalty-Kill Defense** | `pp_baseline/4 + pk_def` | goals/60 | penalty kill; **lower is better** | allowed no chances |
-| **Finishing** | `fin_per100` = goals − xG on his shots, per 100 | goals/100 shots | his own shots, all situations | finished as expected |
 | **Penalties** | `(drawn − taken) × V`, `V ≈ 0.14` | goals/60 | all situations | neutral |
 
-`Offense + Finishing − Defense + Penalties = Net` (summed across situations, deployment-weighted, per
-game). Offense already contains his own shots' xG; **Finishing** adds the goals-above-xG residual on top
-(no double count). There is no separate "Scoring" card — it would just be Offense's own-shot slice plus
-Finishing, double-counting both.
+`offense = baseline/5 + ev_off` is his isolated on-ice offense share (= the old "Even-Strength Offense");
+`φ = his own ixG ÷ team on-ice xGF` is the fraction of on-ice chances that were his own shots.
+
+**Scoring + Playmaking = offense + finishing** (the offensive term of the ledger), so the Net is
+unchanged. The split is a **positive partition**: `φ ∈ [0,1]`, so both pieces are ≥ 0 — Scoring is the
+own-shot share of his isolated offense (plus all his finishing), Playmaking is the rest (creation for
+teammates). We split the *isolated* offense proportionally rather than subtracting raw own xG from it:
+the latter is zero-sum (raw own production can exceed a volume shooter's isolated share, forcing
+negative "playmaking"), whereas the proportional partition is always positive and still additive. It is
+a partition of his isolated value, not a marginal teammate-uplift estimate (which would reintroduce
+negatives for shot-heavy players).
 
 Note on penalty-kill: a PK skater is on the ice for goals against, so his Penalty-Kill Defense number is
 large by role; his *skill* shows as being **below** the PK baseline (a low number). Good penalty-killers
