@@ -51,7 +51,7 @@ from scipy import sparse
 from scipy.linalg import cho_factor, cho_solve
 from sklearn.model_selection import GroupKFold
 
-from . import config as C
+from .. import config as C
 
 MIN_STINT_S = 10         # drop sub-10s line-change stints (extreme per-60 rates, ~no signal)
 # λ grid as multipliers of the median player-column curvature (median nonzero diag of ZᵀWZ).

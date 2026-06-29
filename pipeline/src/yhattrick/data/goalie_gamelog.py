@@ -29,7 +29,7 @@ import json
 import numpy as np
 import pandas as pd
 
-from . import config as C
+from .. import config as C
 
 _SOG = ("shot-on-goal", "goal")
 # Hockey-Reference quality-start thresholds (on the game's actual save percentage)

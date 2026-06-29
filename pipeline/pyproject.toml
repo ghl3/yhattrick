@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-yhattrick-fetch = "yhattrick.download:main"
+yhattrick-fetch = "yhattrick.data.download:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]

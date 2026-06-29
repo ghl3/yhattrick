@@ -31,7 +31,7 @@ import argparse
 import numpy as np
 import pandas as pd
 
-from . import config as C
+from .. import config as C
 
 _SOG = ("shot-on-goal", "goal")
 HD_THRESH = 0.15

@@ -18,7 +18,7 @@ import re
 
 from bs4 import BeautifulSoup
 
-from . import config as C
+from .. import config as C
 
 # td classes that make up a shift block: the player header + the 5 data columns
 _CELL_CLASSES = ["playerHeading + border", "lborder + bborder"]

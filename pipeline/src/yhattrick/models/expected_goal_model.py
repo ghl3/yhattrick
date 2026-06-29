@@ -28,8 +28,8 @@ Outputs:
   web/public/data/xg_model.json        payload for the model-exploration page
 
 Usage:
-  uv run python -m yhattrick.xg                 # all available seasons, pooled
-  uv run python -m yhattrick.xg --season 2024
+  uv run python -m yhattrick.models.expected_goal_model                 # all available seasons, pooled
+  uv run python -m yhattrick.models.expected_goal_model --season 2024
 """
 from __future__ import annotations
 
@@ -43,9 +43,9 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 from sklearn.model_selection import GroupKFold
 
-from . import config as C
-from . import shot_geom as G
-from .shot_geom import GOAL_X
+from .. import config as C
+from ..data import shot_geom as G
+from ..data.shot_geom import GOAL_X
 
 ROYAL_ROAD_S = 4.0       # window for a cross-slot (royal-road) pass to count
 N_SPLITS = 5             # GroupKFold folds (grouped by game)

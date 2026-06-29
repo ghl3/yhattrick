@@ -19,9 +19,9 @@ from collections import Counter, defaultdict
 
 import pandas as pd
 
-from . import config as C
+from .. import config as C
 from .clean import _downloaded_game_ids
-from .player_onice_model import MIN_STINT_S   # same stint filter the model uses, for a fair cross-check
+from ..models.player_onice_model import MIN_STINT_S   # same stint filter the model uses, for a fair cross-check
 
 # counting stats tallied from pbp (points is derived). so_* are shootout-only and kept separate
 # from the flow-play totals (shootout is a tiebreaker, not real-play offence).

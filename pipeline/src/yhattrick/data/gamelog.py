@@ -18,7 +18,7 @@ import json
 
 import pandas as pd
 
-from . import config as C
+from .. import config as C
 
 # events whose primary_player_id is a "shot on goal" for the shooter (goals count as shots on goal)
 _SOG_TYPES = ("shot-on-goal", "goal")

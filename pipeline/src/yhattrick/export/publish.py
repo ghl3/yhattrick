@@ -26,7 +26,7 @@ import gzip
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from . import config as C
+from .. import config as C
 
 PREFIX = "game"  # objects live at game/<id>.json to match NEXT_PUBLIC_GAME_DATA_BASE=.../game
 _ENV = ("R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY")

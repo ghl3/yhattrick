@@ -35,7 +35,7 @@ import pandas as pd
 import pytest
 
 from yhattrick import config as C
-from yhattrick.stints import (
+from yhattrick.data.stints import (
     assign_other, assign_shotlike, build_stints_for_game, classify_onice_match,
     drop_foreign_shifts, other_stint_index, personnel_per_stint, shot_stint_index, stint_bounds,
     teams_reconcile,

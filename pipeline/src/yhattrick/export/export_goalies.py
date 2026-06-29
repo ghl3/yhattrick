@@ -20,10 +20,10 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 
-from . import config as C
-from . import goalie
+from .. import config as C
+from ..models import goalie
 from . import goalie_heatmap
-from .player_onice_model import roster_names
+from ..models.player_onice_model import roster_names
 from .export_players import _dump, player_bios
 
 MIN_SHOTS_FACED = 1000   # shots faced to be ranked (percentile pool) — a meaningful workload

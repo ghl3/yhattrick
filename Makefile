@@ -41,60 +41,60 @@ FAMILY ?= gaussian        # response family for `make model`: gaussian | tweedie
 all: clean-data xg stints box model finishing games gamelog players goalie goalie-gamelog goalie-box goalies
 
 fetch:
-	$(RUN) yhattrick.download all 2>&1 | tee $(LOGDIR)/download.log
+	$(RUN) yhattrick.data.download all 2>&1 | tee $(LOGDIR)/download.log
 
 fetch-season:
-	$(RUN) yhattrick.download games --season $(SEASON) 2>&1 | tee $(LOGDIR)/download.log
+	$(RUN) yhattrick.data.download games --season $(SEASON) 2>&1 | tee $(LOGDIR)/download.log
 
 fetch-handedness:
-	$(RUN) yhattrick.download handedness 2>&1 | tee $(LOGDIR)/download.log
+	$(RUN) yhattrick.data.download handedness 2>&1 | tee $(LOGDIR)/download.log
 
 fetch-htmlshifts:
-	$(RUN) yhattrick.download htmlshifts 2>&1 | tee $(LOGDIR)/download.log
+	$(RUN) yhattrick.data.download htmlshifts 2>&1 | tee $(LOGDIR)/download.log
 
 clean-data:
-	$(RUN) yhattrick.clean 2>&1 | tee $(LOGDIR)/clean.log
+	$(RUN) yhattrick.data.clean 2>&1 | tee $(LOGDIR)/clean.log
 
 stints:
-	$(RUN) yhattrick.stints 2>&1 | tee $(LOGDIR)/stints.log
+	$(RUN) yhattrick.data.stints 2>&1 | tee $(LOGDIR)/stints.log
 
 box:
-	$(RUN) yhattrick.aggregates 2>&1 | tee $(LOGDIR)/box.log
+	$(RUN) yhattrick.data.aggregates 2>&1 | tee $(LOGDIR)/box.log
 
 model:
-	$(RUN) yhattrick.player_onice_model --pool --family $(FAMILY) 2>&1 | tee $(LOGDIR)/model.log
+	$(RUN) yhattrick.models.player_onice_model --pool --family $(FAMILY) 2>&1 | tee $(LOGDIR)/model.log
 
 finishing:
-	$(RUN) yhattrick.finishing --pool 2>&1 | tee $(LOGDIR)/finishing.log
+	$(RUN) yhattrick.models.finishing --pool 2>&1 | tee $(LOGDIR)/finishing.log
 
 xg:
-	$(RUN) yhattrick.xg --pool 2>&1 | tee $(LOGDIR)/xg.log
+	$(RUN) yhattrick.models.expected_goal_model --pool 2>&1 | tee $(LOGDIR)/xg.log
 
 games:
-	$(RUN) yhattrick.export_games 2>&1 | tee $(LOGDIR)/games.log
+	$(RUN) yhattrick.export.export_games 2>&1 | tee $(LOGDIR)/games.log
 
 gamelog:
-	$(RUN) yhattrick.gamelog 2>&1 | tee $(LOGDIR)/gamelog.log
+	$(RUN) yhattrick.data.gamelog 2>&1 | tee $(LOGDIR)/gamelog.log
 
 players:
-	$(RUN) yhattrick.export_players 2>&1 | tee $(LOGDIR)/players.log
+	$(RUN) yhattrick.export.export_players 2>&1 | tee $(LOGDIR)/players.log
 
 # goalie save-talent model (GSAx) + descriptive box/splits/gamelog -> site JSON (depends on stints + games)
 goalie:
-	$(RUN) yhattrick.goalie --pool 2>&1 | tee $(LOGDIR)/goalie.log
+	$(RUN) yhattrick.models.goalie --pool 2>&1 | tee $(LOGDIR)/goalie.log
 
 goalie-gamelog:
-	$(RUN) yhattrick.goalie_gamelog 2>&1 | tee $(LOGDIR)/goalie_gamelog.log
+	$(RUN) yhattrick.data.goalie_gamelog 2>&1 | tee $(LOGDIR)/goalie_gamelog.log
 
 goalie-box:
-	$(RUN) yhattrick.goalie_aggregates 2>&1 | tee $(LOGDIR)/goalie_box.log
+	$(RUN) yhattrick.data.goalie_aggregates 2>&1 | tee $(LOGDIR)/goalie_box.log
 
 goalies:
-	$(RUN) yhattrick.export_goalies 2>&1 | tee $(LOGDIR)/goalies.log
+	$(RUN) yhattrick.export.export_goalies 2>&1 | tee $(LOGDIR)/goalies.log
 
-# upload the heavy per-game JSON to Cloudflare R2 (needs R2_* env vars; see yhattrick.publish)
+# upload the heavy per-game JSON to Cloudflare R2 (needs R2_* env vars; see yhattrick.export.publish)
 publish-data:
-	$(RUN) yhattrick.publish 2>&1 | tee $(LOGDIR)/publish.log
+	$(RUN) yhattrick.export.publish 2>&1 | tee $(LOGDIR)/publish.log
 
 # alias kept for muscle memory
 pipeline: all

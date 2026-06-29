@@ -23,8 +23,8 @@ import shutil
 import numpy as np
 import pandas as pd
 
-from . import config as C
-from .stints import shot_stint_index, other_stint_index, _SHOTLIKE
+from .. import config as C
+from ..data.stints import shot_stint_index, other_stint_index, _SHOTLIKE
 
 
 def _sanitize(o):

@@ -32,7 +32,7 @@ import bisect
 import numpy as np
 import pandas as pd
 
-from . import config as C
+from .. import config as C
 
 ONICE_MATCH_FLOOR = 0.97  # fraction of shots whose on-ice counts must match the pbp situationCode
 

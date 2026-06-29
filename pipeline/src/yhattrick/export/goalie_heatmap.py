@@ -14,7 +14,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from . import config as C
+from .. import config as C
 
 # offensive half: from just inside the blue line to the end boards; full ice width
 XLO, XHI, YLO, YHI = 25.0, 100.0, -42.5, 42.5

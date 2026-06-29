@@ -18,11 +18,11 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 
-from . import config as C
-from . import player_onice_model as model
-from . import finishing
+from .. import config as C
+from ..models import player_onice_model as model
+from ..models import finishing
 from . import player_heatmap
-from .aggregates import ONICE_COLS
+from ..data.aggregates import ONICE_COLS
 
 FULL_MIN_GAMES = 200     # treat a season as "full" (skip tiny dev slices)
 MIN_EV_TOI = 100         # minutes of 5v5 ice time to appear in the table

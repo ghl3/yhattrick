@@ -24,7 +24,7 @@ import time
 import pandas as pd
 import requests
 
-from . import config as C
+from .. import config as C
 
 
 def _session() -> requests.Session:

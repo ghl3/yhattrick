@@ -76,7 +76,7 @@ def _corrupt_games(season: int) -> set[int]:
     """Games with a corrupt shiftchart (foreign teams spliced in, bug #2). The old code built garbage
     overloaded stints for them; the refactor cleans the foreign shifts (or skips if unrecoverable).
     Either way the game's rows intentionally differ, so they're excluded from BOTH golden and new."""
-    from yhattrick.stints import teams_reconcile
+    from yhattrick.data.stints import teams_reconcile
     ev = pd.read_parquet(C.INTERIM / "events" / f"{season}.parquet", columns=["nhl_game_id", "team", "is_home"])
     sh = pd.read_parquet(C.INTERIM / "shifts" / f"{season}.parquet", columns=["nhl_game_id", "team"])
     home = ev[ev.is_home].groupby("nhl_game_id").team.first().to_dict()

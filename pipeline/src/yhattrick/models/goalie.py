@@ -36,7 +36,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from . import config as C
+from .. import config as C
 from .player_onice_model import roster_names
 
 MIN_SHOTS_EST = 1000     # min shots faced to enter the talent-variance (k) estimation
