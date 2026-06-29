@@ -26,7 +26,7 @@ starting year).
   the instant of every shot. The JSON feed (`stats/rest`) stopped being populated ~spring 2025, so
   for games where it returns 0 rows we parse the **HTML TOI reports** (`TH`=home, `TV`=away) instead
   (`html_shifts.py`), resolving sweater number → playerId via that game's pbp rosterSpots. Same shift
-  schema either way. See `docs/03-joins-and-ids.md`.
+  schema either way. See `docs/joins-and-ids.md`.
 - **NHL player landing** gives shooter handedness, the one player attribute the pbp lacks, used
   only for the off-wing shot-geometry feature.
 

@@ -1,6 +1,10 @@
 """Isolated-impact model: each player's per-60 effect on the expected-goal rate, adjusted for
 who else is on the ice (linemates and competition), by strength state.
 
+This is STAGE 1 (creation & suppression) of the additive theory of goals — see docs/modeling.md.
+It decomposes each stint's Σ xG across the on-ice skaters (offense creates, defense suppresses);
+STAGE 2 (turning that xG into goals via finishing + goaltending) is shooting_model.py.
+
 Method (a regularized adjusted plus-minus). A stint contributes one or two observations: the
 response is a team's expected goals per 60 minutes during the stint; the predictors are indicator
 columns for each on-ice player — an OFFENCE column when his team is attacking and a DEFENCE

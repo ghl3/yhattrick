@@ -20,7 +20,7 @@ import pandas as pd
 
 from .. import config as C
 from ..models import player_onice_model as model
-from ..models import finishing
+from ..models import shooting_model
 from . import player_heatmap
 from ..data.aggregates import ONICE_COLS
 
@@ -301,12 +301,14 @@ def main() -> None:
     pooled = pooled.merge(onice_table(allbox), on="player_id", how="left")
     add_onice_percentiles(pooled)
 
-    # individual (on-puck) metrics: shooting, finishing, scoring, penalties — all situations
-    fin_k = finishing.pooled_k(seasons, names)
-    pooled = pooled.merge(individual_table(finishing.fit_cached(seasons, names), career_totals(allbox)),
+    # individual (on-puck) metrics: shooting, finishing, scoring, penalties — all situations.
+    # finishing now comes from the joint shooter×goalie shooting_model (goalie-adjusted).
+    fin_lams = shooting_model.pooled_lambdas(seasons, names)
+    fin_df, _ = shooting_model.fit_cached(seasons, names)
+    pooled = pooled.merge(individual_table(fin_df, career_totals(allbox)),
                           on="player_id", how="left")
     add_individual_percentiles(pooled)
-    fin_season = {s: finishing.season_finishing(s, names, fin_k) for s in seasons}
+    fin_season = {s: shooting_model.season_finishing(s, names, fin_lams) for s in seasons}
 
     simp = {s: season_impact(s, names) for s in seasons}
     mates = linemates(seasons, names)

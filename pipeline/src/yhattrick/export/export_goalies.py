@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 
 from .. import config as C
-from ..models import goalie
+from ..models import shooting_model
 from . import goalie_heatmap
 from ..models.player_onice_model import roster_names
 from .export_players import _dump, player_bios
@@ -137,8 +137,9 @@ def main() -> None:
     boxes = _load_boxes(seasons)
     g = _rates(_career(boxes))
 
-    # shrunken save-talent rating (GSAx/100, with CI) from goalie.py
-    talent = goalie.fit_cached(seasons, names)[
+    # shrunken save-talent rating (GSAx/100, with CI) from the joint shooter×goalie shooting_model
+    # (now shooter-adjusted). shooting_model.fit_cached returns (finishing, goalie) tables.
+    talent = shooting_model.fit_cached(seasons, names)[1][
         ["player_id", "gsax_per100", "gsax_per100_se", "gsax_saved"]]
     g = g.merge(talent, on="player_id", how="left")
 
@@ -151,9 +152,9 @@ def main() -> None:
     st = _shottypes(seasons)
     glog = _gamelogs(seasons)
     heat = goalie_heatmap.build(seasons)
-    # per-season shrunk GSAx/100 (pooled k) for the trend
-    k = goalie.pooled_k(seasons, names)
-    season_talent = {s: goalie.season_goalie(s, names, k) for s in seasons}
+    # per-season shrunk GSAx/100 (pooled penalties) for the trend
+    lams = shooting_model.pooled_lambdas(seasons, names)
+    season_talent = {s: shooting_model.season_goalie(s, names, lams) for s in seasons}
     bios = player_bios({int(i) for i in g.player_id})
 
     C.SITE_JSON.mkdir(parents=True, exist_ok=True)

@@ -15,7 +15,7 @@ make fetch-handedness           # player landing json (handedness)
 make fetch-htmlshifts           # HTML TOI reports where the JSON shift feed is empty
 ```
 
-Under the hood these call `python -m yhattrick.download {games|handedness|all}` (also exposed as
+Under the hood these call `python -m yhattrick.data.download {games|handedness|all}` (also exposed as
 the `yhattrick-fetch` console script). Minimal parameters by design: seasons come from
 `config.SEASONS`, and the **game list is derived from the NHL schedule** (the season's teams from
 the standings endpoint, then each club's `club-schedule-season`, regular-season games only), so
@@ -34,12 +34,12 @@ data/                                   # top-level, shared
       htmlshifts/T{H,V}<game6>.HTM      # HTML TOI reports — shift fallback where the JSON is empty
       pbp/<gameId>.json                 # play-by-play events per game (~130 KB)
       players/<playerId>.json           # player landing (handedness)
-  interim/                              # typed per-source tables (see 04-processing.md)
+  interim/                              # typed per-source tables (see processing.md)
   processed/                            # joined/derived tables
 ```
 
 `raw/` is **never mutated** by later stages — parsing/joining writes to `interim/` and
-`processed/` (see [04-processing.md](04-processing.md)). One file per game keeps the fetch
+`processed/` (see [processing.md](processing.md)). One file per game keeps the fetch
 resumable and lets us re-pull a single game if needed.
 
 ## Resumability & politeness
@@ -53,5 +53,5 @@ resumable and lets us re-pull a single game if needed.
 
 ## Sources
 
-See [01-data-sources.md](01-data-sources.md) for the exact URLs and why each source is used,
-and [03-joins-and-ids.md](03-joins-and-ids.md) for the game-id / clock conventions.
+See [data-sources.md](data-sources.md) for the exact URLs and why each source is used,
+and [joins-and-ids.md](joins-and-ids.md) for the game-id / clock conventions.

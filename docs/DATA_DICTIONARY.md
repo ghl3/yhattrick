@@ -1,7 +1,7 @@
 # Data dictionary
 
 Column-level reference for every stage. Seasons are named by starting year (`2021` = 2021-22).
-All times are **game-elapsed seconds** unless noted. See [04-processing.md](04-processing.md)
+All times are **game-elapsed seconds** unless noted. See [processing.md](processing.md)
 for how each table is produced.
 
 ## raw/ (immutable, as downloaded)
@@ -69,17 +69,29 @@ allowed). Stored as **sums** so seasons pool additively; `export_players` divide
 rates (`ev_xgf60`, `ev_cf60`, …) and shares (`ev_xgshare`, `ev_cfshare`), each with a
 within-position percentile.
 
-## data/models/finishing_&lt;seasons&gt;.parquet — one row per shooter
+## data/models/shooting_finishing_&lt;seasons&gt;.parquet — one row per shooter
+## data/models/shooting_goalie_&lt;seasons&gt;.parquet — one row per goalie
 
-Finishing (goals above expected, regressed), pooled over all in-play regular-season unblocked
-shots, empty-net + shootout excluded: `player_id`, `name`, `pos`, `shots` (F, unblocked),
-`ixg` (Σ xg), `goals` (G), `fin_per100` (= (G−ixG)/(F+k)·100, the shrunk headline),
-`fin_per100_se`, `fin_goals` (= (G−ixG)·F/(F+k), shrunk total for WAR), `fin_goals_se`. Shrinkage
-`k` and its EB diagnostics are logged to `logs/model/finishing_<seasons>.meta.json`.
+Both are produced by the joint shooter×goalie shooting model (`shooting_model.py`), which fits the
+per-shot residual `goal − xG = μ + α_shooter + γ_goalie` by crossed ridge (see docs/modeling.md).
+Finishing and GSAx are thus mutually adjusted (each controls for the other actor), and additive on
+the goals scale.
+
+- **finishing**: `player_id`, `name`, `pos`, `shots` (F, unblocked), `ixg` (Σ xg), `goals` (G),
+  `fin_per100` (= α·100, goalie-adjusted finishing per 100 shots), `fin_per100_se`, `fin_goals`
+  (= α·shots, shrunk total for WAR), `fin_goals_se`. With no shooter↔goalie crossing this reduces
+  exactly to the old `(G−ixG)·F/(F+k)`.
+- **goalie**: `player_id`, `name`, `pos`, `sa` (Fenwick shots faced), `xga` (Σ xg), `ga` (goals
+  allowed), `gsax_per100` (= −γ·100, shooter-adjusted goals saved per 100), `gsax_per100_se`,
+  `gsax_saved` (= −γ·sa), `gsax_saved_se`.
+
+Shrinkage penalties (λ = EB `k`), the league reconciliation (`goals = Σxg + Σμ + Σfinishing +
+Σgoalie`), and convergence are logged to `logs/model/shooting_model_<seasons>.meta.json`. The
+team-season reconciliation is in `data/models/goal_accounting_<seasons>.parquet`.
 
 ## processed/xg/&lt;season&gt;.parquet — one row per modeled shot
 
-Per-shot expected-goals predictions from `xg.py` (regular-season, goalie-present, unblocked shots):
+Per-shot expected-goals predictions from `expected_goal_model.py` (regular-season, goalie-present, unblocked shots):
 `nhl_game_id`, `event_idx`, `time_g`, `shooter_id`, `goal`, `distance`, `abs_angle`, `shot_type`,
 `strength_diff`, `rebound`, `rush`, and `xg` (calibrated goal probability). Model artifacts live in
 `data/models/xg_booster.json` + `xg_isotonic.json`; metrics/reliability/importances are in
@@ -128,7 +140,7 @@ Context & volume (all from our own pbp; stored for current and future modeling):
 
 ## web/public/data/xg_model.json — xG model exploration page (`/xg`)
 
-Written by `xg.py`. `seasons`, `n_shots`, `n_goals`; `metrics` (out-of-fold `auc`, `logloss`,
+Written by `expected_goal_model.py`. `seasons`, `n_shots`, `n_goals`; `metrics` (out-of-fold `auc`, `logloss`,
 `brier`, `total_xg`, `total_goals`, `n`); `reliability[]` (`p_lo`, `p_hi`, `pred`, `obs`, `n`);
 `importances[]` (`feature`, `gain`); `heatmap` (`x`, `y` grid axes, `shot_types`, `strengths`, and
 `combos` keyed `"${shot_type}|${rebound}|${rush}|${strength}"` → `[y][x]` predicted-xG grid for the

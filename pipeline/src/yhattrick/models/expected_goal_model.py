@@ -1,5 +1,10 @@
 """Expected-goals (xG) model: the probability an unblocked shot becomes a goal.
 
+This xG is the calibrated chance-quality baseline of the additive theory of goals (see
+docs/modeling.md): STAGE 1 (player_onice_model) distributes it across on-ice skaters, and STAGE 2
+(shooting_model) splits the residual goal − xG between shooter and goalie. Strength (man-advantage)
+is an xG feature, so the conversion layer can pool all situations.
+
 For every unblocked shot (shot-on-goal / missed-shot / goal) the model estimates goal probability
 from the shot's geometry and pre-shot context, all computed from the NHL play-by-play event stream
 (`interim/events`).

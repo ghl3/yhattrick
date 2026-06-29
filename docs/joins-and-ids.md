@@ -24,7 +24,7 @@ Shots come from the pbp (each carries its coordinates and `situationCode`). We r
 identities from the shiftcharts: a player is on the ice at game-second `t` for a team iff one of
 their shift intervals satisfies `start_g <= t < end_g`. A **stint** is a maximal interval between
 consecutive shift boundaries, over which the on-ice set is constant (see
-[04-processing.md](04-processing.md)).
+[processing.md](processing.md)).
 
 **Shift source.** The JSON shiftcharts feed (`api.nhle.com/stats/rest`) stopped being populated
 ~spring 2025 (returns 0 rows for late-2024-25 + 2025-26). For those games `clean_shifts` falls back

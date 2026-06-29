@@ -13,11 +13,11 @@
 #   make box                        # per-player box score (our pbp)    -> data/interim/box
 #   make model                      # fit isolated-impact models        -> data/models + logs/model
 #   make model FAMILY=tweedie       # same, but the Tweedie-GLM response (default: gaussian)
-#   make finishing                  # fit finishing (goals above expected) -> data/models + logs/model
+#   make shooting                   # joint shooter×goalie fit: finishing + GSAx -> data/models + logs/model
+#   make goal-accounting            # reconcile goals = xG + μ + finishing + goalie -> data/models + logs
 #   make games                      # per-game timelines (site JSON)    -> data/games (+ web sync)
 #   make gamelog                    # per-player game log                -> data/processed/gamelog
 #   make players                    # player ratings + box (site JSON)  -> web/public/data
-#   make goalie                     # fit goalie save talent (GSAx)     -> data/models + logs/model
 #   make goalie-box                 # per-goalie box + splits           -> data/processed/goalie_box
 #   make goalie-gamelog             # per-goalie game log               -> data/processed/goalie_gamelog
 #   make goalies                    # goalie ratings + detail (site JSON) -> web/public/data
@@ -36,9 +36,9 @@ SEASON ?=
 FAMILY ?= gaussian        # response family for `make model`: gaussian | tweedie
 
 .DEFAULT_GOAL := all
-.PHONY: all fetch fetch-season fetch-handedness fetch-htmlshifts clean-data xg stints box model finishing games gamelog players goalie goalie-box goalie-gamelog goalies publish-data pipeline web-dev web-build
+.PHONY: all fetch fetch-season fetch-handedness fetch-htmlshifts clean-data xg stints box model shooting goal-accounting games gamelog players goalie-box goalie-gamelog goalies publish-data pipeline web-dev web-build
 
-all: clean-data xg stints box model finishing games gamelog players goalie goalie-gamelog goalie-box goalies
+all: clean-data xg stints box model shooting goal-accounting games gamelog players goalie-gamelog goalie-box goalies
 
 fetch:
 	$(RUN) yhattrick.data.download all 2>&1 | tee $(LOGDIR)/download.log
@@ -64,8 +64,13 @@ box:
 model:
 	$(RUN) yhattrick.models.player_onice_model --pool --family $(FAMILY) 2>&1 | tee $(LOGDIR)/model.log
 
-finishing:
-	$(RUN) yhattrick.models.finishing --pool 2>&1 | tee $(LOGDIR)/finishing.log
+# joint shooter×goalie shot-conversion fit: finishing (shooters) + GSAx (goalies) in one model
+shooting:
+	$(RUN) yhattrick.models.shooting_model --pool 2>&1 | tee $(LOGDIR)/shooting.log
+
+# reconcile the additive identity goals = xG + μ + finishing + goalie (league + team-season QC)
+goal-accounting:
+	$(RUN) yhattrick.models.goal_accounting 2>&1 | tee $(LOGDIR)/goal_accounting.log
 
 xg:
 	$(RUN) yhattrick.models.expected_goal_model --pool 2>&1 | tee $(LOGDIR)/xg.log
@@ -79,10 +84,7 @@ gamelog:
 players:
 	$(RUN) yhattrick.export.export_players 2>&1 | tee $(LOGDIR)/players.log
 
-# goalie save-talent model (GSAx) + descriptive box/splits/gamelog -> site JSON (depends on stints + games)
-goalie:
-	$(RUN) yhattrick.models.goalie --pool 2>&1 | tee $(LOGDIR)/goalie.log
-
+# goalie descriptive box/splits/gamelog -> site JSON (the modeled GSAx now lives in `make shooting`)
 goalie-gamelog:
 	$(RUN) yhattrick.data.goalie_gamelog 2>&1 | tee $(LOGDIR)/goalie_gamelog.log
 

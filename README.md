@@ -30,5 +30,5 @@ make web-dev          # http://localhost:5173
 ```
 
 Requirements: `uv`, Node 22+. Data sources and the join contract are documented in
-[`docs/01-data-sources.md`](docs/01-data-sources.md) and
-[`docs/03-joins-and-ids.md`](docs/03-joins-and-ids.md).
+[`docs/data-sources.md`](docs/data-sources.md) and
+[`docs/joins-and-ids.md`](docs/joins-and-ids.md).

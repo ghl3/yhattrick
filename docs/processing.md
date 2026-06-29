@@ -13,7 +13,7 @@ RAW  data/raw/ (immutable — NHL APIs)
 INTERIM  data/interim/
   events · shifts · roster · shots   (shots = unblocked, oriented geometry, situationCode strength)
         │
-        │  xg.py   (features from the event stream; XGBoost + isotonic)
+        │  expected_goal_model.py   (features from the event stream; XGBoost + isotonic)
         ▼
   processed/xg   (per-shot xg, keyed by nhl_game_id + event_idx)
         ├──▶ data/models/xg_booster.json, xg_isotonic.json
@@ -25,10 +25,12 @@ PROCESSED  data/processed/
   stints · shots_onice
         ├─ aggregates.py ──────────▶ interim/box                     (descriptive box score)
         ├─ player_onice_model.py ──▶ data/models/{ev, pp_pk}         (RAPM isolated impact)
-        ├─ finishing.py  ⟵ processed/xg ──▶ data/models/finishing    (goals above expected)
+        ├─ shooting_model.py ⟵ processed/shots_onice ──▶ data/models/shooting_{finishing,goalie}
+        │                                              (joint shooter×goalie: finishing + GSAx)
+        ├─ goal_accounting.py ─────▶ data/models/goal_accounting  (goals = xG + μ + finishing + goalie)
         └─ export_games.py ────────▶ data/games/ ──▶ web/public/data/  (games.json, game/<id>.json)
 
-export_players.py   ⟵ interim/box + data/models/{ev, pp_pk, finishing}
+export_players.py   ⟵ interim/box + data/models/{ev, pp_pk, shooting_finishing}
         ──▶ web/public/data/   (players.json, player/<id>.json)      → /players, /player, /teams
 ```
 
@@ -51,7 +53,7 @@ per-shot id.
 
 Builds stints per game from shift boundaries, attributes shots (and their model `xg`, joined from
 `processed/xg` on `nhl_game_id`+`event_idx`) to stints, and runs the on-ice health asserts (see
-[03-joins-and-ids.md](03-joins-and-ids.md)).
+[joins-and-ids.md](joins-and-ids.md)).
 
 | Output | Grain | Notes |
 |---|---|---|
@@ -62,7 +64,7 @@ Builds stints per game from shift boundaries, attributes shots (and their model 
 
 Assembles the per-game timeline and aggregates, writes canonical JSON to `data/games/`, then
 **syncs** a copy to `web/public/data/` (the only place the website reads). See
-[05-website.md](05-website.md) for the shapes.
+[website.md](website.md) for the shapes.
 
 | Output | Contents |
 |---|---|
