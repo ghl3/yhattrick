@@ -72,6 +72,23 @@ def load_shots_teamed(seasons) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
+def decompose(shots: pd.DataFrame, mu: float, alpha: dict, gamma: dict) -> pd.DataFrame:
+    """Attach the per-shot additive decomposition ``goal ≈ xg + mu + finishing + goalie``.
+
+    Pure (no I/O): `shots` needs `shooter_id`, `goalie_id`, `xg`; `alpha` maps shooter_id ->
+    finishing goals/shot (α), `gamma` maps goalie_id -> goalie effect goals/shot (γ, < 0 when the
+    goalie saves). Returns a copy with `mu`/`fin`/`gol`/`recon` columns added — `recon` is the
+    reconstructed goal contribution whose league sum equals actual goals to rounding (free intercept).
+    Shared by `reconcile()` (real fit) and the validator/tests (synthetic), so the identity is checked
+    against the same arithmetic the pipeline ships."""
+    s = shots.copy()
+    s["mu"] = mu
+    s["fin"] = s.shooter_id.map(alpha)
+    s["gol"] = s.goalie_id.map(gamma)                            # < 0 when the goalie saves
+    s["recon"] = s.xg + s.mu + s.fin + s.gol                     # reconstructed goal contribution
+    return s
+
+
 def reconcile(seasons, names=None) -> tuple[pd.DataFrame, dict]:
     """Build the per-shot additive decomposition and roll it up to team-season. Returns the team
     table (GF/GA reconstruction with components) and a league-level summary dict."""
@@ -83,11 +100,7 @@ def reconcile(seasons, names=None) -> tuple[pd.DataFrame, dict]:
     alpha = dict(zip(fin.player_id, fin.fin_per100 / 100.0))      # finishing goals / shot
     gamma = dict(zip(gl.player_id, -gl.gsax_per100 / 100.0))      # goalie effect goals / shot (gsax = -gamma)
 
-    s = load_shots_teamed(seasons)
-    s["mu"] = mu
-    s["fin"] = s.shooter_id.map(alpha)
-    s["gol"] = s.goalie_id.map(gamma)                            # < 0 when the goalie saves
-    s["recon"] = s.xg + s.mu + s.fin + s.gol                     # reconstructed goal contribution
+    s = decompose(load_shots_teamed(seasons), mu, alpha, gamma)
 
     # offence: each team's shots -> goals for, expected goals for, finishing, opponent-goalie effect
     off = s.groupby(["season", "off_team"]).agg(

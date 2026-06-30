@@ -1,0 +1,84 @@
+"""Tests for the player value synthesis (yhattrick.export.export_players).
+
+`value_table` turns the model coefficients into goals-attributed: absolute created/allowed shares,
+the scoring/playmaking partition, finishing, penalties, and the net. The invariants we lock down:
+the ledger (g_net = created + fin − allowed + pen), the positive partition (scoring + playmaking =
+offense + finishing), and the 5v5 baseline cancellation in the net. Plus JSON sanitization and the
+penalty-value derivation."""
+from __future__ import annotations
+
+import math
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from yhattrick.export import export_players as E
+from yhattrick import config as C
+
+
+def _pooled(**over):
+    base = dict(player_id=1, ev_off=0.3, ev_def=-0.2, ev_off_toi=600.0, pp_off=0.0, pk_def=0.0,
+                pp_off_toi=0.0, pk_def_toi=0.0, ev_off_base=2.5, pp_off_base=6.0, fin_per100=2.0,
+                fin_goals=1.5, gp=10, toi_all=120.0, pen_drawn60=0.0, pen_taken60=0.0,
+                ev_xgf60=3.0, pp_xgf60=8.0)
+    base.update(over)
+    return pd.DataFrame([base])
+
+
+def _shots(**over):
+    base = dict(player_id=1, shots5=50.0, shotspp=0.0, ixg5=1.5, ixgpp=0.0)
+    base.update(over)
+    return pd.DataFrame([base])
+
+
+def test_value_ledger_g_net():
+    out = E.value_table(_pooled(), _shots(), pen_v=0.14).iloc[0]
+    # created = (2.5/5+0.3)*10 = 8.0 ; allowed = (2.5/5−0.2)*10 = 3.0 ; fin = 1.5 ; pen = 0
+    assert out.g_created == pytest.approx(8.0)
+    assert out.g_allowed == pytest.approx(3.0)
+    assert out.g_fin == pytest.approx(1.5)
+    assert out.g_net == pytest.approx(out.g_created + out.g_fin - out.g_allowed + out.g_pen)
+    assert out.g_net == pytest.approx(6.5)
+
+
+def test_scoring_plus_playmaking_equals_offense_plus_finishing():
+    out = E.value_table(_pooled(), _shots(), pen_v=0.14).iloc[0]
+    create60 = 2.5 / 5 + 0.3            # 0.8
+    fin5_60 = (2.0 / 100) * 50 / (600 / 60)   # alpha·shots5 / blocks5 = 0.1
+    assert out.scoring60 + out.playmaking60 == pytest.approx(create60 + fin5_60)
+    assert out.scoring60 >= 0 and out.playmaking60 >= 0      # positive partition
+
+
+def test_phi_is_clipped_to_unit_interval():
+    # huge own ixG vs tiny on-ice xGF would push φ>1; it must clip so playmaking stays ≥ 0
+    out = E.value_table(_pooled(ev_xgf60=0.1), _shots(ixg5=99.0), pen_v=0.14).iloc[0]
+    assert out.playmaking60 >= 0
+
+
+def test_5v5_baseline_cancels_in_the_net():
+    # with no PP/PK/penalties/finishing, the net is the pure marginal differential (ev_off − ev_def)·blocks5
+    out = E.value_table(_pooled(fin_goals=0.0), _shots(), pen_v=0.14).iloc[0]
+    blocks5 = 600 / 60
+    assert out.g_net == pytest.approx((0.3 - (-0.2)) * blocks5)
+
+
+def test_dump_sanitizes_nan_and_numpy():
+    s = E._dump({"a": float("nan"), "b": np.int64(3), "c": np.float64(1.5), "d": [np.bool_(True)]})
+    assert '"a":null' in s
+    assert '"b":3' in s and '"c":1.5' in s and '"d":[true]' in s
+    assert "NaN" not in s        # strict JSON, no bare NaN token
+
+
+def test_penalty_value_from_data(tmp_path, monkeypatch):
+    monkeypatch.setattr(C, "PROCESSED", tmp_path)
+    d = tmp_path / "shots_onice"
+    d.mkdir()
+    # two power-play goals (home 5v4 shooter), no shorthanded goals
+    shots = pd.DataFrame({
+        "is_home": [1, 1, 0], "strength": ["5v4", "5v4", "5v5"], "goal": [1, 1, 1],
+    })
+    shots.to_parquet(d / "2024.parquet")
+    allbox = pd.DataFrame({"pen_drawn": [6, 4]})       # 10 drawn penalties league-wide
+    v = E.penalty_value([2024], allbox)
+    assert v == pytest.approx((2 - 0) / 10)            # (PP GF − SH GF) / drawn = 0.2
