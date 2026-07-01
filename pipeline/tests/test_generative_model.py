@@ -1,5 +1,5 @@
-"""Tests for the experimental generative (Poisson) model. Requires JAX (the `experimental` group),
-so the whole module skips when JAX isn't installed:  uv run --group experimental pytest.
+"""Tests for the shooter-resolved generative model. Requires JAX (the `experimental` group), so the
+whole module skips when JAX isn't installed:  uv run --group experimental pytest.
 
 Synthetic tests are self-contained; a data-gated test exercises the real loaders/fit when a
 processed/ tree is present."""
@@ -14,103 +14,137 @@ from yhattrick import config as C
 from yhattrick.models import generative_model as G
 
 
-# ── synthetic builders ──────────────────────────────────────────────────────────────────────────
+# ── synthetic builders (shooter-resolved: 1 focal shooter + 4 teammates + 5 defenders per row) ────
 
-def _synth_rate(P=80, n=40000, dur=45.0, seed=0, r_disp=None):
+def _synth_create(P=70, n=120000, dur=45.0, seed=4, r_disp=None):
+    """Rate data where each focal shooter's Fenwick count is lifted by teammates' `create` and
+    suppressed by defenders' `def`, PLUS ng goal creator labels drawn from softmax([create_0, create]).
+    Exercises the unified fit end-to-end: the dense count signal AND the sparse goal-assist credit both
+    inform `create`. r_disp (Gamma shape) makes the counts overdispersed (Poisson-Gamma == NB)."""
     rng = np.random.default_rng(seed)
-    a = rng.normal(0, 0.30, P)
-    d = rng.normal(0, 0.30, P)
-    mu0 = np.log(30.0)                                   # baseline ~30 shots/60
-    off = np.array([rng.choice(P, 5, replace=False) for _ in range(n)])
+    shoot = rng.normal(0, 0.30, P)
+    create = rng.normal(0, 0.30, P)
+    deff = rng.normal(0, 0.30, P)
+    create_0, mu0 = -0.5, np.log(11.0)                       # unassisted baseline; ~11 shots/60 focal
+    atk = np.array([rng.choice(P, 5, replace=False) for _ in range(n)])
     dff = np.array([rng.choice(P, 5, replace=False) for _ in range(n)])
-    Xctx = rng.integers(0, 2, (n, 1)).astype(float)     # one varying context col (home), true coef 0
-    eta = mu0 + a[off].sum(1) + d[dff].sum(1)
-    lam = np.exp(eta) * dur / 3600.0
+    shooter, team = atk[:, 0], atk[:, 1:5]
+    Xctx = rng.integers(0, 2, (n, 1)).astype(float)          # one varying context col (home), true coef 0
+    lam = np.exp(mu0 + shoot[shooter] + create[team].sum(1) + deff[dff].sum(1)) * dur / 3600.0
     if r_disp is None:
         count = rng.poisson(lam).astype(float)
-    else:                                               # overdispersed: Poisson-Gamma (=NB)
+    else:
         count = rng.poisson(lam * rng.gamma(r_disp, 1.0 / r_disp, size=n)).astype(float)
-    R = {"players": list(range(P)), "idx": {p: p for p in range(P)},
-         "off_idx": off, "def_idx": dff, "Xctx": Xctx, "count": count,
+    R = {"players": list(range(P)), "idx": {p: p for p in range(P)}, "shooter_idx": shooter,
+         "team_idx": team, "def_idx": dff, "Xctx": Xctx, "count": count,
          "offset": np.full(n, np.log(dur / 3600.0)), "dur": np.full(n, dur),
-         "def_goalie": np.zeros(n, dtype=object)}
-    return R, a, d
+         "def_goalie": np.zeros(n, dtype=object), "toi": np.full(P, 1e6)}
+    ng = 9000
+    gt = np.array([rng.choice(P, 4, replace=False) for _ in range(ng)])
+    pr = np.exp(np.concatenate([np.full((ng, 1), create_0), create[gt]], 1)); pr /= pr.sum(1, keepdims=True)
+    gc = np.array([rng.choice(5, p=pr[i]) for i in range(ng)]).astype(np.int64)   # 0=unassist, 1..4 col
+    return R, gt, gc, create, shoot, deff
 
 
-def _synth_quality(P=60, n=60000, seed=1):
+def _synth_creator(P=60, n=150000, seed=2):
+    """Latent-creator quality data: each shot has ONE creator drawn from softmax([create_0, create]);
+    only that creator's qcreate lifts the shot's danger. Goals reveal the creator (the primary
+    assister); non-goal shots keep it latent (marginalized at fit time)."""
     rng = np.random.default_rng(seed)
-    u = rng.normal(0, 0.30, P)
-    w = rng.normal(0, 0.30, P)
-    mu0 = np.log(0.07 / 0.93)                            # baseline mean xG ~0.07
-    off = np.array([rng.choice(P, 5, replace=False) for _ in range(n)])
+    qshoot = rng.normal(0, 0.20, P)
+    qcreate = rng.normal(0, 0.30, P)
+    qdef = rng.normal(0, 0.20, P)
+    create = rng.normal(0, 0.60, P)                          # creator-identity propensity
+    create_0 = -0.5                                          # unassisted baseline
+    mu_q = np.log(0.07 / 0.93)
+    atk = np.array([rng.choice(P, 5, replace=False) for _ in range(n)])
     dff = np.array([rng.choice(P, 5, replace=False) for _ in range(n)])
-    Xctx = rng.integers(0, 2, (n, 1)).astype(float)     # one varying context col (home), true coef 0
-    p = 1.0 / (1.0 + np.exp(-(mu0 + u[off].sum(1) + w[dff].sum(1))))
-    s = 12.0
-    xg = rng.beta(s * p, s * (1 - p))
+    shooter, team = atk[:, 0], atk[:, 1:5]
+    base = mu_q + qshoot[shooter] + qdef[dff].sum(1)
+    logit5 = np.concatenate([np.full((n, 1), create_0), create[team]], 1)
+    pr = np.exp(logit5); pr /= pr.sum(1, keepdims=True)
+    c = np.array([rng.choice(5, p=pr[i]) for i in range(n)])     # 0=unassisted, 1..4 teammate
+    tcreate = np.where(c == 0, 0.0, qcreate[team[np.arange(n), np.clip(c - 1, 0, 3)]])
+    qbar = 1.0 / (1.0 + np.exp(-(base + tcreate)))
+    xg = rng.beta(12 * qbar, 12 * (1 - qbar))
     y = np.log(np.clip(xg, 1e-6, 1 - 1e-6) / (1 - np.clip(xg, 1e-6, 1 - 1e-6)))
-    Q = {"off_idx": off, "def_idx": dff, "Xctx": Xctx, "y": y, "goal": rng.binomial(1, np.clip(xg, 0, 1))}
-    return Q, u, w
+    goal = rng.binomial(1, np.clip(qbar, 0, 1))
+    creator = np.where(goal == 1, np.where(c == 0, 4, c - 1), -1)   # goals observe creator; else latent
+    Q = {"shooter_idx": shooter, "team_idx": team, "def_idx": dff, "Xctx": np.zeros((n, 1)),
+         "y": y, "goal": goal, "creator": creator.astype(np.int64)}
+    return Q, qcreate, create
 
 
-# ── rate layer ────────────────────────────────────────────────────────────────────────────────
+# ── rate + credit layer (fit_rate_create) ─────────────────────────────────────────────────────────
 
-def test_rate_recovers_known_effects():
-    R, a, d = _synth_rate()
-    fit = G.fit_rate(R)
+def test_rate_create_recovers_shoot_create_def():
+    R, gt, gc, create, shoot, deff = _synth_create()
+    fit = G.fit_rate_create(R, gt, gc, shots_per_goal=16)
     assert fit["converged"]
-    assert np.corrcoef(fit["a"], a)[0, 1] > 0.8       # offense effects recovered
-    assert np.corrcoef(fit["d"], d)[0, 1] > 0.8       # defense effects recovered
+    assert np.corrcoef(fit["shoot"], shoot)[0, 1] > 0.8      # own-shot (scoring) volume
+    assert np.corrcoef(fit["create"], create)[0, 1] > 0.8    # teammate-lift + assist credit (playmaking)
+    assert np.corrcoef(fit["def"], deff)[0, 1] > 0.8         # defense volume
 
 
-def test_rate_reconciles_total_shots():
-    """A Poisson fit with a free intercept reproduces the total count (Σμ ≈ Σcount)."""
-    R, _, _ = _synth_rate()
-    fit = G.fit_rate(R)
-    eta = (fit["intercept"] + fit["a"][R["off_idx"]].sum(1) + fit["d"][R["def_idx"]].sum(1)
-           + R["Xctx"] @ fit["beta"])
+def test_rate_create_reconciles_total_shots():
+    R, gt, gc, _, _, _ = _synth_create()
+    fit = G.fit_rate_create(R, gt, gc, shots_per_goal=16)
+    eta = (fit["intercept"] + fit["shoot"][R["shooter_idx"]] + fit["create"][R["team_idx"]].sum(1)
+           + fit["def"][R["def_idx"]].sum(1) + R["Xctx"] @ fit["beta"])
     mu = np.exp(eta + R["offset"])
     assert abs(mu.sum() - R["count"].sum()) / R["count"].sum() < 0.01
 
 
-def test_rate_hessian_se_positive():
-    R, _, _ = _synth_rate()
-    fit = G.fit_rate(R)
-    assert np.all(fit["se_a"] > 0) and np.all(np.isfinite(fit["se_a"]))
+def test_rate_create_hessian_se_positive():
+    R, gt, gc, _, _, _ = _synth_create()
+    fit = G.fit_rate_create(R, gt, gc, shots_per_goal=16)
+    for key in ("se_shoot", "se_create", "se_def"):
+        assert np.all(fit[key] > 0) and np.all(np.isfinite(fit[key]))
+
+
+def test_shoot_and_create_are_separately_identified():
+    """The whole point of shooter-resolution: a player's OWN-shot loading and his TEAMMATE-lift loading
+    are different design columns, so recovering one does not just mirror the other."""
+    R, gt, gc, create, shoot, _ = _synth_create()
+    fit = G.fit_rate_create(R, gt, gc, shots_per_goal=16)
+    assert np.corrcoef(fit["shoot"], shoot)[0, 1] > abs(np.corrcoef(fit["shoot"], create)[0, 1]) + 0.3
 
 
 def test_nb_recovers_and_estimates_dispersion():
-    """On overdispersed (Poisson-Gamma) counts, NB recovers the effects and a finite positive r."""
-    R, a, d = _synth_rate(r_disp=2.0, seed=7)
-    fit = G.fit_rate(R, count_model="nb")
+    R, gt, gc, create, _, _ = _synth_create(r_disp=2.0, seed=7)
+    fit = G.fit_rate_create(R, gt, gc, shots_per_goal=16, count_model="nb")
     assert fit["converged"]
     assert fit["r"] is not None and np.isfinite(fit["r"]) and fit["r"] > 0
-    assert np.corrcoef(fit["a"], a)[0, 1] > 0.8
-    assert np.all(fit["se_a"] > 0)
+    assert np.corrcoef(fit["create"], create)[0, 1] > 0.8
+    assert np.all(fit["se_create"] > 0)
 
 
-# ── quality layer ───────────────────────────────────────────────────────────────────────────────
+# ── quality layer (latent creator) ────────────────────────────────────────────────────────────────
 
-def test_quality_recovers_and_is_mean_calibrated():
-    Q, u, w = _synth_quality()
-    fit = G.fit_quality(Q, P=len(u))
+def test_quality_creator_recovers_qcreate():
+    """Given the creator distribution, the quality fit recovers creation-quality qcreate from the
+    observed-creator goal quality + the marginalized non-goal quality."""
+    Q, qcreate, create = _synth_creator()
+    fit = G.fit_quality_creator(Q, P=len(qcreate), create=create, psi0=-0.5)
     assert fit["converged"]
-    assert np.corrcoef(fit["u"], u)[0, 1] > 0.8
-    # fractional-logit is mean-calibrated: mean σ(η̂) ≈ mean xG
-    eta = (fit["intercept"] + fit["u"][Q["off_idx"]].sum(1) + fit["w"][Q["def_idx"]].sum(1)
-           + Q["Xctx"] @ fit["beta"])
-    xg = 1.0 / (1.0 + np.exp(-Q["y"]))
-    assert abs(float(G._sigmoid(eta).mean()) - float(xg.mean())) < 1e-3
+    assert np.corrcoef(fit["qcreate"], qcreate)[0, 1] > 0.45
 
 
-# ── simulation ────────────────────────────────────────────────────────────────────────────────
+# ── attribution ───────────────────────────────────────────────────────────────────────────────────
 
-def test_simulate_count_matches_intensity():
-    """E[N] over many draws ≈ λ·t/3600 for a known intensity."""
-    rng = np.random.default_rng(3)
-    lam, t = 30.0, 60.0
-    draws = rng.poisson(lam * t / 3600.0, size=200000)
-    assert abs(draws.mean() - lam * t / 3600.0) < 0.01
+def test_player_values_merge_signs():
+    """Goal values move the right way: +shoot => more scoring, +create/+qcreate => more playmaking,
+    -def (suppression) => more positive defense value."""
+    P = 3
+    rate = {"intercept": np.log(8.0), "shoot": np.array([0.4, 0.0, 0.0]),
+            "create": np.array([0.0, 0.5, 0.0]), "def": np.array([0.0, 0.0, -0.4]), "psi0": -0.5}
+    qual = {"intercept": np.log(0.07 / 0.93), "qshoot": np.zeros(P),
+            "qcreate": np.array([0.0, 0.5, 0.0]), "qdef": np.zeros(P)}
+    conv = {"alpha": {}, "gamma": {}, "mu_c": 0.0}
+    v = G.player_values(rate, qual, conv, [0, 1, 2])
+    assert v["scoring"][0] == max(v["scoring"])          # player 0 (high shoot) tops scoring
+    assert v["playmaking"][1] == max(v["playmaking"])    # player 1 (high create + qcreate) tops playmaking
+    assert v["defense"][2] == max(v["defense"])          # player 2 (neg def) suppresses most
 
 
 # ── data-gated real fit ─────────────────────────────────────────────────────────────────────────
@@ -125,5 +159,11 @@ def test_real_fit_smoke():
     seasons = G.shooting_model.available_seasons()[-1:]
     R = G.rate_rows(seasons)
     assert R is not None and len(R["count"]) > 0
-    fit = G.fit_rate(R)
-    assert fit["converged"] and np.all(np.isfinite(fit["a"]))
+    assert R["team_idx"].shape[1] == 4 and R["def_idx"].shape[1] == 5
+    Q = G.quality_creator_rows(seasons, R["idx"])
+    gmask = Q["goal"] == 1
+    g_lab = Q["creator"][gmask]
+    g_cidx = np.where(g_lab == 4, 0, np.clip(g_lab, 0, 3) + 1).astype(np.int64)
+    fit = G.fit_rate_create(R, Q["team_idx"][gmask], g_cidx, shots_per_goal=G.SHOTS_PER_GOAL)
+    assert fit["converged"]
+    assert np.all(np.isfinite(fit["shoot"])) and np.all(np.isfinite(fit["create"]))
