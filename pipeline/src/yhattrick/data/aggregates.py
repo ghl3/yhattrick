@@ -87,8 +87,11 @@ def event_counts(gids: list[int]) -> pd.DataFrame:
 # the player was on the ice, plus on-ice TOI, so export can form per-60 rates and shares. Sums
 # (not rates) so seasons pool additively. EV has the full xG + Corsi family; special teams keeps
 # xG (PP offence, PK xG allowed).
+# ev_oz_starts / ev_dz_starts count 5v5 stints that began on an offensive- / defensive-zone faceoff
+# (for the player's deployment / zone-start share); on-the-fly and neutral starts are excluded.
 ONICE_COLS = ["ev_xgf_on", "ev_xga_on", "ev_cf_on", "ev_ca_on", "ev_onice_s",
-              "pp_xgf_on", "pp_onice_s", "pk_xga_on", "pk_onice_s"]
+              "pp_xgf_on", "pp_onice_s", "pk_xga_on", "pk_onice_s",
+              "ev_oz_starts", "ev_dz_starts"]
 _I = {c: i for i, c in enumerate(ONICE_COLS)}   # column -> accumulator index
 
 
@@ -107,6 +110,8 @@ def onice_xg(season: int) -> pd.DataFrame:
         df = df[~df.overload]
     XGF, XGA, CF, CA, EV = _I["ev_xgf_on"], _I["ev_xga_on"], _I["ev_cf_on"], _I["ev_ca_on"], _I["ev_onice_s"]
     PPX, PPT, PKX, PKT = _I["pp_xgf_on"], _I["pp_onice_s"], _I["pk_xga_on"], _I["pk_onice_s"]
+    OZ, DZ = _I["ev_oz_starts"], _I["ev_dz_starts"]
+    has_zone = "start_zone" in df.columns
     acc: dict[int, list] = defaultdict(lambda: [0.0] * len(ONICE_COLS))
     for s in df.itertuples():
         dur = float(s.duration_s)
@@ -117,6 +122,15 @@ def onice_xg(season: int) -> pd.DataFrame:
                 a = acc[int(pid)]; a[XGF] += hx; a[XGA] += ax; a[CF] += hc; a[CA] += ac; a[EV] += dur
             for pid in s.away_skaters:
                 a = acc[int(pid)]; a[XGF] += ax; a[XGA] += hx; a[CF] += ac; a[CA] += hc; a[EV] += dur
+            # zone start: start_zone is oriented to the home team, so home skaters take it as-is and
+            # away skaters get the flipped zone (their O is the home D). Only O/D faceoff starts count.
+            sz = s.start_zone if has_zone else None
+            if sz in ("O", "D"):
+                h_idx, a_idx = (OZ, DZ) if sz == "O" else (DZ, OZ)
+                for pid in s.home_skaters:
+                    acc[int(pid)][h_idx] += 1.0
+                for pid in s.away_skaters:
+                    acc[int(pid)][a_idx] += 1.0
         elif s.home_n != s.away_n:                       # special teams (5v4 / 4v5)
             if s.home_n > s.away_n:                       # home on the power play
                 for pid in s.home_skaters:

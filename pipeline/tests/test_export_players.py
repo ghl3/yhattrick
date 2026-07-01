@@ -82,3 +82,33 @@ def test_penalty_value_from_data(tmp_path, monkeypatch):
     allbox = pd.DataFrame({"pen_drawn": [6, 4]})       # 10 drawn penalties league-wide
     v = E.penalty_value([2024], allbox)
     assert v == pytest.approx((2 - 0) / 10)            # (PP GF − SH GF) / drawn = 0.2
+
+
+def test_career_totals_primary_assists_and_faceoffs():
+    box = pd.DataFrame([
+        dict(player_id=1, toi_s=600.0, g=2, a1=3, a2=1, pen_drawn=1, pen_taken=0, fo_won=10, fo_lost=6),
+        dict(player_id=1, toi_s=600.0, g=0, a1=1, a2=2, pen_drawn=0, pen_taken=1, fo_won=4, fo_lost=4),
+    ])
+    out = E.career_totals(box).set_index("player_id").loc[1]
+    assert out.c_a1 == 4          # primary assists summed (3 + 1)
+    assert out.c_a == 7           # total assists (a1 + a2)
+    assert out.c_fo == 24         # faceoffs taken (10 + 6 + 4 + 4)
+    assert out.fo_won == 14
+
+
+def test_individual_rates_primary_assists_and_faceoff_win():
+    career = pd.DataFrame([dict(player_id=1, toi_all=60.0, c_g=0.0, c_a=0.0, c_a1=2.0,
+                                c_pd=0.0, c_pt=0.0, fo_won=11.0, c_fo=20.0)])
+    fin = pd.DataFrame([dict(player_id=1, shots=0.0, ixg=0.0, fin_per100=0.0,
+                             fin_per100_se=0.0, fin_goals=0.0)])
+    out = E.individual_table(fin, career).set_index("player_id").loc[1]
+    assert out.a1_60 == pytest.approx(2.0)        # 2 primary assists in 60 min -> 2 / 60min
+    assert out.fo_win == pytest.approx(11 / 20)   # 11 of 20 draws won
+
+
+def test_onice_zone_start_share():
+    row = {c: 0.0 for c in E.ONICE_COLS}
+    row["ev_oz_starts"], row["ev_dz_starts"] = 6.0, 4.0
+    out = E.onice_table(pd.DataFrame([{"player_id": 1, **row}])).set_index("player_id").loc[1]
+    assert out.n_zs == pytest.approx(10.0)        # O + D faceoff starts
+    assert out.ozs == pytest.approx(0.6)          # O / (O + D)

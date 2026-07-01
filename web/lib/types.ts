@@ -101,7 +101,8 @@ export type OniceKey =
 // individual (on-puck) rates — the player's own shooting & production, all situations
 export type IndividualKey =
   | "shots60" | "xg_per_shot" | "ixg60" | "fin_per100"
-  | "g60" | "a60" | "pen_drawn60" | "pen_taken60";
+  | "g60" | "a60" | "a1_60" | "pen_drawn60" | "pen_taken60"
+  | "fo_win" | "ozs";
 // player value: goals attributed, play-time-independent per-60 shares (by situation). Offense is
 // split into scoring (own shots) and playmaking (creation for teammates).
 export type ValueRateKey =
@@ -155,16 +156,22 @@ export interface PlayerRow {
   fin_per100: number | null;
   g60: number | null;
   a60: number | null;
+  a1_60: number | null;
   pen_drawn60: number | null;
   pen_taken60: number | null;
+  fo_win: number | null;
+  ozs: number | null;
   shots60_pct: number | null;
   xg_per_shot_pct: number | null;
   ixg60_pct: number | null;
   fin_per100_pct: number | null;
   g60_pct: number | null;
   a60_pct: number | null;
+  a1_60_pct: number | null;
   pen_drawn60_pct: number | null;
   pen_taken60_pct: number | null;
+  fo_win_pct: number | null;
+  ozs_pct: number | null;
   // value: goals attributed — net per game (top line) + per-60 shares + window totals
   gnet_pg: number | null;
   gcreate_pg: number | null;
@@ -235,6 +242,15 @@ export interface SeasonRow {
   ev_def?: number | null;
   pp_off?: number | null;
   pk_def?: number | null;
+  // goals-attributed value (per season) — same metrics as the headline cards
+  gnet_pg?: number | null;
+  scoring60?: number | null;
+  playmaking60?: number | null;
+  allow60?: number | null;
+  pp_scoring60?: number | null;
+  pp_playmaking60?: number | null;
+  pk_allow60?: number | null;
+  pen_net60?: number | null;
   shots60?: number | null;
   xg_per_shot?: number | null;
   fin_per100?: number | null;

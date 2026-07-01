@@ -57,6 +57,8 @@ ONICE = {
 # eligibility_col, threshold) ---
 SHOTS_MIN = 150          # min unblocked shots to rank shot-based metrics
 INDIV_TOI_MIN = 200      # min all-situations minutes to rank production rates
+FO_MIN = 200             # min faceoffs taken to rank faceoff win %
+ZS_MIN = 200             # min 5v5 O/D-zone faceoff starts to rank zone-start %
 INDIVIDUAL = {
     "shots60":     (True,  "shots", SHOTS_MIN),        # unblocked shots / 60 (shot generation)
     "xg_per_shot": (True,  "shots", SHOTS_MIN),        # avg xG per shot (shot quality / danger)
@@ -64,8 +66,11 @@ INDIVIDUAL = {
     "fin_per100":  (True,  "shots", SHOTS_MIN),        # finishing: goals above expected / 100 shots
     "g60":         (True,  "toi_all", INDIV_TOI_MIN),  # goals / 60
     "a60":         (True,  "toi_all", INDIV_TOI_MIN),  # assists / 60
+    "a1_60":       (True,  "toi_all", INDIV_TOI_MIN),  # primary assists / 60 (more repeatable than total)
     "pen_drawn60": (True,  "toi_all", INDIV_TOI_MIN),  # penalties drawn / 60
     "pen_taken60": (False, "toi_all", INDIV_TOI_MIN),  # penalties taken / 60 (lower is better)
+    "fo_win":      (True,  "c_fo", FO_MIN),            # faceoff win % (fraction; ranked above FO_MIN)
+    "ozs":         (True,  "n_zs", ZS_MIN),            # offensive-zone-start % (deployment context, not a rating)
 }
 # --- player value: GOALS ATTRIBUTED. Every figure is goals we credit to the player; across the
 # league the shares reconcile to actual goals (xG is calibrated, finishing = goals − xG). Built from
@@ -94,6 +99,11 @@ VALUE_COLS = ["gnet_pg", "gcreate_pg", "gallow_pg", "scoring60", "playmaking60",
 # box-score columns carried into the per-season detail
 BOX_COLS = ["gp", "toi_min", "g", "a1", "a2", "points", "sog", "icf", "blocks",
             "hits", "takeaways", "giveaways", "fo_won", "fo_lost", "pen_taken", "pen_drawn"]
+
+# goals-attributed value metrics carried into the per-season detail (mirrors the headline cards so the
+# by-season table is consistent with them); computed per season by season_value().
+SEASON_VALUE_COLS = ["gnet_pg", "scoring60", "playmaking60", "allow60",
+                     "pp_scoring60", "pp_playmaking60", "pk_allow60", "pen_net60"]
 
 
 def _dump(obj) -> str:
@@ -173,6 +183,11 @@ def onice_table(allbox: pd.DataFrame) -> pd.DataFrame:
     out["ev_cfshare"] = share(s.ev_cf_on, s.ev_ca_on)
     out["pp_xgf60"] = per60(s.pp_xgf_on, s.pp_onice_s)
     out["pk_xga60"] = per60(s.pk_xga_on, s.pk_onice_s)
+    # offensive-zone-start share: O / (O + D) faceoff starts at 5v5. Classified as an individual
+    # (deployment) metric in INDIVIDUAL; n_zs is its eligibility volume. Counts come from the same
+    # on-ice stint sums, so they pool across seasons additively like the rest of ONICE_COLS.
+    out["n_zs"] = (s.ev_oz_starts + s.ev_dz_starts).values
+    out["ozs"] = share(s.ev_oz_starts, s.ev_dz_starts)
     return out.reset_index(drop=True)
 
 
@@ -186,15 +201,19 @@ def add_onice_percentiles(df: pd.DataFrame) -> None:
 
 def career_totals(allbox: pd.DataFrame) -> pd.DataFrame:
     """Per-player career sums needed for the individual rates (all-situations TOI + production)."""
+    cols = ["player_id", "toi_all", "c_g", "c_a", "c_a1", "c_pd", "c_pt", "fo_won", "c_fo"]
     if not len(allbox):
-        return pd.DataFrame(columns=["player_id", "toi_all", "c_g", "c_a", "c_pd", "c_pt"])
+        return pd.DataFrame(columns=cols)
     s = allbox.groupby("player_id").agg(
         toi_s=("toi_s", "sum"), c_g=("g", "sum"), a1=("a1", "sum"), a2=("a2", "sum"),
-        c_pd=("pen_drawn", "sum"), c_pt=("pen_taken", "sum")).reset_index()
+        c_pd=("pen_drawn", "sum"), c_pt=("pen_taken", "sum"),
+        fo_won=("fo_won", "sum"), fo_lost=("fo_lost", "sum")).reset_index()
     s["player_id"] = s.player_id.astype(int)
     s["toi_all"] = (s.toi_s / 60.0)                    # all-situations minutes
     s["c_a"] = s.a1 + s.a2
-    return s[["player_id", "toi_all", "c_g", "c_a", "c_pd", "c_pt"]]
+    s["c_a1"] = s.a1                                    # primary assists
+    s["c_fo"] = s.fo_won + s.fo_lost                    # faceoffs taken (win + loss) = volume gate
+    return s[cols]
 
 
 def individual_table(fin: pd.DataFrame, career: pd.DataFrame) -> pd.DataFrame:
@@ -211,8 +230,10 @@ def individual_table(fin: pd.DataFrame, career: pd.DataFrame) -> pd.DataFrame:
     df["xg_per_shot"] = np.where(df.shots > 0, df.ixg / df.shots.replace(0, np.nan), np.nan)
     df["g60"] = per60(df.c_g)
     df["a60"] = per60(df.c_a)
+    df["a1_60"] = per60(df.c_a1)
     df["pen_drawn60"] = per60(df.c_pd)
     df["pen_taken60"] = per60(df.c_pt)
+    df["fo_win"] = np.where(df.c_fo > 0, df.fo_won / df.c_fo.replace(0, np.nan), np.nan)
     return df
 
 
@@ -347,6 +368,32 @@ def add_value_percentiles(df: pd.DataFrame) -> None:
         df[f"{col}_pct"] = ((r if higher else 1 - r) * 100).round(0)
 
 
+def season_value(season: int, names: dict, pen_v: float, fin_s: pd.DataFrame, box_s: pd.DataFrame) -> pd.DataFrame:
+    """Per-season goals-attributed value (gnet_pg + per-60 rates), mirroring the pooled `value_table`
+    so the by-season table shows the SAME metrics as the headline cards. Single-season model fits are
+    noisier than the pooled window, so read these as a trend, not a precise decomposition."""
+    ev = model.fit_cached([season], model.SPECS["ev"], names)
+    pp = model.fit_cached([season], model.SPECS["pp_pk"], names)
+    if ev.empty or box_s is None or not len(box_s):
+        return pd.DataFrame(columns=["player_id"])
+    ps = ev.merge(pp.drop(columns=["name", "pos"], errors="ignore"), on="player_id", how="left")
+    ot = onice_table(box_s)[["player_id", "ev_xgf60", "pp_xgf60"]]   # on-ice xGF for the φ scoring/playmaking split
+    car = career_totals(box_s)[["player_id", "toi_all", "c_pd", "c_pt"]]
+    gp_s = box_s.groupby("player_id", as_index=False).gp.sum()
+    ps = ps.merge(ot, on="player_id", how="left").merge(car, on="player_id", how="left").merge(gp_s, on="player_id", how="left")
+    sec = ps.toi_all.fillna(0.0) * 60.0
+    rate = lambda n: np.where(sec > 0, n.fillna(0.0) * 3600.0 / sec.replace(0, np.nan), 0.0)
+    ps["pen_drawn60"], ps["pen_taken60"] = rate(ps.c_pd), rate(ps.c_pt)
+    if fin_s is not None and len(fin_s):
+        fs = fin_s.copy()
+        fs["fin_goals"] = (fs.fin_per100.fillna(0.0) / 100.0) * fs.shots.fillna(0.0)   # season_finishing omits fin_goals
+        ps = ps.merge(fs[["player_id", "fin_per100", "fin_goals"]], on="player_id", how="left")
+    else:
+        ps["fin_per100"], ps["fin_goals"] = 0.0, 0.0
+    vt = value_table(ps, shots_by_strength([season]), pen_v)
+    return vt[["player_id", *SEASON_VALUE_COLS]]
+
+
 def _loc(v):
     """NHL landing fields like birthCity are {'default': 'Toronto'}; others are plain strings."""
     return v.get("default") if isinstance(v, dict) else v
@@ -467,6 +514,8 @@ def main() -> None:
     add_value_percentiles(pooled)
 
     simp = {s: season_impact(s, names) for s in seasons}
+    # per-season goals-attributed value (gnet_pg + rates) so the by-season table matches the cards
+    sval = {s: season_value(s, names, pen_v, fin_season.get(s), box.get(s)) for s in seasons}
     mates = linemates(seasons, names)
     glog = game_logs(seasons)
     heat = player_heatmap.build(seasons)
@@ -486,8 +535,8 @@ def main() -> None:
     def onval(r, c):   # round an on-ice value off an itertuples row (None if missing)
         return _rnd(getattr(r, c), 4 if c.endswith("share") else 2)
 
-    def indval(r, c):  # round an individual value (xg_per_shot is small -> more precision)
-        return _rnd(getattr(r, c), 4 if c == "xg_per_shot" else 2)
+    def indval(r, c):  # round an individual value (fractions/small ones need more precision)
+        return _rnd(getattr(r, c), 4 if c in ("xg_per_shot", "fo_win", "ozs") else 2)
 
     def valval(r, c):  # round a value metric: actual-goal totals to 1 dp, rates/per-game to 3 dp
         return _rnd(getattr(r, c), 1 if c.startswith("g_") else 3)  # g_created/g_allowed/g_fin/g_pen/g_net
@@ -540,6 +589,11 @@ def main() -> None:
                 ir = si[si.player_id == pid]
                 if len(ir):
                     rec.update({m: (None if pd.isna(ir.iloc[0][m]) else round(float(ir.iloc[0][m]), 3)) for m in METRICS})
+            sv = sval.get(s)
+            if sv is not None and len(sv):
+                vr = sv[sv.player_id == pid]
+                if len(vr):
+                    rec.update({c: (None if pd.isna(vr.iloc[0][c]) else round(float(vr.iloc[0][c]), 3)) for c in SEASON_VALUE_COLS})
             fs = fin_season.get(s)
             if fs is not None and len(fs):
                 fr = fs[fs.player_id == pid]

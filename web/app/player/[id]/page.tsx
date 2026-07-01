@@ -30,13 +30,16 @@ const num2 = (v: number) => v.toFixed(2);
 const num1 = (v: number) => v.toFixed(1);
 const signed = (v: number, fmt: (n: number) => string) => `${v >= 0 ? "+" : ""}${fmt(v)}`;
 const svFmt = (v: number) => v.toFixed(3).replace(/^0/, ""); // .915
+const pctFmt = (v: number) => (v * 100).toFixed(1); // fraction 0–1 -> "54.2"
 
 // 5-on-5 unless the name says otherwise, so no "EV" prefix is needed
 const ONICE: { key: OniceKey; name: string; explain: string; fmt: (v: number) => string; unit: string }[] = [
   { key: "ev_xgf60", name: "Expected Goals For", explain: "His team's expected goals per 60 at 5-on-5 while he's on the ice — a team rate, not isolated to him.", fmt: num2, unit: "xG/60" },
   { key: "ev_xga60", name: "Expected Goals Against", explain: "His team's expected goals allowed per 60 at 5-on-5 while he's on the ice — a team rate, not isolated. Lower is better.", fmt: num2, unit: "xG/60" },
+  { key: "ev_xgshare", name: "Expected Goals Share", explain: "His team's share of the expected goals (chance quality) at 5-on-5 while he's on the ice — xGF ÷ (xGF + xGA). Above 50% means out-chancing opponents.", fmt: pctFmt, unit: "%" },
   { key: "ev_cf60", name: "Shot Attempts For", explain: "His team's shot attempts (Corsi) per 60 at 5-on-5 while he's on the ice — a team rate.", fmt: num1, unit: "attempts/60" },
   { key: "ev_ca60", name: "Shot Attempts Against", explain: "Opponent shot attempts per 60 at 5-on-5 while he's on the ice — a team rate. Lower is better.", fmt: num1, unit: "attempts/60" },
+  { key: "ev_cfshare", name: "Shot Attempt Share", explain: "His team's share of all shot attempts at 5-on-5 while he's on the ice — Corsi for ÷ (for + against). Above 50% means controlling play.", fmt: pctFmt, unit: "%" },
   { key: "pp_xgf60", name: "Power-Play Expected Goals For", explain: "His team's expected goals per 60 on the power play while he's on the ice — a team rate.", fmt: num2, unit: "xG/60" },
   { key: "pk_xga60", name: "Penalty-Kill Expected Goals Against", explain: "His team's expected goals allowed per 60 on the penalty kill while he's on the ice — a team rate. Lower is better.", fmt: num2, unit: "xG/60" },
 ];
@@ -48,13 +51,16 @@ const INDIV: { key: IndividualKey; name: string; explain: string; fmt: (v: numbe
   { key: "fin_per100", name: "Finishing", explain: "Goals he scores above expected on his own shots, per 100 shots.", fmt: num2, unit: "goals/100 shots", signed: true, ci: true },
   { key: "g60", name: "Goal Rate", explain: "His goals per 60 (all situations).", fmt: num2, unit: "goals/60" },
   { key: "a60", name: "Assist Rate", explain: "His assists per 60 (all situations).", fmt: num2, unit: "assists/60" },
+  { key: "a1_60", name: "Primary Assist Rate", explain: "First assists per 60 — the pass that directly set up the goal. More repeatable than total assists.", fmt: num2, unit: "assists/60" },
   { key: "pen_drawn60", name: "Penalty Draw Rate", explain: "Penalties he drew per 60.", fmt: num2, unit: "drawn/60" },
   { key: "pen_taken60", name: "Penalty Take Rate", explain: "Penalties he took per 60.", fmt: num2, unit: "taken/60" },
+  { key: "fo_win", name: "Faceoff Win %", explain: "Share of his faceoffs won. Shown only for players who take enough draws.", fmt: pctFmt, unit: "%" },
+  { key: "ozs", name: "Off. Zone Start %", explain: "Share of his 5-on-5 shifts that began with an offensive-zone faceoff (vs defensive). Deployment context — higher means more sheltered usage — not a rating of skill.", fmt: pctFmt, unit: "%" },
 ];
 
 // Player-stats section = metrics counted straight from raw events (the xG/finishing ones are modeled
-// and live in the Modeled-impact section instead)
-const STAT_KEYS: IndividualKey[] = ["shots60", "g60", "a60", "pen_drawn60", "pen_taken60"];
+// and live in the Modeled-impact section instead). Two rows of four.
+const STAT_KEYS: IndividualKey[] = ["shots60", "g60", "a60", "a1_60", "pen_drawn60", "pen_taken60", "fo_win", "ozs"];
 
 // per-season columns; `graph` ones are clickable to chart over time
 type Col = { key: string; label: string; title: string; get: (r: SeasonRow) => number | null; fmt?: (v: number) => string; graph: boolean };
@@ -65,14 +71,14 @@ const COLS: Col[] = [
   { key: "a", label: "A", title: "Assists", get: (r) => r.a1 + r.a2, graph: true },
   { key: "points", label: "P", title: "Points", get: (r) => r.points, graph: true },
   { key: "sog", label: "SOG", title: "Shots on goal", get: (r) => r.sog, graph: true },
-  { key: "hits", label: "Hits", title: "Hits", get: (r) => r.hits, graph: true },
-  { key: "takeaways", label: "Tk", title: "Takeaways", get: (r) => r.takeaways, graph: true },
-  { key: "giveaways", label: "Gv", title: "Giveaways", get: (r) => r.giveaways, graph: true },
-  { key: "pen_drawn", label: "PenD", title: "Penalties drawn", get: (r) => r.pen_drawn, graph: true },
-  { key: "ev_off", label: "EV O", title: "EV offense impact (xGF/60)", get: (r) => r.ev_off ?? null, fmt: (v) => v.toFixed(2), graph: true },
-  { key: "ev_def", label: "EV D", title: "EV defense impact (xGA/60)", get: (r) => r.ev_def ?? null, fmt: (v) => v.toFixed(2), graph: true },
-  { key: "pp_off", label: "PP", title: "PP offense impact (xGF/60)", get: (r) => r.pp_off ?? null, fmt: (v) => v.toFixed(2), graph: true },
-  { key: "pk_def", label: "PK", title: "PK defense impact (xGA/60)", get: (r) => r.pk_def ?? null, fmt: (v) => v.toFixed(2), graph: true },
+  // goals-attributed value — the same metrics as the headline cards (per season)
+  { key: "gnet_pg", label: "Net G/GP", title: "Net goals added per game (all situations)", get: (r) => r.gnet_pg ?? null, fmt: (v) => v.toFixed(2), graph: true },
+  { key: "scoring60", label: "Scoring", title: "Goals from his own shots per 60 (5-on-5)", get: (r) => r.scoring60 ?? null, fmt: (v) => v.toFixed(2), graph: true },
+  { key: "playmaking60", label: "Playmkg", title: "Expected goals he creates for teammates per 60 (5-on-5)", get: (r) => r.playmaking60 ?? null, fmt: (v) => v.toFixed(2), graph: true },
+  { key: "allow60", label: "Defense", title: "His share of expected goals allowed per 60 (5-on-5; lower is better)", get: (r) => r.allow60 ?? null, fmt: (v) => v.toFixed(2), graph: true },
+  { key: "pp_value", label: "PP", title: "Power-play offense per 60 (scoring + playmaking)", get: (r) => (r.pp_scoring60 == null && r.pp_playmaking60 == null) ? null : (r.pp_scoring60 ?? 0) + (r.pp_playmaking60 ?? 0), fmt: (v) => v.toFixed(2), graph: true },
+  { key: "pk_allow60", label: "PK", title: "Penalty-kill expected goals allowed per 60 (lower is better)", get: (r) => r.pk_allow60 ?? null, fmt: (v) => v.toFixed(2), graph: true },
+  { key: "pen_net60", label: "Pen", title: "Net goals from penalties drawn minus taken per 60", get: (r) => r.pen_net60 ?? null, fmt: (v) => v.toFixed(2), graph: true },
   { key: "shots60", label: "Sh/60", title: "Unblocked shots per 60", get: (r) => r.shots60 ?? null, fmt: (v) => v.toFixed(1), graph: true },
   { key: "xg_per_shot", label: "xG/sh", title: "Average shot quality (xG per shot)", get: (r) => r.xg_per_shot ?? null, fmt: (v) => v.toFixed(3), graph: true },
   { key: "fin_per100", label: "Fin", title: "Finishing: goals above expected per 100 shots", get: (r) => r.fin_per100 ?? null, fmt: (v) => v.toFixed(2), graph: true },
