@@ -5,7 +5,8 @@
 run with `uv run --group experimental python -m yhattrick.models.generative_model [--pool] [--count nb]`.
 **Not wired into the site/export** — the production additive (RAPM) model remains primary. This model
 is the *generative* counterpart: it specifies how a stint **produces** shots and goals, so you can both
-fit it and simulate from it. 5v5 only.
+fit it and simulate from it. Covers **even strength (5v5) and the man-advantage (5v4/4v5)**, and pools
+multiple seasons (with a season fixed-effect). See "Strengths & seasons" below.
 
 This document is the reference for the model: its specification, inference, results, and open problems.
 
@@ -43,6 +44,30 @@ away-attacks). An epoch has attackers `A` (≤5 skaters), defenders `B` (≤5), 
 duration `t` (offset `o = t/3600`), and context vector `x`. For a focal shooter `j`, his teammates are
 `T = A\{j}` (≤4).
 
+### Strengths & seasons — "separate volume, shared skill"
+Two strength buckets: **EV** = `{5v5}` (both sides attack → two epochs/stint) and **MA** = `{5v4, 4v5}`
+(only the more-skaters side attacks → one epoch/stint; the 4-skater defenders are the penalty-killers).
+The attacking side always has 5 skaters, so `T` is always 4 teammates; only the defender count varies
+(5 at EV, 4 on the PK) — handled by a per-row **defender mask** (padded to width 5). The split follows
+the production RAPM (`ev` vs `pp_pk`).
+
+Because PP per-player samples are ~10× sparser than 5v5, we **share where skill lives and separate where
+deployment lives**:
+- **Rate (volume) is fit separately per strength** — `ev_shoot/create/def` and `pp_shoot/create`/`pk_def`
+  are independent (each EB-ridged to its own strength). PP ice time is coach-driven, so EV volume is a
+  poor prior for PP volume. The dense on-ice `create`/`def` give card-worthy `pp_playmaking`/`pk_defense`;
+  the thin own-shot `shoot` makes `pp_scoring` lower-confidence.
+- **Quality (`qshoot/qcreate/qdef`) and conversion (`fin/gsave`) loadings are POOLED** across strengths
+  (one shared set), with only the *intercepts* split per strength (`mu_qual`, conversion `a`/`b`). This
+  is sound because xG is **strength-aware** (its `strength_diff`/skater-count features already encode the
+  man-advantage), so "danger above baseline" and "goals above xG" are strength-neutral skills — PP shots
+  *add* to those samples instead of splitting them (as production pools `alpha`/`gamma`).
+- **Seasons** are pooled by concatenation (one coefficient set per player) with **per-season indicator
+  columns** added to the rate/quality context `x` (first season = reference), so league-environment
+  drift doesn't leak into player effects.
+
+Notation below is written for a single strength; per-strength params carry the bucket (EV/PP) implicitly.
+
 ### Stage 1 — shot RATE (count), shooter-resolved
 For **each attacker `j ∈ A` as the focal shooter** (teammates `T = A\{j}`):
 ```
@@ -69,13 +94,37 @@ which are **fixed values taken from Stage 1** (not re-fit here). (The non-goal l
 mean — a mean-field plug-in; see §4.)
 
 ### Stage 3 — CONVERSION (goal | shot)
-Reused from the production shooting model (finishing + goaltending), with the intercept recalibrated to
-this model's 5v5-Fenwick universe:
+Fit **natively** inside this model (no shooting-model reuse) as a logistic recalibration of the shot's
+**observed** xG, so the stage stays independent of Stages 1–2:
 ```
-p_goal_i = clip( qbar_i + mu_conv + fin_j + gsave_g , 0, 1 )
+logit(p_goal_i) = a · logit(xg_i) + b + fin_j + gsave_g
 y_i ~ Bernoulli( p_goal_i )
-mu_conv = ( Σ goals − Σ(xg + fin + gsave) ) / N     # so simulated goals reconcile to actual exactly
 ```
+`a` (slope) recalibrates the xG→goal map (≈1 if xG is well-calibrated on 5v5); `b` (intercept) replaces
+the old `mu_conv`. Both are **global and unpenalized**, so the MLE score equation for `b` is
+`Σ(y_i − p_i) = 0`, i.e. **`Σ p = Σ goals` holds exactly** — deterministic expected goals reconcile as a
+natural first-order condition, not a hand-solved constant. `fin_j` (per shooter) and `gsave_g` (per
+goalie, `<0` = good) are log-odds offsets with EB ridge priors, fit here alongside `a`,`b`; their prior
+SDs come from the **pre-calculation stage** below (not hand-set). In simulation the *drawn* mark
+`q ~ Beta(s·qbar,·)` stands in for `xg_i`; `sigmoid` is bounded, so the old `clip(…,0,1)` is gone (only
+`logit(q)` needs an `EPS` clamp).
+
+### Stage 0 — PRE-CALCULATION (data-calibrated conversion priors)
+Before Stage 3 fits, one aggregate pass over the shots sets the ridge prior SDs for `fin` and `gsave`
+from the data (empirical Bayes), so shrinkage is *measured*, not guessed — the logit-scale analogue of
+`shooting_model`'s `_estimate_k`. For each shooter (and each goalie), aggregate `N` shots, expected
+goals `Σxg`, actual goals, and `Σ xg(1−xg)`; the per-shot residual rate `r = (goals − Σxg)/N` has, across
+high-volume entities, a volume-weighted spread of `(talent variance) + (mean sampling variance)`:
+```
+τ²_prob = weighted_Var(r) − mean(Σxg(1−xg) / N²)          # talent variance on the goals/shot scale
+prior_sd = sqrt(τ²_prob) / v̄        where  v̄ = mean shot xg(1−xg)     # map goals/shot → logit scale
+```
+Estimated only from entities above a shot gate (`MIN_SHOTS_FIN_EST`, `MIN_SHOTS_GSAVE_EST`), floored at
+`PRIOR_SD_FLOOR`, then applied to everyone and **held fixed** during the Stage-3 fit. It is *not* a fitted
+model parameter and *not* in the Stage-3 objective — it is recomputed each fit and then frozen. When too
+few entities clear the gate it falls back to the `PRIOR_SD_FIN`/`PRIOR_SD_GSAVE` constants. Because
+finishing talent variance is genuinely tiny, `prior_sd_fin` comes out small ⇒ heavy shrinkage (honest);
+goalies carry more signal ⇒ `prior_sd_gsave` larger ⇒ lighter shrinkage.
 
 ### Glossary (used consistently throughout)
 
@@ -110,9 +159,10 @@ mu_conv = ( Σ goals − Σ(xg + fin + gsave) ) / N     # so simulated goals rec
 | `qshoot_j` | quality | danger of j's own shots |
 | `qcreate_c` | quality | danger a player adds **when he is the creator** *(currently unidentifiable — see §7)* |
 | `qdef_d` | quality | opponent danger suppression (`<0` good) |
-| `fin_j` | conversion | finishing above xG on own shots |
-| `gsave_g` | conversion | goalie saves above expected (per goalie `g`) |
-| `mu_rate`, `mu_qual`, `mu_conv` | global | replacement-level log shot-rate / logit shot-quality / conversion intercept |
+| `fin_j` | conversion | finishing above xG on own shots (logit offset; fit natively) |
+| `gsave_g` | conversion | goalie saves above expected (logit offset, `<0` good; per goalie `g`) |
+| `a`, `b` | conversion | logit-conversion slope / intercept (global, unpenalized; `b` gives `Σp=Σgoals`) |
+| `mu_rate`, `mu_qual` | global | replacement-level log shot-rate / logit shot-quality |
 | `beta_rate`, `beta_qual` | global | context coefficients (on `x`) for rate / quality |
 | `r`, `s` | global | NB dispersion (`--count nb`); Beta concentration for the xG mark |
 
@@ -124,7 +174,7 @@ mu_conv = ( Σ goals − Σ(xg + fin + gsave) ) / N     # so simulated goals rec
 | `qbar_c` | `sigmoid(base_i + qcreate_c)`; `qbar_∅ = sigmoid(base_i)` | mean xG of the shot if its creator is `c` |
 | `qbar_i` | `qbar_c` (goal) or `Σ_c pi_c·qbar_c` (non-goal) | shot i's mean quality — creator known vs. latent |
 | `pi_c` | `softmax([create_0, create_T])_c` | **creator-identity distribution** — P(candidate `c` set it up); observed on goals, latent (marginalized) on non-goals |
-| `p_goal_i` | `clip(qbar_i + mu_conv + fin_j + gsave_g, 0, 1)` | conversion probability |
+| `p_goal_i` | `sigmoid(a·logit(xg_i) + b + fin_j + gsave_g)` | conversion probability (logit; observed `xg`) |
 
 **Functions & hyperparameters**
 | symbol | meaning |
@@ -132,21 +182,28 @@ mu_conv = ( Σ goals − Σ(xg + fin + gsave) ) / N     # so simulated goals rec
 | `sigmoid(z)` | logistic, `1/(1+e^-z)` |
 | `softmax(v)_c` | `e^(v_c) / Σ_k e^(v_k)` |
 | `SHOTS_PER_GOAL` | up-weight on the assist-credit anchor when fitting `create`; ≈ Fenwick shots per goal (inverse goal rate), a fixed integer (~16) |
-| `PRIOR_SD_*` | ridge / empirical-Bayes prior SDs per parameter block |
+| `PRIOR_SD_SHOOT/CREATE/QSHOOT/QCREATE` | hand-set ridge prior SDs per rate/quality block |
+| `prior_sd_fin`, `prior_sd_gsave` | conversion prior SDs — data-estimated each fit (Stage 0); `PRIOR_SD_FIN`/`PRIOR_SD_GSAVE` are only the fallbacks |
+| `MIN_SHOTS_FIN_EST=200`, `MIN_SHOTS_GSAVE_EST=1000`, `PRIOR_SD_FLOOR` | shot gates + floor for the Stage-0 prior-SD estimate |
 | `N_TM = 4`, `N_DEF = 5` | teammate / defender counts used in deployment-free attribution |
 
-**Code-symbol map** (this doc → `generative_model.py`): `create_0`→`psi0`; `mu_rate/qual/conv`→ each
-fit's `intercept`; `beta_rate/qual`→`beta`; `qbar`→`sig5`; `pi_c`→`pi`; `rate_j`→`exp(eta)` in the
-Poisson NLL.
+**Code-symbol map** (this doc → `generative_model.py`): `create_0`→`psi0`; `mu_rate/qual`→ each fit's
+`intercept`; `a`/`b`→`conv["a"]`/`conv["b"]`; `fin_j`→`conv["fin"]`; `gsave_g`→`conv["gsave"]`;
+`beta_rate/qual`→`beta`; `qbar`→`sig5`; `pi_c`→`pi`; `rate_j`→`exp(eta)` in the Poisson NLL.
 
 ### Player-value attribution (deployment-free per-60, from fitted params + intercepts)
 ```
-scoring(j)    = exp(mu_rate+shoot_j)·sigmoid(mu_qual+qshoot_j) + exp(mu_rate+shoot_j)·fin_j        # own shots
+q_own_j       = sigmoid(mu_qual+qshoot_j)                                                          # own-shot mean xG
+scoring(j)    = exp(mu_rate+shoot_j) · sigmoid(a·logit(q_own_j) + b + fin_j)                        # own shots, CONVERTED
 playmaking(p) = N_TM · exp(mu_rate) · (exp(create_p) − 1) · sigmoid(mu_qual + qcreate_p)           # teammate xG added
 defense(d)    = N_DEF · [ exp(mu_rate)·sigmoid(mu_qual) − exp(mu_rate+def_d)·sigmoid(mu_qual+qdef_d) ]  # opp xG suppressed
 creator_share(p) = exp(create_p) / ( exp(create_0) + exp(create_p) + (N_TM−1) )                    # per-teammate-shot
 ```
-`N_TM = 4`, `N_DEF = 5`. Playmaking = the volume of teammate shots p adds (`create`) × their danger
+Computed **per strength** with that bucket's rate loadings + intercepts and the pooled quality/finishing
+loadings: EV → `ev_scoring/playmaking/defense` (`N_DEF=5`); MA → `pp_scoring/pp_playmaking` and
+`pk_defense` (`N_DEF=4`; the MA `def` loadings are the penalty-killers). `mu_qual`, `a`, `b` are the
+strength's intercepts.
+`N_TM = 4`, `N_DEF = 5` (EV) or `4` (PK). Playmaking = the volume of teammate shots p adds (`create`) × their danger
 (`qcreate`). Defense `>0` = suppresses (good).
 
 ---
@@ -154,20 +211,23 @@ creator_share(p) = exp(create_p) / ( exp(create_0) + exp(create_p) + (N_TM−1) 
 ## 3. The generative direction (simulate a stint)
 Given fitted params and a stint `(A, B, g, t, x)`: for each shooter `j`, draw `N_j ~ Poisson(rate_j·o)`;
 for each shot draw a creator `c ~ pi = softmax([create_0, create_T])`, then `xg ~ Beta(s·qbar_c, s·(1−qbar_c))`,
-then `y ~ Bernoulli(clip(xg + mu_conv + fin_j + gsave_g, 0, 1))`. Aggregating gives simulated
+then `y ~ Bernoulli(sigmoid(a·logit(xg) + b + fin_j + gsave_g))`. Aggregating gives simulated
 shots/xG/goals (used for the posterior-predictive check and counterfactual lineup swaps).
 
 ---
 
 ## 4. The inference direction (fit params from data)
-The three stages are conditionally independent given the predictors, so they are fit **in sequence** —
-each by penalized MLE / empirical-Bayes (ridge priors) with **JAX autodiff gradients + scipy L-BFGS-B**;
-SEs via the Hessian / Gauss-Newton diagonal. The only quantity shared across stages is
-`create`/`create_0`: **fit in Stage 1, then passed into Stage 2 as a fixed constant** (a plug-in, not a
-joint fit — see the approximations below). Stage 3 uses neither, so it is fully independent.
+The stages are conditionally independent given the predictors, so they are fit **in sequence** — each by
+penalized MLE / empirical-Bayes (ridge priors) with **JAX autodiff gradients + scipy L-BFGS-B**; SEs via
+the Hessian / Gauss-Newton diagonal. Across strengths (§2, "Strengths & seasons"): the **rate stage is
+fit once per bucket** (EV, MA — giving separate `ev_*` and `pp_*`/`pk_def` volume params), while
+**quality and conversion are single pooled fits** (shared loadings, per-strength intercepts). The
+quantity shared across stages is `create`/`create_0`: **fit in Stage 1, passed into Stage 2 as a fixed
+constant** (per-row by the shot's strength). Stage 3 uses neither, so it is independent of 1–2.
 
-- **Stage 1 — rate (`fit_rate_create`)** — fits `mu_rate, shoot, create, def, beta_rate, create_0 (, r)`
-  on the Poisson/NB count NLL (one row per (epoch, shooter); ~4.4M rows/season, ~21M pooled). Added to
+- **Stage 1 — rate (`fit_rate_create`, run per strength bucket)** — fits `mu_rate, shoot, create, def,
+  beta_rate, create_0 (, r)` on the Poisson/NB count NLL (one row per (epoch, shooter); EV ~4.4M
+  rows/season, MA ~0.3M; defenders masked to the bucket's count). Added to
   it is an **assist-credit anchor**: `SHOTS_PER_GOAL ×` a conditional logit scoring each goal's observed
   primary assister under `pi = softmax([create_0, create_T])`. We only observe a shot's creator on the
   ~1-in-16 Fenwick shots that are goals, so weighting each observed goal-creator by `SHOTS_PER_GOAL`
@@ -176,13 +236,21 @@ joint fit — see the approximations below). Stage 3 uses neither, so it is full
   a possession/volume effect; with it `create` is pulled toward the players actually credited with
   setups. (Goals are a danger-biased subsample of shots, so this is an approximate IPW.) The count NLL
   and the anchor share `create`/`create_0` and are optimized **together** in this one stage.
-- **Stage 2 — quality (`fit_quality_creator`)** — fits `mu_qual, qshoot, qcreate, qdef, beta_qual, s`
-  with `create`/`create_0` **taken as fixed values from Stage 1** (so `pi` is a constant here): the
-  creator is observed on goals, marginalized over `pi` on non-goals. Nothing in this stage feeds back to
-  Stage 1.
-- **Stage 3 — conversion (`conversion_params`)** — finishing/goalie from the production shooting model,
-  with `mu_conv` recalibrated to the 5v5-Fenwick universe. Independent of Stages 1–2: it uses the
-  upstream observed xG, not `create` or `qcreate`.
+- **Stage 2 — quality (`fit_quality_creator`)** — a single POOLED fit (EV+MA) of `qshoot, qcreate, qdef,
+  beta_qual, s` plus a per-strength intercept (`mu_qual` via a `pp` context column), with `create`/
+  `create_0` **taken as fixed values from the per-strength Stage-1 fits** (so `pi` is a constant, chosen
+  per row by that shot's strength): creator observed on goals, marginalized over `pi` on non-goals.
+  Defenders are masked (≤5). Nothing feeds back to Stage 1.
+- **Stage 0 — conversion pre-calc (`estimate_conversion_prior_sds`)** — one aggregate pass sets the
+  `fin`/`gsave` ridge prior SDs from the data (empirical Bayes, §2 Stage 0), recomputed each fit and
+  then frozen. Not in any objective; the logit-scale analogue of `shooting_model._estimate_k`.
+- **Stage 3 — conversion (`fit_conversion`)** — fits `a, b, fin, gsave` by penalized-MLE (JAX + L-BFGS)
+  on a Bernoulli goal likelihood, `logit(p) = a·logit(xg) + b + fin_j + gsave_g`, **natively** — no
+  shooting-model reuse. `a, b` are unpenalized (so `Σp=Σgoals` holds exactly); `fin`/`gsave` carry the
+  Stage-0 EB ridge priors (data-calibrated, held fixed here). Independent of Stages 1–2: it keys off the
+  upstream **observed** xG, never `create`, `qcreate`, or `qbar`. Fitting `fin`/`gsave` on the 5v5-only
+  subset is low-power for these weak-signal skills (like `qcreate`, §7): the EB prior shrinks them
+  honestly and the run reports the `fin` `|z|>2` share so this stays visible.
 
 **Approximations (where inference departs from one exact joint marginalization; none is *why* `qcreate`
 fails — that is label sparsity, §7).**
@@ -212,9 +280,12 @@ captured constants (slow compile, double memory). See `_optimize(nll, x0, *data)
 ---
 
 ## 5. Data
-- **Shots:** `processed/shots_onice/<season>.parquet` — per 5v5 Fenwick shot: `shooter_id`, `xg`,
-  `goal`, on-ice `home_skaters`/`away_skaters`, `event_idx`.
-- **Stints:** `processed/stints/<season>.parquet` — on-ice skaters, duration, Fenwick counts, context.
+- **Shots:** `processed/shots_onice/<season>.parquet` — per Fenwick shot: `shooter_id`, `xg`, `goal`,
+  `strength`, on-ice `home_skaters`/`away_skaters`, `home_goalie`/`away_goalie`, `event_idx`. Used for
+  `strength ∈ {5v5, 5v4, 4v5}` here; `xg` is present for all of these (only empty-net shots lack it, and
+  those are excluded). MA keeps only PP-side shots (shooter on the 5-skater side).
+- **Stints:** `processed/stints/<season>.parquet` — on-ice skaters, `strength` (=`"{home_n}v{away_n}"`),
+  duration, Fenwick counts, context, goalies.
 - **Goal assists:** raw play-by-play (`raw/nhl/pbp/<game>.json`) — `assist1PlayerId` per goal, joined to
   shots via `shots_onice.event_idx == pbp play sortOrder`. Creator labels come only from these recorded
   assists (passing is otherwise unrecorded); the *volume* half of `create` is what recovers the
@@ -231,9 +302,10 @@ Fit on a single 5v5 season (NB counts), eligible = on-ice ≥ ~400 5v5 minutes:
   leaderboard is recognized setup men, no defenseman over-representation). Both halves matter: the dense
   volume signal captures the unobserved passing the assists miss, and the credit anchor keeps the metric
   pointed at genuine creation rather than raw possession.
-- **Goals and shots reconcile.** Deterministic expected goals reconcile exactly (by the `mu_conv`
-  calibration); a single-seed posterior-predictive simulation lands within ~1% on goals and on total
-  shots, and the NB count model matches the per-row shot-count overdispersion.
+- **Goals and shots reconcile.** Deterministic expected goals reconcile exactly (`Σp=Σgoals` falls out
+  of the unpenalized conversion intercept `b`); a single-seed posterior-predictive simulation lands
+  within ~1% on goals and on total shots, and the NB count model matches the per-row shot-count
+  overdispersion.
 - **Scoring is clean.** `scoring` correlates strongly with goals; the `shoot` leaderboard is snipers and
   the `create` leaderboard is recognized setup men, with the two loadings near-uncorrelated (own-shot
   volume and teammate-lift are separately identified).
@@ -274,13 +346,20 @@ on this data, or is a shot's danger mostly the shooter's (`qshoot`) and the loca
 ## 8. Implementation map & how to run
 - **File:** `pipeline/src/yhattrick/models/generative_model.py`. Tests:
   `pipeline/tests/test_generative_model.py` (synthetic recovery + a data-gated smoke test).
-- **Key functions:** `rate_rows`, `quality_creator_rows` (data); `fit_rate_create` (unified rate +
-  credit), `fit_quality_creator` (quality given fixed creator dist), `conversion_params`;
-  `player_values` (attribution); `ppc` (posterior-predictive check); `run`/`_save`.
+- **Key functions:** `player_index` (shared index), `_load_stints(seasons, strengths)`,
+  `rate_rows(seasons, strengths, dual, players, idx)`, `quality_creator_rows(seasons, idx, strengths)`,
+  `conversion_rows(seasons, idx, strengths)` (data); `fit_rate_create` (per-strength rate + credit, with
+  the defender mask), `fit_quality_creator` (pooled quality, per-strength intercept + per-row creator
+  dist), `estimate_conversion_prior_sds` + `fit_conversion` (pooled fin/gsave, per-strength `a`/`b`);
+  `player_values` (per-strength attribution); `ppc(R, rate, qual, conv, key)`; `run`/`_save` (loop over
+  EV + MA buckets).
 - **Run:** `make generative-model` (single latest season) or
   `uv run --group experimental python -m yhattrick.models.generative_model --pool --count nb`. Output:
-  `data/models/generative_model_<seasons>.json` (per-player params, SEs, `n_create`, attributed values,
-  PPC).
-- **Tunables:** `SHOTS_PER_GOAL` (≈ shots per goal; up-weights the assist-credit anchor), the
-  `PRIOR_SD_*` ridge priors, `--count
+  `data/models/generative_model_<seasons>.json` — per-strength blocks (`strengths.ev/ma` with intercepts
+  + PPC), per-player `ev_*`/`pp_*`/`pk_defense` values plus pooled `qshoot/qcreate/fin` and per-strength
+  TOI (`toi_ev/toi_pp/toi_pk`), `conv` (per-strength `a`/`b`, EB prior SDs), and goalies.
+- **Strength config:** `EV_STRENGTHS`, `MA_STRENGTHS` (extensible — e.g. add `5v3/3v5` to MA); the
+  defender mask (`MAX_DEF`) handles the varying PK size. **Tunables:** per-strength `SHOTS_PER_GOAL`
+  (auto-computed as shots/goal per bucket), `PRIOR_SD_*` (conversion priors are data-estimated each fit;
+  these are fallbacks), `MIN_SHOTS_*`, `SNIFF_MIN_TOI`/`SNIFF_MIN_TOI_MA` (leaderboard gates), `--count
   poisson|nb`.

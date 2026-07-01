@@ -75,6 +75,27 @@ def _synth_creator(P=60, n=150000, seed=2):
     return Q, qcreate, create
 
 
+def _synth_conversion(P=60, Gg=20, n=200000, seed=5):
+    """Conversion data: each shot has an observed xg, a shooter (fin) and a facing goalie (gsave), and
+    the goal is Bernoulli(sigmoid(a·logit(xg) + b + fin + gsave)). xg is low-danger-skewed like real xG.
+    Exercises the native logit conversion fit (slope/intercept + per-shooter fin + per-goalie gsave)."""
+    rng = np.random.default_rng(seed)
+    a_true, b_true = 1.1, -0.15
+    # center each block: the intercept b and the offset means aren't separately identified (ridge
+    # reassigns any nonzero mean to b), so mean-zero offsets let the test check b directly.
+    fin = rng.normal(0, 0.20, P); fin -= fin.mean()
+    gsave = rng.normal(0, 0.20, Gg); gsave -= gsave.mean()
+    shooter = rng.integers(0, P, n)
+    goalie = rng.integers(0, Gg, n)
+    xg = np.clip(rng.beta(1.0, 12.0, n), G.EPS, 1 - G.EPS)
+    lxg = np.log(xg / (1 - xg))
+    eta = a_true * lxg + b_true + fin[shooter] + gsave[goalie]
+    y = rng.binomial(1, 1.0 / (1.0 + np.exp(-eta))).astype(float)
+    Cr = {"shooter_idx": shooter.astype(np.int64), "goalie_idx": goalie.astype(np.int64),
+          "logit_xg": lxg, "y": y, "goalies": list(range(Gg))}
+    return Cr, a_true, b_true, fin, gsave
+
+
 # ── rate + credit layer (fit_rate_create) ─────────────────────────────────────────────────────────
 
 def test_rate_create_recovers_shoot_create_def():
@@ -125,9 +146,30 @@ def test_quality_creator_recovers_qcreate():
     """Given the creator distribution, the quality fit recovers creation-quality qcreate from the
     observed-creator goal quality + the marginalized non-goal quality."""
     Q, qcreate, create = _synth_creator()
-    fit = G.fit_quality_creator(Q, P=len(qcreate), create=create, psi0=-0.5)
+    fit = G.fit_quality_creator(Q, P=len(qcreate), creates={0: (create, -0.5)})
     assert fit["converged"]
     assert np.corrcoef(fit["qcreate"], qcreate)[0, 1] > 0.45
+
+
+# ── conversion layer (native logit) ───────────────────────────────────────────────────────────────
+
+def test_conversion_recovers_slope_intercept_fin_gsave():
+    Cr, a_true, b_true, fin, gsave = _synth_conversion()
+    fit = G.fit_conversion(Cr, P=len(fin))
+    assert fit["converged"]
+    assert abs(fit["a"]["ev"] - a_true) < 0.10           # slope recalibration (single-strength → 'ev')
+    assert abs(fit["b"]["ev"] - b_true) < 0.05           # intercept (replaces mu_conv)
+    assert np.corrcoef(fit["fin"], fin)[0, 1] > 0.7      # per-shooter finishing
+    assert np.corrcoef(fit["gsave"], gsave)[0, 1] > 0.7  # per-goalie save
+    assert np.all(fit["se_fin"] > 0) and np.all(fit["se_gsave"] > 0)
+
+
+def test_conversion_reconciles_goals_exactly():
+    """b is unpenalized, so the MLE score equation ∂/∂b: Σ(y−p)=0 gives Σp = Σy — deterministic
+    expected goals reconcile as a natural first-order condition, not a hand-solved constant."""
+    Cr, _, _, fin, _ = _synth_conversion()
+    fit = G.fit_conversion(Cr, P=len(fin))
+    assert abs(fit["sum_p"] - fit["sum_y"]) / fit["sum_y"] < 1e-3
 
 
 # ── attribution ───────────────────────────────────────────────────────────────────────────────────
@@ -136,15 +178,30 @@ def test_player_values_merge_signs():
     """Goal values move the right way: +shoot => more scoring, +create/+qcreate => more playmaking,
     -def (suppression) => more positive defense value."""
     P = 3
+    mq = np.log(0.07 / 0.93)
     rate = {"intercept": np.log(8.0), "shoot": np.array([0.4, 0.0, 0.0]),
             "create": np.array([0.0, 0.5, 0.0]), "def": np.array([0.0, 0.0, -0.4]), "psi0": -0.5}
-    qual = {"intercept": np.log(0.07 / 0.93), "qshoot": np.zeros(P),
+    qual = {"mu_qual": {"ev": mq}, "qshoot": np.zeros(P),
             "qcreate": np.array([0.0, 0.5, 0.0]), "qdef": np.zeros(P)}
-    conv = {"alpha": {}, "gamma": {}, "mu_c": 0.0}
-    v = G.player_values(rate, qual, conv, [0, 1, 2])
+    conv = {"a": {"ev": 1.0}, "b": {"ev": 0.0}, "fin": np.zeros(P)}      # identity conversion
+    vals = G.player_values({"ev": rate}, qual, conv, [0, 1, 2])
+    v = vals["ev"]
     assert v["scoring"][0] == max(v["scoring"])          # player 0 (high shoot) tops scoring
     assert v["playmaking"][1] == max(v["playmaking"])    # player 1 (high create + qcreate) tops playmaking
     assert v["defense"][2] == max(v["defense"])          # player 2 (neg def) suppresses most
+
+
+def test_finishing_lifts_scoring():
+    """A positive fin (better finisher) raises a player's converted scoring above the fin=0 baseline."""
+    P = 2
+    mq = np.log(0.07 / 0.93)
+    rate = {"intercept": np.log(8.0), "shoot": np.zeros(P), "create": np.zeros(P),
+            "def": np.zeros(P), "psi0": -0.5}
+    qual = {"mu_qual": {"ev": mq}, "qshoot": np.zeros(P), "qcreate": np.zeros(P), "qdef": np.zeros(P)}
+    conv = {"a": {"ev": 1.0}, "b": {"ev": 0.0}, "fin": np.array([0.5, 0.0])}
+    v = G.player_values({"ev": rate}, qual, conv, [0, 1])["ev"]
+    assert v["scoring"][0] > v["scoring"][1]             # better finisher scores more on identical shots
+    assert v["finishing"][0] > 0 and abs(v["finishing"][1]) < 1e-9
 
 
 # ── data-gated real fit ─────────────────────────────────────────────────────────────────────────
@@ -154,16 +211,45 @@ def _has_data():
     return d.exists() and any(d.glob("*.parquet"))
 
 
+def test_ma_bucket_masked_defenders_recover():
+    """Man-advantage rate rows have 4 defenders (padded to 5 with a mask). Build a synthetic MA-shaped
+    R with a masked 5th defender slot and confirm the masked fit still recovers shoot/create/def and the
+    masked slot contributes nothing (its `def` is untouched by data → shrinks to ~0)."""
+    R, gt, gc, create, shoot, deff = _synth_create(seed=11)
+    n = len(R["count"])
+    # turn it into an MA-shaped bucket: keep 4 real defenders, pad a 5th masked slot
+    real = R["def_idx"]                                       # (n,5) — treat first 4 as real, 5th masked
+    mask = np.ones((n, 5)); mask[:, 4] = 0.0
+    R = {**R, "def_mask": mask}
+    fit = G.fit_rate_create(R, gt, gc, shots_per_goal=16)
+    assert fit["converged"]
+    assert np.corrcoef(fit["shoot"], shoot)[0, 1] > 0.8
+    assert np.corrcoef(fit["create"], create)[0, 1] > 0.8
+    assert np.all(np.isfinite(fit["def"]))
+
+
 @pytest.mark.skipif(not _has_data(), reason="no processed/ tree")
 def test_real_fit_smoke():
-    seasons = G.shooting_model.available_seasons()[-1:]
-    R = G.rate_rows(seasons)
-    assert R is not None and len(R["count"]) > 0
-    assert R["team_idx"].shape[1] == 4 and R["def_idx"].shape[1] == 5
-    Q = G.quality_creator_rows(seasons, R["idx"])
-    gmask = Q["goal"] == 1
-    g_lab = Q["creator"][gmask]
-    g_cidx = np.where(g_lab == 4, 0, np.clip(g_lab, 0, 3) + 1).astype(np.int64)
-    fit = G.fit_rate_create(R, Q["team_idx"][gmask], g_cidx, shots_per_goal=G.SHOTS_PER_GOAL)
-    assert fit["converged"]
-    assert np.all(np.isfinite(fit["shoot"])) and np.all(np.isfinite(fit["create"]))
+    sd = C.PROCESSED / "shots_onice"
+    seasons = (sorted(int(f.stem) for f in sd.glob("*.parquet"))[-1:]) if sd.exists() else []
+    players, idx = G.player_index(seasons)
+    assert players
+    Q = G.quality_creator_rows(seasons, idx, G.ALL_STRENGTHS)
+    cidx = np.where(Q["creator"] == 4, 0, np.clip(Q["creator"], 0, 3) + 1).astype(np.int64)
+    rates = {}
+    for key, strengths, dual in [("ev", G.EV_STRENGTHS, True), ("ma", G.MA_STRENGTHS, False)]:
+        R = G.rate_rows(seasons, strengths, dual, players, idx)
+        assert R is not None and len(R["count"]) > 0
+        assert R["team_idx"].shape[1] == 4 and R["def_idx"].shape[1] == 5
+        gm = (Q["goal"] == 1) & (Q["strength"] == (0 if key == "ev" else 1))
+        fit = G.fit_rate_create(R, Q["team_idx"][gm], cidx[gm], shots_per_goal=G.SHOTS_PER_GOAL)
+        assert fit["converged"] and np.all(np.isfinite(fit["create"]))
+        rates[key] = fit
+    creates = {0: (rates["ev"]["create"], rates["ev"]["psi0"]), 1: (rates["ma"]["create"], rates["ma"]["psi0"])}
+    qual = G.fit_quality_creator(Q, len(players), creates)
+    assert qual["converged"] and set(qual["mu_qual"]) >= {"ev", "ma"}
+    Cr = G.conversion_rows(seasons, idx, G.ALL_STRENGTHS)
+    cf = G.fit_conversion(Cr, len(players))
+    assert cf["converged"] and set(cf["a"]) >= {"ev", "ma"}
+    for k in ("ev", "ma"):                                    # per-strength reconciliation Σp≈Σy
+        assert k in cf["a"]
