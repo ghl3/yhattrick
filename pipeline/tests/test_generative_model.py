@@ -505,3 +505,84 @@ def test_real_fit_smoke():
     cf = G.fit_conversion(Cr, len(players))
     assert cf["converged"] and set(cf["a"]) >= {"ev", "ma"}
     assert cf["recon_season"]                                 # F6 per-season reconciliation present
+
+
+# ── θ̂ checkpoint: warm starts + optimization-free reuse ───────────────────────────────────────────
+
+def test_rate_warm_start_and_reuse():
+    R, gt, gc, create, *_ = _synth_create(P=40, n=30000, seed=7)
+    fit1 = G.fit_rate_create(R, gt, gc, shots_per_goal=16)
+    w = G._stage_rate(fit1, np.asarray(R["players"]))
+    # warm start: same optimum, far fewer iterations
+    fit2 = G.fit_rate_create(R, gt, gc, shots_per_goal=16, warm=w)
+    assert np.allclose(fit2["create"], fit1["create"], atol=1e-3)
+    assert fit2["nit"] < fit1["nit"]
+    # reuse: θ̂ and SEs come straight from the checkpoint — no optimization at all
+    fit3 = G.fit_rate_create(R, gt, gc, shots_per_goal=16, warm=w, reuse=True)
+    assert fit3["nit"] == 0
+    assert np.array_equal(fit3["theta"], fit1["theta"])
+    assert np.array_equal(fit3["se_create_last"], fit1["se_create_last"])
+    assert np.array_equal(fit3["create"], fit1["create"])
+
+
+def test_rate_warm_start_maps_by_key_not_position():
+    R, gt, gc, *_ = _synth_create(P=40, n=30000, seed=7)
+    fit1 = G.fit_rate_create(R, gt, gc, shots_per_goal=16)
+    w = G._stage_rate(fit1, np.asarray(R["players"]))
+    P = len(R["players"])
+    perm = np.random.default_rng(0).permutation(P)
+    th = np.asarray(w["theta"]).copy()
+    for b in range(3):                                       # permute the three unit blocks together
+        th[1 + b * P:1 + (b + 1) * P] = np.asarray(w["theta"])[1 + b * P:1 + (b + 1) * P][perm]
+    w2 = dict(w, theta=th, unit_pid=np.asarray(w["unit_pid"])[perm],
+              unit_season=np.asarray(w["unit_season"])[perm])
+    fit2 = G.fit_rate_create(R, gt, gc, shots_per_goal=16, warm=w2)
+    assert np.allclose(fit2["create"], fit1["create"], atol=1e-3)
+    assert fit2["nit"] < fit1["nit"]
+    # reuse must REJECT the permuted (key-mismatched) checkpoint — it is not the exact same layout
+    with pytest.raises(ValueError):
+        G.fit_rate_create(R, gt, gc, shots_per_goal=16, warm=w2, reuse=True)
+
+
+def test_quality_and_conversion_warm_reuse():
+    Q, qc_pos, create, isD = _synth_creator(P=30, n=40000)
+    pids = np.arange(30)
+    q1 = G.fit_quality_creator(Q, P=30, creates={0: (create, -0.5)}, isD=isD)
+    wq = G._stage_qual(q1, pids)
+    q2 = G.fit_quality_creator(Q, P=30, creates={0: (create, -0.5)}, isD=isD, warm=wq, pids=pids)
+    assert np.allclose(q2["qshoot"], q1["qshoot"], atol=1e-3) and q2["nit"] < q1["nit"]
+    q3 = G.fit_quality_creator(Q, P=30, creates={0: (create, -0.5)}, isD=isD, warm=wq, reuse=True,
+                               pids=pids)
+    assert q3["nit"] == 0 and np.array_equal(q3["theta"], q1["theta"])
+    assert np.array_equal(q3["se_qcreate"], q1["se_qcreate"])
+
+    Cr, a_t, b_t, fin, gsave = _synth_conversion(P=30, Gg=8, n=60000)
+    c1 = G.fit_conversion(Cr, P=30)
+    wc = G._stage_conv(c1, pids)
+    c2 = G.fit_conversion(Cr, P=30, warm=wc, pids=pids)
+    assert np.allclose(c2["fin"], c1["fin"], atol=1e-3) and c2["nit"] < c1["nit"]
+    c3 = G.fit_conversion(Cr, P=30, warm=wc, reuse=True, pids=pids)
+    assert c3["nit"] == 0 and np.array_equal(c3["theta"], c1["theta"])
+    assert np.array_equal(c3["se_fin"], c1["se_fin"])
+
+
+def test_ckpt_save_load_roundtrip(tmp_path):
+    R, gt, gc, *_ = _synth_create(P=25, n=20000, seed=9)
+    rate = G.fit_rate_create(R, gt, gc, shots_per_goal=16)
+    Q, qc_pos, create, isD = _synth_creator(P=25, n=30000)
+    qual = G.fit_quality_creator(Q, P=25, creates={0: (create, -0.5)}, isD=isD)
+    Cr, *_ = _synth_conversion(P=25, Gg=6, n=40000)
+    conv = G.fit_conversion(Cr, P=25)
+    p = tmp_path / "ck.npz"
+    G.ckpt_save([2025], "poisson", 1.0, {"ev": rate}, qual, conv, R["players"], path=p)
+    ck = G.ckpt_load(p)
+    assert list(map(int, ck["seasons"])) == [2025] and str(ck["count_model"]) == "poisson"
+    # every stage survives the npz round trip well enough for bit-exact reuse
+    f2 = G.fit_rate_create(R, gt, gc, shots_per_goal=16, warm=G._ck_stage(ck, "ev"), reuse=True)
+    assert np.array_equal(f2["theta"], rate["theta"])
+    q2 = G.fit_quality_creator(Q, P=25, creates={0: (create, -0.5)}, isD=isD,
+                               warm=G._ck_stage(ck, "qual"), reuse=True, pids=R["players"])
+    assert np.array_equal(q2["theta"], qual["theta"])
+    c2 = G.fit_conversion(Cr, P=25, warm=G._ck_stage(ck, "conv"), reuse=True, pids=R["players"])
+    assert np.array_equal(c2["theta"], conv["theta"])
+    assert G._ck_stage(ck, "ma") is None                     # absent stage → no warm block

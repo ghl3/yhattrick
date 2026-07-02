@@ -588,6 +588,17 @@ intercepts, and the 2016–2020 window extension — lives in
   `uv run --group experimental python -m yhattrick.models.generative_model --pool --count nb`
   (all seasons — multi-season ⇒ RW states + projection). `--spg-scale 0.5|2.0` for the assist-credit
   sensitivity check (A3).
+- **θ̂ checkpoint / warm starts:** every full fit dumps its raw solution vectors + SEs to
+  `data/models/generative_ckpt.npz`, keyed by (player, season) unit, ctx-column name, and
+  (venue, season) arena state. The next fit **warm-starts** from it by key (default; `--cold`
+  disables): identical refits converge in a handful of iterations, incremental refits (new
+  season/players — those init cold) in a fraction of a cold run. The optimum is unchanged — a warm
+  start only shortens the path to it. `--reexport` goes further: with a checkpoint from the *exact
+  same* fit signature (seasons + count model + spg-scale, enforced key-by-key), it skips
+  optimization **and** the SE Hessians and just regenerates reports + JSON — export-side tweaks
+  rerun in minutes instead of hours. The holdout harness never warm-starts (its train fits must not
+  touch a solution that saw test data), and a stale/mismatched checkpoint can never break a fit
+  (mapping failures fall back to cold init; `--reexport` refuses loudly).
 - **Output:** `data/models/generative_model_<seasons>.json` —
   - per-strength blocks (`strengths.ev/ma` with intercepts + PPC), `conv` (per-strength `a`/`b`,
     season offsets + curve coefficients under `ctx`, per-season reconciliation, EB prior SDs);
@@ -615,3 +626,8 @@ intercepts, and the 2016–2020 window extension — lives in
   effects in every stage). The practical gate is data (pre-2021 fetch/process is a separate task) and
   two Python-loop hotspots that will grow linearly (`_shooter_counts`, the per-game PBP assist reads) —
   cache assists to a parquet when the window grows.
+- **Player cards (Cards v2):** `generative_cards.py` consumes the pooled fit JSON + stints and
+  writes `data/models/gen_cards.json` — current-skill attributes, GA/60 vs a position-baseline
+  team, per-season trajectory values with a league age-reference, projections, and stint-
+  counterfactual WAR. `export_players.py` merges it into the site JSONs (`gen`/`gen_meta` blocks).
+  Reader-facing definitions: docs/metrics.md. Run: `make generative-cards` then `make players`.
