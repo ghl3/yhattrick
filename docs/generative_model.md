@@ -147,7 +147,24 @@ few entities clear the gate it falls back to the `PRIOR_SD_FIN`/`PRIOR_SD_GSAVE`
 finishing talent variance is genuinely tiny, `prior_sd_fin` comes out small ⇒ heavy shrinkage (honest);
 goalies carry more signal ⇒ `prior_sd_gsave` larger ⇒ lighter shrinkage.
 
-### Glossary (used consistently throughout)
+### Arena (venue) effects — scorer-bias nuisance states
+NHL scorekeeping varies by building: some crews record more shots (count bias, hits the rate stage)
+and record locations differently (shifts recorded xG — hits the quality stage). Players who play 41
+home games in a biased rink would otherwise absorb that bias into `shoot`/`create`/`qshoot`. Both
+stages therefore carry **per-(venue, season) offset states** `arena_{v,s}` on every row, keyed by the
+actual building (so relocations and Arizona's moves split correctly):
+```
+prior:  arena_{v,s} ~ Normal(0, ARENA_SD²)            # nuisance ridge — biases are small; also
+        arena_{v,s+g} ~ Normal(arena_{v,s}, ARENA_RW_SD²·g)   #   identifies the block (no reference venue)
+```
+Why venue×season with a random walk rather than one pooled offset per building: rink bias is a
+*scorer-crew* phenomenon — persistent across adjacent seasons but movable when crews change — and a
+per-cell free fit (~41 games) would be as noisy as the signal. Stable bias ⇒ the states glue into a
+pooled effect; a crew change ⇒ the data can move that season. Venues with < `ARENA_MIN_GAMES` in the
+window (outdoor/neutral sites) get no offset. These are nuisance parameters: they live outside the
+SE Hessian (like `create_0`), are excluded from player values/effective params (reference
+environment = no arena), and are reported per run + saved under `arena_effects` in the JSON. The
+conversion stage carries none — location bias flows through the recorded xG itself.
 
 **Indices & sets**
 | symbol | meaning |
@@ -185,6 +202,7 @@ goalies carry more signal ⇒ `prior_sd_gsave` larger ⇒ lighter shrinkage.
 | `fin_j` | conversion | finishing above xG on own shots (logit offset; fit natively) |
 | `gsave_g` | conversion | goalie saves above expected (logit offset, `<0` good; per goalie `g`) |
 | `a`, `b`, `b_season` | conversion | logit-conversion slope / intercept / per-season offsets (global, unpenalized; score eqns give Σp=Σgoals overall AND per season) |
+| `arena_{v,s}` | rate & quality | per-(venue, season) scorer-bias offset (nuisance; ridge + season RW, no reference venue) |
 | `mu_rate`, `mu_qual` | global | replacement-level log shot-rate / logit shot-quality |
 | `beta_rate`, `beta_qual` | global | context coefficients (on `x`) — these INCLUDE the aging-curve and position-offset coefficients (§3) |
 | `r` | global | NB dispersion (`--count nb`) |
@@ -213,6 +231,7 @@ goalies carry more signal ⇒ `prior_sd_gsave` larger ⇒ lighter shrinkage.
 | `MIN_SHOTS_FIN_EST=200`, `MIN_SHOTS_GSAVE_EST=1000`, `PRIOR_SD_FLOOR` | shot gates + floor for the Stage-0 prior-SD estimate |
 | `N_TM = 4`, `N_DEF = 5` | teammate / defender counts used in deployment-free attribution |
 | `DENSE_H_MAX` | parameter-count cutoff between the dense Hessian inverse and sparse column solves |
+| `ARENA_SD`, `ARENA_RW_SD`, `ARENA_MIN_GAMES` | arena-state nuisance prior (ridge + season RW) and the rare-venue gate |
 
 **Code-symbol map** (this doc → `generative_model.py`): `create_0`→`psi0`; `mu_rate/qual`→ each fit's
 `intercept`; `a`/`b`→`conv["a"]`/`conv["b"]`; `b_season`+curves→`conv["beta"]` (named by
@@ -425,6 +444,9 @@ captured constants (slow compile, double memory). Unit gathers are int32. See `_
 - **Ages & positions:** birthdates from the raw player landing JSONs (`raw/nhl/players/<id>.json`,
   `birthDate` — goalies too); positions from `interim/roster/<season>.parquet` (F/D; unknowns count
   as F). Missing birthdates are reported per run and pinned to the curve reference (z = 0).
+- **Venues (arena effects):** each game's building from raw pbp `venue.default`, lazily cached to
+  `interim/game_venue/<season>.parquet`. Sponsor renames are aliased to the current name
+  (`_VENUE_ALIAS` — one RW chain per physical building); real building moves stay split.
 
 ---
 
@@ -500,9 +522,10 @@ intercepts, and the 2016–2020 window extension — lives in
   `pipeline/tests/test_generative_model.py` (synthetic recovery — incl. RW drift, aging-curve +
   projection math, sparse/dense SE parity, per-season reconciliation — plus a data-gated smoke test).
 - **Key functions:** `player_index` (shared index), `_age_position`/`_birthdates` (ages + F/D),
+  `_game_venues`/`_arena_index` (venue cache + the (venue, season) arena-state machinery),
   `_load_stints(seasons, strengths)`, `rate_rows(seasons, strengths, dual, players, idx, agepos,
-  states)` (+ `_unit_machinery` for the per-season states), `quality_creator_rows(seasons, idx,
-  strengths, agepos)`, `conversion_rows(seasons, idx, strengths, agepos)` (data);
+  states, arenas)` (+ `_unit_machinery` for the per-season states), `quality_creator_rows(seasons,
+  idx, strengths, agepos, arenas)`, `conversion_rows(seasons, idx, strengths, agepos)` (data);
   `fit_rate_create` (per-strength rate + credit; RW penalty via `_rate_penalty`, SEs via `_rate_ses`),
   `fit_quality_creator` (pooled quality, position-level qcreate), `estimate_conversion_prior_sds` +
   `fit_conversion` (pooled fin/gsave, per-strength `a`/`b`, season offsets, curves);
@@ -517,7 +540,8 @@ intercepts, and the 2016–2020 window extension — lives in
   - per-strength blocks (`strengths.ev/ma` with intercepts + PPC), `conv` (per-strength `a`/`b`,
     season offsets + curve coefficients under `ctx`, per-season reconciliation, EB prior SDs);
   - `qcreate` (position pair + SEs), `age_curves` (per block: coefficients, D offset, curve sampled
-    over ages 18–40 per position — site-ready), `rw_sd`, `missing_birthdates`;
+    over ages 18–40 per position — site-ready), `rw_sd`, `arena_effects` ({venue: {season: coef}}
+    per stage + the nuisance prior), `missing_birthdates`;
   - `players[]`: `pos`, `age`, `last_season`, per-strength TOI, **effective** `ev_/pp_` shoot/create/
     def (+ SEs at the last state), `scoring/playmaking/finishing`, `ev_defense`/`pk_defense`,
     `qshoot`/`qdef`/`fin` (+ `fin_se`), `n_create`, and `trend` — the per-season effective
@@ -532,8 +556,9 @@ intercepts, and the 2016–2020 window extension — lives in
 - **Strength config:** `EV_STRENGTHS`, `MA_STRENGTHS` (extensible — e.g. add `5v3/3v5` to MA); the
   defender mask (`MAX_DEF`) handles the varying PK size. **Tunables:** `RW_SD_*` (drift flexibility),
   `PRIOR_SD_*` (level priors; conversion priors are data-estimated each fit), `AGE_PEAK`/`AGE_SCALE`
-  (basis), `MIN_SHOTS_*`, `SNIFF_MIN_TOI`/`SNIFF_MIN_TOI_MA` (leaderboard gates), `DENSE_H_MAX`
-  (SE path cutoff), `--count poisson|nb`, `--spg-scale`.
+  (basis), `ARENA_SD`/`ARENA_RW_SD`/`ARENA_MIN_GAMES` (arena nuisance prior), `MIN_SHOTS_*`,
+  `SNIFF_MIN_TOI`/`SNIFF_MIN_TOI_MA` (leaderboard gates), `DENSE_H_MAX` (SE path cutoff),
+  `--count poisson|nb`, `--spg-scale`.
 - **Longer windows:** the model is now correct for arbitrarily long windows (drift states + season
   effects in every stage). The practical gate is data (pre-2021 fetch/process is a separate task) and
   two Python-loop hotspots that will grow linearly (`_shooter_counts`, the per-game PBP assist reads) —

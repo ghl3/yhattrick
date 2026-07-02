@@ -53,12 +53,14 @@ every non-goal shot.
 anchor arrays, unit-mapped), `fit_rate_create` (masked-softmax credit term + bread/meat).
 **Effort:** small.
 
-### 3. Arena/scorer recording-bias intercepts
-NHL shot *recording* varies by arena (scorer bias); this is a shot-count model, so players with 41
-home games in a biased rink absorb it into `shoot`/`create`. Add ~32 arena indicator columns to the
-rate context (`rate_rows`; venue from the game id → home team). Ridge lightly or leave unpenalized.
-Protects the model's best-identified parameters; also portable to the production RAPM.
-**Effort:** small-medium (need game→arena mapping in the row builder).
+### 3. Arena/scorer recording-bias states — ✅ IMPLEMENTED (July 2026)
+Landed as per-(venue, season) nuisance states in the rate AND quality stages: ridge to zero
+(`ARENA_SD`, identifies the block — no reference venue) + random-walk smoothing across seasons
+(`ARENA_RW_SD` — crews persist but change), venues keyed by physical building via pbp
+`venue.default` with a rename alias map (`_VENUE_ALIAS`; real building moves stay split), rare
+venues (outdoor/neutral, < `ARENA_MIN_GAMES`) unadjusted. Outside the SE Hessian (nuisance, like
+`create_0`); excluded from player values; reported per run + saved as `arena_effects` in the JSON.
+Still open from this item: **port the same correction to the production RAPM** (same confounder).
 
 ### 4. Blocked shots as evidence INSIDE Defense (not a card)
 Design principle (user-set): cards are broad latent qualities; observed events are evidence that

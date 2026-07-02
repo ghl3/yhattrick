@@ -16,11 +16,12 @@ from yhattrick.models import generative_model as G
 
 # ── synthetic builders (shooter-resolved: 1 focal shooter + 4 teammates + 5 defenders per row) ────
 
-def _synth_create(P=70, n=120000, dur=45.0, seed=4, r_disp=None):
+def _synth_create(P=70, n=120000, dur=45.0, seed=4, r_disp=None, arena_fx=None):
     """Rate data where each focal shooter's Fenwick count is lifted by teammates' `create` and
     suppressed by defenders' `def`, PLUS ng goal creator labels drawn from softmax([create_0, create]).
     Exercises the unified fit end-to-end: the dense count signal AND the sparse goal-assist credit both
-    inform `create`. r_disp (Gamma shape) makes the counts overdispersed (Poisson-Gamma == NB)."""
+    inform `create`. r_disp (Gamma shape) makes the counts overdispersed (Poisson-Gamma == NB).
+    `arena_fx` (list of true per-venue log-rate offsets) adds single-season arena states."""
     rng = np.random.default_rng(seed)
     shoot = rng.normal(0, 0.30, P)
     create = rng.normal(0, 0.30, P)
@@ -30,7 +31,12 @@ def _synth_create(P=70, n=120000, dur=45.0, seed=4, r_disp=None):
     dff = np.array([rng.choice(P, 5, replace=False) for _ in range(n)])
     shooter, team = atk[:, 0], atk[:, 1:5]
     Xctx = rng.integers(0, 2, (n, 1)).astype(float)          # one varying context col (home), true coef 0
-    lam = np.exp(mu0 + shoot[shooter] + create[team].sum(1) + deff[dff].sum(1)) * dur / 3600.0
+    eta = mu0 + shoot[shooter] + create[team].sum(1) + deff[dff].sum(1)
+    acol = None
+    if arena_fx is not None:
+        acol = rng.integers(0, len(arena_fx), n).astype(np.int32)
+        eta = eta + np.asarray(arena_fx)[acol]
+    lam = np.exp(eta) * dur / 3600.0
     if r_disp is None:
         count = rng.poisson(lam).astype(float)
     else:
@@ -39,6 +45,11 @@ def _synth_create(P=70, n=120000, dur=45.0, seed=4, r_disp=None):
          "team_idx": team, "def_idx": dff, "Xctx": Xctx, "count": count,
          "offset": np.full(n, np.log(dur / 3600.0)), "dur": np.full(n, dur),
          "def_goalie": np.zeros(n, dtype=object), "toi": np.full(P, 1e6)}
+    if acol is not None:
+        na = len(arena_fx)
+        R.update(arena_col=acol, n_arenas=na,
+                 arena_venue=[f"V{i}" for i in range(na)],
+                 arena_season=np.full(na, 2025, dtype=np.int64))
     ng = 9000
     gt = np.array([rng.choice(P, 4, replace=False) for _ in range(ng)])
     pr = np.exp(np.concatenate([np.full((ng, 1), create_0), create[gt]], 1)); pr /= pr.sum(1, keepdims=True)
@@ -352,6 +363,21 @@ def test_sparse_dense_se_parity(monkeypatch):
         np.testing.assert_allclose(fit_d[k], fit_s[k], rtol=1e-6, atol=1e-10)
 
 
+def test_arena_offsets_recovered_without_biasing_players():
+    """Arena recording bias: known per-venue log-rate offsets are recovered (modulo the nuisance
+    ridge) and the player loadings stay clean."""
+    fx = [0.08, -0.06, 0.0]
+    R, gt, gc, create, shoot, deff = _synth_create(seed=15, arena_fx=fx)
+    fit = G.fit_rate_create(R, gt, gc, shots_per_goal=16)
+    assert fit["converged"]
+    est = fit["arena_vec"]
+    assert len(est) == 3
+    assert abs(est[0] - fx[0]) < 0.03 and abs(est[1] - fx[1]) < 0.03   # recovered (ridge-shrunk)
+    assert est[0] > est[2] > est[1]                                     # ordering
+    assert np.corrcoef(fit["shoot"], shoot)[0, 1] > 0.8                 # players unaffected
+    assert np.corrcoef(fit["create"], create)[0, 1] > 0.8
+
+
 def test_conversion_season_offsets_reconcile():
     """F6: unpenalized per-season conversion offsets absorb league finishing drift and make Σp=Σy
     hold PER SEASON, with the offset coefficient recovering the injected drift."""
@@ -417,6 +443,7 @@ def test_real_fit_smoke():
         assert R is not None and len(R["count"]) > 0
         assert R["team_idx"].shape[1] == 4 and R["def_idx"].shape[1] == 5
         assert len(R["ctx_names"]) == R["Xctx"].shape[1]      # named context incl. AGE_CTX
+        assert R.get("n_arenas", 0) >= 25                     # (venue, season) arena states present
         slab = 0 if key == "ev" else 1
         anchor = (Q["goal"] == 1) & (Q["strength"] == slab) & (Q["creator"] >= 0)
         gt, gc = Q["team_idx"][anchor], cidx[anchor]

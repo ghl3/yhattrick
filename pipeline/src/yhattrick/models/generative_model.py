@@ -212,6 +212,97 @@ def _season_cols(seasons):
     return {s: i for i, s in enumerate(sl[1:])}, max(len(sl) - 1, 0)
 
 
+# ── game venues (the arena recording-bias offsets) ──────────────────────────────────────────────
+
+# Same building, new sponsor name → alias to the CURRENT name so a venue's bias states stay one
+# random-walk chain across the rename (scorer crew doesn't change with the signage). Real building
+# moves stay split on purpose: Gila River → Mullett → Delta Center, Joe Louis → Little Caesars,
+# Nassau/Barclays → UBS are different rinks with different crews. Covers 2016+ for the backfill.
+_VENUE_ALIAS = {
+    "STAPLES Center": "Crypto.com Arena",
+    "FLA Live Arena": "Amerant Bank Arena",
+    "BB&T Center": "Amerant Bank Arena",
+    "Amalie Arena": "Benchmark International Arena",
+    "PNC Arena": "Lenovo Center",
+    "Wells Fargo Center": "Xfinity Mobile Arena",
+    "Xcel Energy Center": "Grand Casino Arena",
+    "Pepsi Center": "Ball Arena",
+    "Scottrade Center": "Enterprise Center",
+    "Verizon Center": "Capital One Arena",
+    "Air Canada Centre": "Scotiabank Arena",
+    "Bell MTS Place": "Canada Life Centre",
+    "MTS Centre": "Canada Life Centre",
+    "First Niagara Center": "KeyBank Center",
+    "Consol Energy Center": "PPG Paints Arena",
+}
+
+
+def _game_venues(seasons):
+    """{nhl_game_id: venue name} for all downloaded games in the seasons. NHL scorekeeping varies by
+    building (shot counts AND recorded locations), so the rate/quality stages carry per-venue
+    offsets. Venue comes from raw pbp `venue.default` (building-keyed, so Arizona's moves and
+    relocations split correctly); cached to interim/game_venue/<season>.parquet on first build."""
+    out = {}
+    for s in sorted(set(seasons)):
+        cache = C.INTERIM / "game_venue" / f"{s}.parquet"
+        if cache.exists():
+            df = pd.read_parquet(cache)
+        else:
+            rows = []
+            for pf in sorted(C.RAW_PBP.glob(f"{s}0*.json")):
+                try:
+                    d = json.loads(pf.read_text())
+                except (OSError, json.JSONDecodeError):
+                    continue
+                v = (d.get("venue") or {}).get("default") or (d.get("homeTeam") or {}).get("abbrev")
+                if v:
+                    rows.append({"nhl_game_id": int(pf.stem), "venue": str(v)})
+            df = pd.DataFrame(rows, columns=["nhl_game_id", "venue"])
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            df.to_parquet(cache)
+        out.update({int(g): _VENUE_ALIAS.get(v, v)
+                    for g, v in zip(df.nhl_game_id.astype(int), df.venue)})
+    return out
+
+
+ARENA_MIN_GAMES = 20        # venues with fewer games in the fit window (outdoor/neutral sites)
+                            #   get no offset — too few games to estimate one
+ARENA_SD = 0.05             # ridge SD on each (venue, season) state — biases are small, shrink to 0
+                            #   (a nuisance prior; also what identifies the block, so no reference
+                            #   venue is needed)
+ARENA_RW_SD = 0.03          # per-season random-walk SD between a venue's consecutive states —
+                            #   scorer crews persist but do change; stable bias ⇒ states glue into
+                            #   one pooled effect, a crew change ⇒ the data can move it
+
+
+def _arena_index(seasons, min_games=ARENA_MIN_GAMES):
+    """(Venue, SEASON)-state index for the arena recording-bias offsets. Rink bias is a scorer-crew
+    phenomenon — persistent across adjacent seasons, movable when crews change — so each major venue
+    gets one state per season it hosts games, ridged to zero (ARENA_SD) and smoothed across seasons
+    by a random-walk penalty (ARENA_RW_SD). Rare venues (< min_games in the window: outdoor/neutral
+    sites) map to −1 (no offset). Returns (game→venue map, {(venue, season): col}, pair machinery
+    dict or None)."""
+    ven = _game_venues(seasons)
+    if not ven:
+        return {}, {}, None
+    counts = pd.Series(list(ven.values())).value_counts()
+    majors = {v for v, c in counts.items() if c >= min_games}
+    sset = set(int(s) for s in seasons)
+    pairs = sorted({(v, int(str(g)[:4])) for g, v in ven.items()
+                    if v in majors and int(str(g)[:4]) in sset})
+    if not pairs:
+        return ven, {}, None
+    pmap = {p: i for i, p in enumerate(pairs)}
+    pv = [p[0] for p in pairs]
+    ps = np.array([p[1] for p in pairs], dtype=np.int64)
+    same = np.array([pv[i + 1] == pv[i] for i in range(len(pv) - 1)], dtype=bool)
+    e_prev = np.nonzero(same)[0].astype(np.int64)
+    e_next = e_prev + 1
+    mach = {"venue": pv, "season": ps, "e_prev": e_prev, "e_next": e_next,
+            "e_gap": (ps[e_next] - ps[e_prev]).astype(np.float64)}
+    return ven, pmap, mach
+
+
 # ── age & position (the shared aging-curve inputs) ──────────────────────────────────────────────
 
 def _birthdates(ids):
@@ -285,7 +376,7 @@ AGE_CTX = ["shoot_D", "create_D", "def_D",
            "def_zF", "def_z2F", "def_zD", "def_z2D"]
 
 
-def rate_rows(seasons, strengths, dual, players, idx, agepos=None, states=False):
+def rate_rows(seasons, strengths, dual, players, idx, agepos=None, states=False, arenas=True):
     """Shooter-resolved rate design for ONE strength bucket, on the SHARED player index. For each stint
     side that attacks (EV/dual: both sides; MA: only the more-skaters side) and each on-ice attacker j
     as focal shooter: one row with j's Fenwick count, j's index, the 4 teammate indices, the (≤5)
@@ -310,12 +401,14 @@ def rate_rows(seasons, strengths, dual, players, idx, agepos=None, states=False)
     slist = sorted(set(seasons))
     AC = {s: _age_cols(agepos["z"][s], agepos["isD"]) for s in slist} if agepos else None
     isD = agepos["isD"] if agepos else None
+    ven, acol_of, amach = _arena_index(seasons) if arenas else ({}, {}, None)
 
-    shooter, team, dff, dmask, ctx, cnt, off_t, gid, seas_row = [], [], [], [], [], [], [], [], []
+    shooter, team, dff, dmask, ctx, cnt, off_t, gid, seas_row, arena = [], [], [], [], [], [], [], [], [], []
     toi_atk, toi_def = np.zeros(P), np.zeros(P)
     last_season = np.full(P, -1, dtype=np.int64)
 
     def emit_side(atk, dfd, atk_home, s, def_goalie):
+        ac_i = acol_of.get((ven.get(int(s.nhl_game_id)), s.season), -1)   # −1 = rare/unknown venue
         c = counts.get((int(s.nhl_game_id), int(s.stint_idx)), {})
         ai = [idx[p] for p in atk]
         di = [idx[p] for p in dfd]
@@ -344,7 +437,7 @@ def rate_rows(seasons, strengths, dual, players, idx, agepos=None, states=False)
             shooter.append(idx[j]); team.append([idx[p] for p in atk if p != j])
             dff.append(di_pad); dmask.append(mrow); ctx.append(row)
             cnt.append(float(c.get(int(j), 0))); off_t.append(s.duration_s); gid.append(def_goalie)
-            seas_row.append(s.season)
+            seas_row.append(s.season); arena.append(ac_i)
 
     for s in df.itertuples():
         hn, an = len(s.home_skaters), len(s.away_skaters)
@@ -386,6 +479,12 @@ def rate_rows(seasons, strengths, dual, players, idx, agepos=None, states=False)
         "season_row": np.asarray(seas_row, dtype=np.int64), "seasons": slist,
         "ctx_names": ctx_names, "last_season": last_season,
     }
+    if acol_of:
+        out["arena_col"] = np.asarray(arena, dtype=np.int32)
+        out["n_arenas"] = len(acol_of)
+        out["arena_venue"] = amach["venue"]; out["arena_season"] = amach["season"]
+        out["arena_e_prev"] = amach["e_prev"]; out["arena_e_next"] = amach["e_next"]
+        out["arena_e_gap"] = amach["e_gap"]
     if states:
         out.update(_unit_machinery(out, P, slist))
     return out
@@ -433,7 +532,7 @@ def _unit_machinery(R, P, slist):
 
 # ── quality data: each shot + (for goals) the observed primary creator ────────────────────────────
 
-def quality_creator_rows(seasons, idx, strengths, agepos=None):
+def quality_creator_rows(seasons, idx, strengths, agepos=None, arenas=True):
     """Per Fenwick shot in the given strengths (POOLED across EV+MA): shooter, 4 teammates, ≤5 defenders
     (padded to 5 with a `def_mask`), context [is_home, pp, season…, shooter_D, def_D], logit-xG, goal
     flag, a CREATOR LABEL, a strength label (0=EV, 1=MA), and the row's season (for mapping teammates
@@ -445,7 +544,9 @@ def quality_creator_rows(seasons, idx, strengths, agepos=None):
     Join: shots_onice.event_idx == pbp goal sortOrder."""
     scol, nseas = _season_cols(seasons)
     isD = agepos["isD"] if agepos else None
-    shooter, team, dff, dmask, ctx, y, goal, creator, slab, seas_row = [], [], [], [], [], [], [], [], [], []
+    ven, acol_of, amach = _arena_index(seasons) if arenas else ({}, {}, None)
+    shooter, team, dff, dmask, ctx, y, goal, creator, slab, seas_row, arena = \
+        [], [], [], [], [], [], [], [], [], [], []
     for s in seasons:
         p = C.PROCESSED / "shots_onice" / f"{s}.parquet"
         if not p.exists():
@@ -455,6 +556,7 @@ def quality_creator_rows(seasons, idx, strengths, agepos=None):
         d = d[d.strength.isin(strengths) & d.xg.notna() & d.shooter_id.notna()]
         for gid, sub in d.groupby("nhl_game_id"):
             a1 = {}
+            ac_i = acol_of.get((ven.get(int(gid)), s), -1)    # −1 = rare/unknown venue
             pf = C.RAW_PBP / f"{int(gid)}.json"
             if pf.exists():
                 plays = json.loads(pf.read_text()).get("plays", [])
@@ -487,6 +589,7 @@ def quality_creator_rows(seasons, idx, strengths, agepos=None):
                 ctx.append(row)
                 xg = float(np.clip(r.xg, EPS, 1 - EPS)); y.append(np.log(xg / (1 - xg)))
                 goal.append(int(r.goal)); slab.append(0 if is_ev else 1); seas_row.append(s)
+                arena.append(ac_i)
                 if r.goal == 1:
                     ap = a1.get(int(r.event_idx))
                     if ap is None:
@@ -497,14 +600,21 @@ def quality_creator_rows(seasons, idx, strengths, agepos=None):
                         creator.append(-1)                   # assister not an on-ice teammate (data
                 else:                                        # glitch / goalie assist): latent, and
                     creator.append(-1)                       # excluded from the assist-credit anchor
-    return {"shooter_idx": np.asarray(shooter, dtype=np.int64), "team_idx": np.asarray(team, dtype=np.int64),
-            "def_idx": np.asarray(dff, dtype=np.int64), "def_mask": np.asarray(dmask, dtype=np.float64),
-            "Xctx": np.asarray(ctx, dtype=np.float64),
-            "y": np.asarray(y, dtype=np.float64), "goal": np.asarray(goal, dtype=np.int64),
-            "creator": np.asarray(creator, dtype=np.int64), "strength": np.asarray(slab, dtype=np.int64),
-            "season": np.asarray(seas_row, dtype=np.int64),
-            "ctx_names": ["home", "pp"] + [f"season_{s}" for s in sorted(set(seasons))[1:]]
-                         + (["shooter_D", "def_D"] if isD is not None else [])}
+    out = {"shooter_idx": np.asarray(shooter, dtype=np.int64), "team_idx": np.asarray(team, dtype=np.int64),
+           "def_idx": np.asarray(dff, dtype=np.int64), "def_mask": np.asarray(dmask, dtype=np.float64),
+           "Xctx": np.asarray(ctx, dtype=np.float64),
+           "y": np.asarray(y, dtype=np.float64), "goal": np.asarray(goal, dtype=np.int64),
+           "creator": np.asarray(creator, dtype=np.int64), "strength": np.asarray(slab, dtype=np.int64),
+           "season": np.asarray(seas_row, dtype=np.int64),
+           "ctx_names": ["home", "pp"] + [f"season_{s}" for s in sorted(set(seasons))[1:]]
+                        + (["shooter_D", "def_D"] if isD is not None else [])}
+    if acol_of:
+        out["arena_col"] = np.asarray(arena, dtype=np.int32)
+        out["n_arenas"] = len(acol_of)
+        out["arena_venue"] = amach["venue"]; out["arena_season"] = amach["season"]
+        out["arena_e_prev"] = amach["e_prev"]; out["arena_e_next"] = amach["e_next"]
+        out["arena_e_gap"] = amach["e_gap"]
+    return out
 
 
 # ── conversion data: each shot's shooter, facing goalie, observed xG, goal flag ────────────────────
@@ -743,13 +853,25 @@ def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson"):
     PS = 1 + 3 * NU + k                                      # index of create_0 in th
     w_sh, w_cr, w_df = 1 / RW_SD_SHOOT ** 2, 1 / RW_SD_CREATE ** 2, 1 / RW_SD_DEF ** 2
     has_rw = len(e_prev) > 0
+    n_ar = int(R.get("n_arenas", 0))                         # arena offsets: [PS+1, PS+1+n_ar)
+    acol = R.get("arena_col")
+    if acol is None:
+        acol = np.full(len(R["count"]), -1, dtype=np.int32)
+    la_ar, lrw_ar = 1 / ARENA_SD ** 2, 1 / ARENA_RW_SD ** 2  # (venue, season)-state nuisance prior
+    a_ep = jnp.asarray(R.get("arena_e_prev", np.zeros(0, dtype=np.int64)))
+    a_en = jnp.asarray(R.get("arena_e_next", np.zeros(0, dtype=np.int64)))
+    a_iw = jnp.asarray(1.0 / np.maximum(R.get("arena_e_gap", np.ones(0)), 1e-9))
+    has_ar_rw = int(a_ep.shape[0]) > 0
 
     def split(th):
         return th[1:1 + NU], th[1 + NU:1 + 2 * NU], th[1 + 2 * NU:1 + 3 * NU], th[1 + 3 * NU:PS], th[PS]
 
-    def nll(th, sh_j, tm_j, df_j, dm, X, cnt, ofs, gt, gc, fmj, ep, en, iw):
+    def nll(th, sh_j, tm_j, df_j, dm, X, cnt, ofs, gt, gc, fmj, ep, en, iw, acl):
         sh, cr, df, b, psi0 = split(th)
         eta = th[0] + sh[sh_j] + jnp.sum(cr[tm_j], 1) + jnp.sum(df[df_j] * dm, 1) + X @ b
+        if n_ar:                                             # venue recording-bias offset (−1 = ref)
+            ar = th[PS + 1:PS + 1 + n_ar]
+            eta = eta + jnp.where(acl >= 0, ar[jnp.clip(acl, 0, None)], 0.0)
         mu = jnp.exp(eta + ofs)
         if not nb:
             pois = jnp.sum(mu - cnt * jnp.log(mu))
@@ -766,17 +888,24 @@ def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson"):
             pen += 0.5 * (w_sh * jnp.sum(iw * (sh[en] - sh[ep]) ** 2)
                           + w_cr * jnp.sum(iw * (cr[en] - cr[ep]) ** 2)
                           + w_df * jnp.sum(iw * (df[en] - df[ep]) ** 2))
+        if n_ar:                                             # arena nuisance prior: ridge + season RW
+            pen += 0.5 * la_ar * jnp.sum(ar ** 2)
+            if has_ar_rw:
+                pen += 0.5 * lrw_ar * jnp.sum(a_iw * (ar[a_en] - ar[a_ep]) ** 2)
         return pois + shots_per_goal * credit + pen
 
-    x0 = np.zeros(PS + 1 + (1 if nb else 0))
+    x0 = np.zeros(PS + 1 + n_ar + (1 if nb else 0))
     if nb:
         x0[-1] = 1.0
     res = _optimize(nll, x0, sh_i, tm_i, df_i, dmask, R["Xctx"], R["count"], R["offset"],
-                    g_team, g_cidx, fm, e_prev, e_next, 1.0 / np.maximum(e_gap, 1e-9))
+                    g_team, g_cidx, fm, e_prev, e_next, 1.0 / np.maximum(e_gap, 1e-9), acol)
     th = res.x
     sh, cr, df = th[1:1 + NU], th[1 + NU:1 + 2 * NU], th[1 + 2 * NU:1 + 3 * NU]
     b, psi0 = th[1 + 3 * NU:PS], float(th[PS])
+    ar_vec = th[PS + 1:PS + 1 + n_ar]
     eta = th[0] + sh[sh_i] + cr[tm_i].sum(1) + (df[df_i] * dmask).sum(1) + R["Xctx"] @ b
+    if n_ar:
+        eta = eta + np.where(acol >= 0, ar_vec[np.clip(acol, 0, None)], 0.0)
     mu = np.exp(eta + R["offset"])
     r = float(np.exp(th[-1])) if nb else None
     W = mu * r / (r + mu) if nb else mu
@@ -804,7 +933,9 @@ def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson"):
            "def_last": _last_view(df, lu),
            "se_shoot_last": se_sh, "se_create_last": se_cr, "se_def_last": se_df,
            "count_model": count_model, "r": r, "converged": bool(res.success),
-           "grad_norm": float(np.max(np.abs(res.jac))), "ctx_names": R.get("ctx_names")}
+           "grad_norm": float(np.max(np.abs(res.jac))), "ctx_names": R.get("ctx_names"),
+           "arena_vec": ar_vec, "arena_venue": R.get("arena_venue"),
+           "arena_season": R.get("arena_season")}
     if not states:                                           # static aliases (units == players)
         out["se_shoot"], out["se_create"], out["se_def"] = se_sh, se_cr, se_df
     return out
@@ -835,6 +966,15 @@ def fit_quality_creator(Q, P, creates, isD=None):
     if isD is None:
         isD = np.zeros(P)
     tpos = isD[Q["team_idx"]].astype(np.int64)              # (n,4) teammate position: 0=F, 1=D
+    n_ar = int(Q.get("n_arenas", 0))                        # arena offsets: last n_ar params
+    acol = Q.get("arena_col")
+    if acol is None:
+        acol = np.full(n, -1, dtype=np.int32)
+    la_ar, lrw_ar = 1 / ARENA_SD ** 2, 1 / ARENA_RW_SD ** 2
+    a_ep = jnp.asarray(Q.get("arena_e_prev", np.zeros(0, dtype=np.int64)))
+    a_en = jnp.asarray(Q.get("arena_e_next", np.zeros(0, dtype=np.int64)))
+    a_iw = jnp.asarray(1.0 / np.maximum(Q.get("arena_e_gap", np.ones(0)), 1e-9))
+    has_ar_rw = int(a_ep.shape[0]) > 0
     lg = np.zeros((n, 5))                                   # per-row creator logits by strength
     for st, spec in creates.items():
         cr_s, psi_s = spec[0], spec[1]
@@ -844,12 +984,15 @@ def fit_quality_creator(Q, P, creates, isD=None):
             lg[m] = np.concatenate([np.full((int(m.sum()), 1), psi_s), cr_s[tcols[m]]], 1)
     pi_np = np.exp(lg - lg.max(1, keepdims=True)); pi_np /= pi_np.sum(1, keepdims=True)
 
-    def split(th):                                          # [mq | qshoot(P) | qcreate(2) | qdef(P) | beta(k)]
+    def split(th):                                # [mq | qshoot(P) | qcreate(2) | qdef(P) | beta(k) | arena]
         return th[0], th[1:1 + P], th[1 + P:3 + P], th[3 + P:3 + 2 * P], th[3 + 2 * P:3 + 2 * P + k]
 
-    def nll(th, sh_i, tm_i, tp_i, df_i, dm, X, xg, obs, cidx, pi):
+    def nll(th, sh_i, tm_i, tp_i, df_i, dm, X, xg, obs, cidx, pi, acl):
         mq, qs, qc, qd, b = split(th)
         base = mq + qs[sh_i] + jnp.sum(qd[df_i] * dm, 1) + X @ b
+        if n_ar:                                            # venue location-bias offset (−1 = ref)
+            arq = th[3 + 2 * P + k:3 + 2 * P + k + n_ar]
+            base = base + jnp.where(acl >= 0, arq[jnp.clip(acl, 0, None)], 0.0)
         sig5 = jnp.concatenate([jax.nn.sigmoid(base)[:, None],
                                 jax.nn.sigmoid(base[:, None] + qc[tp_i])], axis=1)   # (n,5) col0=unassisted
 
@@ -859,14 +1002,21 @@ def fit_quality_creator(Q, P, creates, isD=None):
         marg = jnp.sum(pi * sig5, axis=1)                           # latent: marginalize over FIXED pi
         ll = jnp.where(obs, fb(gs), fb(marg))
         pen = 0.5 * (lqs * jnp.sum(qs ** 2) + lqc * jnp.sum(qc ** 2) + lqd * jnp.sum(qd ** 2))
+        if n_ar:                                            # arena nuisance prior: ridge + season RW
+            pen += 0.5 * la_ar * jnp.sum(arq ** 2)
+            if has_ar_rw:
+                pen += 0.5 * lrw_ar * jnp.sum(a_iw * (arq[a_en] - arq[a_ep]) ** 2)
         return -jnp.sum(ll) + pen
 
-    res = _optimize(nll, np.zeros(3 + 2 * P + k), Q["shooter_idx"], Q["team_idx"], tpos, Q["def_idx"],
-                    dmask, Q["Xctx"], _sigmoid(Q["y"]), obs_np, cidx_np, pi_np)
+    res = _optimize(nll, np.zeros(3 + 2 * P + k + n_ar), Q["shooter_idx"], Q["team_idx"], tpos,
+                    Q["def_idx"], dmask, Q["Xctx"], _sigmoid(Q["y"]), obs_np, cidx_np, pi_np, acol)
     mq, qs, qc, qd, b = (float(res.x[0]), res.x[1:1 + P], res.x[1 + P:3 + P],
                          res.x[3 + P:3 + 2 * P], res.x[3 + 2 * P:3 + 2 * P + k])
+    arq_vec = res.x[3 + 2 * P + k:3 + 2 * P + k + n_ar]
     # Beta concentration from residual MSE around the fitted mean
     base = mq + qs[Q["shooter_idx"]] + (qd[Q["def_idx"]] * dmask).sum(1) + Q["Xctx"] @ b
+    if n_ar:
+        base = base + np.where(acol >= 0, arq_vec[np.clip(acol, 0, None)], 0.0)
     sig5 = np.concatenate([_sigmoid(base)[:, None], _sigmoid(base[:, None] + qc[tpos])], 1)
     ci = cidx_np
     m = (pi_np * sig5).sum(1)                                    # marginal mean, FIXED pi
@@ -897,7 +1047,9 @@ def fit_quality_creator(Q, P, creates, isD=None):
     mu_qual = {"ev": mq, "ma": mq + (float(b[1]) if len(b) > 1 else 0.0)}
     return {"intercept": mq, "mu_qual": mu_qual, "qshoot": qs, "qcreate": qc, "qdef": qd, "beta": b,
             "beta_s": s_conc, "se_qcreate": se_qc, "n_create": n_create, "converged": bool(res.success),
-            "grad_norm": float(np.max(np.abs(res.jac))), "ctx_names": Q.get("ctx_names")}
+            "grad_norm": float(np.max(np.abs(res.jac))), "ctx_names": Q.get("ctx_names"),
+            "arena_vec": arq_vec, "arena_venue": Q.get("arena_venue"),
+            "arena_season": Q.get("arena_season")}
 
 
 # ── conversion PRE-CALCULATION: empirical-Bayes prior SDs (recomputed each fit, then held fixed) ─────
@@ -1148,6 +1300,9 @@ def ppc(R, rate, qual, conv, key, seed=0, agepos=None):
     df_u = R.get("def_unit", R["def_idx"])
     eta_r = (rate["intercept"] + rate["shoot"][sh_u] + rate["create"][tm_u].sum(1)
              + (rate["def"][df_u] * dmask).sum(1) + R["Xctx"] @ rate["beta"])
+    acol = R.get("arena_col")
+    if acol is not None and len(rate.get("arena_vec", [])):
+        eta_r = eta_r + np.where(acol >= 0, rate["arena_vec"][np.clip(acol, 0, None)], 0.0)
     mu = np.exp(eta_r + R["offset"])
     if rate.get("count_model") == "nb" and rate.get("r"):
         r = rate["r"]
@@ -1167,6 +1322,8 @@ def ppc(R, rate, qual, conv, key, seed=0, agepos=None):
     if isD is not None:
         qctx = qctx + qcm.get("shooter_D", 0.0) * isD[R["shooter_idx"]] \
                     + qcm.get("def_D", 0.0) * (isD[R["def_idx"]] * dmask).sum(1)
+    if acol is not None and len(qual.get("arena_vec", [])):
+        qctx = qctx + np.where(acol >= 0, qual["arena_vec"][np.clip(acol, 0, None)], 0.0)
     base = (qual["mu_qual"][key] + qual["qshoot"][R["shooter_idx"]]
             + (qual["qdef"][R["def_idx"]] * dmask).sum(1) + qctx)
     qc2 = np.asarray(qual["qcreate"])
@@ -1226,6 +1383,31 @@ def _board(names, players, val, toi, label, se=None, higher=True, n=12, min_toi=
             print(f"   {val[i]:+.3f} ±{1.96 * se[i]:.3f} (z={z:+.1f}){flag}  {nm:24s} ({toi[i] / 60:.0f} min)")
         else:
             print(f"   {val[i]:+.3f}  {nm:24s} ({toi[i] / 60:.0f} min)")
+
+
+def _arena_report(fit, n=3, pct=True):
+    """One-line summary of the fitted (venue, season) arena states: biggest/smallest venue means
+    (rate: ≈% on shot counts; quality: logit-xG units) + the largest within-venue season drift."""
+    vec = fit.get("arena_vec")
+    if vec is None or not len(vec):
+        return None
+    g = pd.DataFrame({"v": fit["arena_venue"], "x": vec}).groupby("v").x
+    m = g.mean().sort_values()
+    fmt = (lambda x: f"{100 * x:+.1f}%") if pct else (lambda x: f"{x:+.3f}")
+    lo = "  ".join(f"{v} {fmt(x)}" for v, x in m.head(n).items())
+    hi = "  ".join(f"{v} {fmt(x)}" for v, x in m.tail(n)[::-1].items())
+    return f"hi {hi}   lo {lo}   (max venue drift {fmt(float((g.max() - g.min()).max()))})"
+
+
+def _arena_json(fit):
+    """{venue: {season: coef}} from a fit's arena states (None when absent)."""
+    vec = fit.get("arena_vec")
+    if vec is None or not len(vec):
+        return None
+    out = {}
+    for v, s, x in zip(fit["arena_venue"], fit["arena_season"], vec):
+        out.setdefault(v, {})[int(s)] = round(float(x), 4)
+    return out
 
 
 def _curve_report(cm, blk):
@@ -1302,6 +1484,9 @@ def run(seasons, count_model="poisson", spg_scale=1.0):
         cm = _coef_map(R["ctx_names"], rate["beta"])
         for blk in ("shoot", "create", "def"):
             print(f"    [{key}] {blk}-curve   {_curve_report(cm, blk)}")
+        arep = _arena_report(rate)
+        if arep:
+            print(f"    [{key}] arena rate effects   {arep}")
         if dual:                                             # stage-2 pi via per-season unit states
             qs_all = np.array([sord[s] for s in Q["season"]], dtype=np.int64)
             tu_all = R["unit_lut"][Q["team_idx"], qs_all[:, None]]
@@ -1320,6 +1505,9 @@ def run(seasons, count_model="poisson", spg_scale=1.0):
     qc, qse = qual["qcreate"], qual["se_qcreate"]
     print(f"  qcreate (position-level, A1): F {qc[0]:+.4f} ±{1.96 * qse[0]:.4f}   "
           f"D {qc[1]:+.4f} ±{1.96 * qse[1]:.4f}")
+    qarep = _arena_report(qual, pct=False)
+    if qarep:
+        print(f"  arena quality (logit-xG) effects   {qarep}")
 
     # pooled conversion fit (shared fin/gsave; per-strength a/b; season offsets + curves in ctx)
     Cr = conversion_rows(seasons, idx, ALL_STRENGTHS, agepos)
@@ -1409,6 +1597,10 @@ def _save(seasons, players, rates, qual, conv, vals, ppcs, spg, agepos, last_sea
                        "se_F": float(qual["se_qcreate"][0]), "se_D": float(qual["se_qcreate"][1])},
            "age_curves": curves,
            "rw_sd": {"shoot": RW_SD_SHOOT, "create": RW_SD_CREATE, "def": RW_SD_DEF},
+           "arena_effects": {"ev": _arena_json(ev) if ev else None,
+                             "ma": _arena_json(ma) if ma else None,
+                             "quality": _arena_json(qual),
+                             "prior": {"sd": ARENA_SD, "rw_sd": ARENA_RW_SD}},
            "missing_birthdates": agepos["missing"],
            "conv": {"a": conv["a"], "b": conv["b"], "prior_sd_fin": conv["prior_sd_fin"],
                     "prior_sd_gsave": conv["prior_sd_gsave"], "sum_p": conv["sum_p"],
