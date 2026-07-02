@@ -1,141 +1,180 @@
-# 07 — Metrics: how each player-page card is calculated
+# 07 — Metrics: how each player-card number is calculated
 
-This is the reader-facing reference for the player page. It explains the **philosophy** behind the
-modeled cards, the one **key step** that makes them work (absorbing the model intercept), and then
-gives a **card-by-card** definition. For the model internals (how the coefficients are fit), see
-[`modeling.md`](modeling.md).
+Reader-facing reference for the player page. The skater cards are powered by the **generative
+player model** (spec: [`generative_model.md`](generative_model.md)); this doc explains what the
+inferred parameters mean, how they become card metrics — including **Goals Added /60** and
+**WAR** — and exactly which formulas run. The previous RAPM-based card definitions live on in
+[`modeling.md`](modeling.md); that model still runs in the pipeline (validation, penalties,
+per-season table rows) but no longer defines the headline cards.
 
-## Philosophy — goals attributed
+## Philosophy — inferred skills, then two honest aggregates
 
-Every modeled card is a **goal attribution**: "goals we credit to this player." The design goal is
-that, across the whole league, the attributions **sum to actual goals**. That isn't a coincidence —
-it's enforced by two facts:
+The generative model writes down how a shift **produces** shots and goals — who shoots, who
+creates for teammates, who suppresses, how dangerous the shots are, who converts them — and fits
+one latent skill per player for each of those verbs. Cards are those **broad latent qualities**;
+observed events (assists, blocks) are evidence that grounds them, never cards themselves.
 
-- **Expected goals are calibrated**: `Σ xG ≈ Σ goals`. So if we credit each player his share of the
-  on-ice expected goals, the shares add up to (about) all the goals.
-- **Finishing is defined as `goals − xG`**: so `created (xG) + finishing` reconciles xG back to *actual*
-  goals. A tiny league baseline `μ` is left unattributed.
+Every skill is isolated from **linemates, competition, arena scorekeeping, and age** (the model
+carries explicit terms for each), and is a **current-skill** read: the player's latest-season
+drift state + his position's baseline + the league aging curve at his age today. Projections are
+shown separately and never blended in.
 
-This is why we avoid "vs. an average player" framing on the cards: a number like "+0.1 goals/60 above
-average" answers a *comparison*, not "how many goals." We want the cards to answer **how many goals**.
+Two aggregates answer the two different questions people ask:
 
-## Absorbing the intercept (the key step)
+- **Goals Added /60 (GA/60)** — *how good is he, on equal footing?* His net goal impact per 60
+  vs a league-average player at his position, on a baseline team. Deployment-free; powers the
+  percentiles.
+- **WAR** — *how much did he actually add this season?* Expected goals with him vs a
+  replacement-level player in his slot, accumulated over his **real shifts, linemates, and
+  opposition**, converted to wins. Deployment-in; the counting stat.
 
-The on-ice (RAPM) model fits, for each stint, the attacking team's expected-goal rate as a sum:
+## The inferred parameters
 
-```
-xGF/60  =  intercept  +  Σ (ev_off of the 5 attackers)  +  Σ (ev_def of the 5 defenders)  +  context
-```
+Per player (fit on the pooled multi-season window; details in the model doc):
 
-The **intercept is fit free** (unpenalized), so it absorbs the league baseline — the xGF/60 a stint of
-all-average skaters would post (≈ 2.5 at 5v5, the whole 5-man unit). The player coefficients are
-penalized toward zero, so the exported `ev_off` is the player's **deviation** from his slice of that
-baseline. An average skater sits near 0; a below-average one goes **negative**. That's why the raw
-coefficient reads as "vs. average."
-
-To make it an absolute attribution, fold each player's share of the baseline back in — split the
-baseline equally among that side's on-ice skaters and add the coefficient:
-
-```
-his xG created /60  =  baseline ÷ skaters  +  ev_off  =  2.5/5 + ev_off  =  0.5 + ev_off
-```
-
-Worked example (5v5), a good two-way forward with `ev_off = +0.3`, `ev_def = −0.2`:
-
-| | formula | value |
+| Parameter | Plain meaning | Feeds |
 |---|---|---|
-| Goals created /60 | `0.5 + 0.3` | **0.8** |
-| Goals allowed /60 | `0.5 + (−0.2)` | **0.3** |
+| `shoot` | own-shot volume vs position/age baseline (per-season drift states) | Shooting, Scoring |
+| `qshoot` | danger of his own shots vs baseline | Scoring |
+| `fin` | converts above what his shot locations predict (heavily shrunk — small skill) | Finishing, Scoring |
+| `create` | how much more his teammates shoot with him on the ice (anchored by primary + secondary assists; per-season states) | Playmaking |
+| `qcreate` (position-level) | danger a creator's setups add — estimable only per position (F ≈ neutral, D setups less dangerous) | Playmaking |
+| `def`, `qdef` | opponent shot volume and danger he suppresses | Defense |
+| `gsave` | goalie saves above expected (goalie pages) | — |
+| aging curves + position offsets + arena states | shared context the skills are isolated FROM | everything |
 
-Both are ≥ 0 and read as real expected goals. Summed across the five on-ice skaters, the created shares
-add back to the stint's xGF — which is exactly what "the baseline split that reconciles to Σ xG" means.
-The per-player deviations already encode position (forwards get systematically higher `ev_off` than
-defensemen), so an **equal** split of the baseline is the clean, neutral choice.
+PP/PK have their own volume parameters (`pp_shoot/pp_create/pp_def`); shot-quality and finishing
+skills are shared across strengths.
 
-Splits by situation: even strength **÷5** (5 skaters a side); power-play offense **÷5** (5 PP skaters);
-penalty-kill defense **÷4** (4 PK skaters). The special-teams baseline is the PP team's xGF/60 (higher
-than 5v5).
+## The value formulas (parameters → goals)
 
-## Why "centered at 0" is NOT "vs average"
-
-The **net** is `created − allowed`:
+Cards are computed by **plugging the parameters into the model's own closed-form production
+equations**. With the fitted intercepts (`mu_rate` = baseline log shot rate, `mu_qual` = baseline
+logit shot quality, `a`,`b` = the xG→goal conversion map) and a player's effective parameters θ:
 
 ```
-net = (0.5 + ev_off) − (0.5 + ev_def) = ev_off − ev_def        the 0.5 baselines cancel
+shots60(θ)   = exp(mu_rate + shoot)                       his own unblocked shots per 60
+q_own(θ)     = sigmoid(mu_qual + qshoot)                  mean xG of his shots
+p_goal(θ)    = sigmoid(a·logit(q_own) + b + fin)          goals per shot (quality × finishing)
+Scoring      = shots60 · p_goal                                       [goals/60]
+
+Playmaking   = 4 · exp(mu_rate) · (e^create − 1) · sigmoid(mu_qual + qcreate_pos)   [xG/60]
+Defense      = 5 · [exp(mu_rate)·sigmoid(mu_qual) − exp(mu_rate + def)·sigmoid(mu_qual + qdef)]
+                                                                       [xG erased/60]
 ```
 
-It's tempting to call this "vs average" because an average player (ev_off = ev_def = 0) nets 0. But
-that reasoning is backwards. A metric is "vs average" only if it is **defined** as (player − average
-player). Net isn't: it's `created − allowed`, a difference of two **absolute** quantities. Its zero
-means **break-even** — he creates as many goals as he's on the hook for allowing — which is a real,
-physical reference point, not "the average player." Average players merely *happen* to land near
-break-even, because league-wide xG-created equals xG-allowed.
+**Goals Added /60** evaluates those equations for the player and differences against his
+position's TOI-weighted average (the "baseline team" — so a league-average F or D is exactly 0),
+pricing xG into goals with κ = the league goals-per-xG from the conversion fit (≈ 1 by
+calibration, applied explicitly):
 
-This is exactly plus/minus: "goals for while I'm on" and "goals against while I'm on" are absolute
-counts from zero, but their *difference* is centered, because the common baseline cancels. Offense can
-genuinely be zero (you can create no chances); but the meaningful zero for a *net* is break-even, so the
-net is a vs-zero **differential**, not a vs-average comparison.
+```
+GA/60 = [Scoring − Scorinḡ_pos] + κ·[Playmaking − Playmakinḡ_pos] + κ·[Defense − Defensē_pos]
+```
+
+PP GA/60 and PK GA/60 are the same construction on the power-play/penalty-kill bucket (PP = own
+scoring + creation above position average; PK = chance value erased above position average).
+
+## WAR — wins above replacement, over his actual season
+
+For every real stint he played, the model computes the expected goals for and against **with him
+on the ice** (his linemates', opponents', and goalie's actual parameters, the stint's actual zone
+start / score / venue context), then recomputes with him swapped for a **replacement-level player
+at his position** — and accumulates the difference:
+
+```
+GAR  = Σ_stints  [ E(GF − GA | actual lineup, him) − E(GF − GA | him → replacement) ]
+WAR  = GAR ÷ goals-per-win
+```
+
+The swap is closed-form (the rate model is exponential-additive), computed per season with his
+per-season drift states, across EV + PP + PK.
+
+**Calibration knobs (explicit and revisable):**
+- **Replacement level**: the TOI-weighted average parameters of players in the **8th–12th
+  percentile of GA/60** within his position — an empirical "freely available player" archetype.
+- **Goals-per-win = 6.0** (the standard rule of thumb; a season-estimated value is a listed
+  follow-up).
+
+**Honest caveats:** penalties are *not* in WAR yet (the production penalty value is shown as its
+own card until the penalties stage joins the generative model); defender shot-quality suppression
+enters as a multiplicative factor (an approximation documented in the exporter); WAR ships without
+confidence intervals until the parametric bootstrap lands.
+
+**Scale note — our WAR runs hotter than public WAR models.** Top seasons here land around 9–12
+wins where Evolving-Hockey-style models top out near 5–6. This is a *definition* difference, not a
+bug: our WAR is the model's literal swap counterfactual — remove the player from every real stint,
+insert a replacement, and credit him the full change in expected goals, including the multiplicative
+creation effect on all four linemates (largest on fixed PP1 units, where five years of shared
+deployment concentrates credit in the unit's driver). Summed player marginals therefore count each
+lineup synergy more than once and exceed a league wins budget (league total ≈ 1,400 vs the ~700
+"available wins above replacement" public models normalize to). Rankings and the replacement zero
+are unaffected. Compare WAR **within this site**, not against other models' numbers; a
+synergy-splitting (Shapley-style) attribution is the principled refinement on the roadmap.
 
 ## Card-by-card
 
-All modeled cards show a **unit** in small text after the number, a **within-position percentile**
-(among forwards or defensemen; goalies among goalies), and — where available — a 95% confidence range.
+Headline row — the complete value summary:
 
-### Modeled Impact (skater value)
+| Card | What it is | Unit | Zero means |
+|---|---|---|---|
+| **WAR** (latest season) | wins added vs replacement over his actual season | wins | replacement level |
+| **Goals Added /60** | net skill vs a position-average player, baseline team, 5v5 | goals/60 | league-average at position |
+| **PP Goals Added /60** | power-play version | goals/60 | position-average PP player |
+| **PK Goals Added /60** | penalty-kill version | goals/60 | position-average PK player |
 
-| Card | Formula | Unit | Scope | Zero means |
-|---|---|---|---|---|
-| **Net Goals Added per Game** | `(g_created + g_fin − g_allowed + g_pen) / GP` | goals/game | all situations, deployment-weighted | break-even |
-| **Scoring** | `φ · offense + finishing` | goals/60 | 5v5, his own shots | no own-shot value |
-| **Playmaking** | `(1 − φ) · offense` | goals/60 | 5v5, creation for teammates | no creation for teammates |
-| **Defense** | `baseline/5 + ev_def` | goals/60 | 5v5, on-ice share; **lower is better** | allowed no chances |
-| **Power-Play Scoring** | `φ_pp · pp_offense + pp finishing` | goals/60 | power play, his own shots | no own-shot value |
-| **Power-Play Playmaking** | `(1 − φ_pp) · pp_offense` | goals/60 | power play, creation for teammates | no creation for teammates |
-| **Penalty-Kill Defense** | `pp_baseline/4 + pk_def` | goals/60 | penalty kill; **lower is better** | allowed no chances |
-| **Penalties** | `(drawn − taken) × V`, `V ≈ 0.14` | goals/60 | all situations | neutral |
+Attribute rows — the qualities beneath the value:
 
-`offense = baseline/5 + ev_off` is his isolated on-ice offense share (= the old "Even-Strength Offense");
-`φ = his own ixG ÷ team on-ice xGF` is the fraction of on-ice chances that were his own shots.
+| Card | Source | Unit | Notes |
+|---|---|---|---|
+| **Scoring** | `shots60 · p_goal` | goals/60 | volume × danger × finishing |
+| **Shooting** | `(e^shoot − 1) × 100` | % shot volume | vs position/age-typical volume |
+| **Finishing** | `fin` mapped to probability | goals/100 shots | **always shown with ± CI** — honest about a small skill |
+| **Playmaking** | Playmaking formula | xG/60 | creation volume is his; setup danger priced at his position; ± CI |
+| **Defense** | Defense formula | xG erased/60 | volume + danger suppression combined |
+| **Projected GA/60** | next season: last state + aging curve | goals/60 | labeled projection; uncertainty widens |
+| **WAR (window)** | GAR summed over all fitted seasons | wins | the career-window counting stat |
+| **Penalties** | production model (drawn − taken) × V | goals/60 | not yet inside WAR |
 
-**Scoring + Playmaking = offense + finishing** (the offensive term of the ledger), so the Net is
-unchanged. The split is a **positive partition**: `φ ∈ [0,1]`, so both pieces are ≥ 0 — Scoring is the
-own-shot share of his isolated offense (plus all his finishing), Playmaking is the rest (creation for
-teammates). We split the *isolated* offense proportionally rather than subtracting raw own xG from it:
-the latter is zero-sum (raw own production can exceed a volume shooter's isolated share, forcing
-negative "playmaking"), whereas the proportional partition is always positive and still additive. It is
-a partition of his isolated value, not a marginal teammate-uplift estimate (which would reintroduce
-negatives for shot-heavy players).
+All rate copy reads **per 60**. Every card shows a **within-position percentile** (forwards vs
+forwards, defensemen vs defensemen) among players clearing the ice-time gates (5v5: 100 min;
+PP/PK: 40 min); below the gate the card greys out. Confidence intervals (± = 1.96·SE) are shown
+where the model computes them (Finishing always; Playmaking via its creation-volume SE).
 
-**Linemate-context caveat.** The offense *total* is linemate-adjusted (RAPM), but the scoring-vs-
-playmaking *split fraction* `φ = own ixG ÷ team on-ice xGF` uses raw on-ice shares. So a low-shot-volume
-winger on a strong line (few of his own shots, many on-ice chances) tilts toward Playmaking even if the
-chances are mostly his linemates' doing — e.g. a bottom-six winger riding a star center. For high-usage
-players this is negligible; it mainly flatters low-volume role players' Playmaking.
+## The trajectory chart
 
-Note on penalty-kill: a PK skater is on the ice for goals against, so his Penalty-Kill Defense number is
-large by role; his *skill* shows as being **below** the PK baseline (a low number). Good penalty-killers
-minimize an unavoidably negative-attribution role.
+The by-season chart shows four layers per attribute (GA/60, Scoring, Playmaking, Defense):
+**solid line** — the skill the model infers each season (the drift states + that season's age,
+smoothed and deployment-free); **dashed segment** — the next-season projection (state held, age
+advanced along the league curve; visually distinct so extrapolation is never mistaken for
+observation); **grey dotted** — a position-average player *at his age* each season (the aging
+context); **dots** — unsmoothed single-season estimates (the raw evidence). Clicking a stat in
+the season table switches to the classic per-season chart.
 
-### Goalies
+## Goalies
 
-GSAx is already an attribution and needs no intercept: **Goals Saved Above Expected** = `xGA − GA` over
-the calibrated shot set; zero = saved exactly what the shots' xG predicted (not "vs the average
-goalie"). `gsax_per100` (per 100 shots, shrunk for sample) and `gsax60` (per 60) are the headline rates;
-`gsax_saved` is the season total goals prevented (the goalie's `g_net`). Sv%, GAA, high-danger Sv%, and
-quality-start % are conventional descriptive rates.
+Unchanged: **GSAx** = `xGA − GA` over the calibrated shot set — an attribution needing no
+baseline; `gsax_per100` (shrunk) and `gsax60` are the headline rates. Sv%, GAA, high-danger Sv%,
+quality-start % are conventional descriptive rates. (The generative model's `gsave` + goalie
+aging curve are the planned upgrade path.)
 
-### Descriptive (non-attribution) cards
+## Descriptive (non-model) cards
 
-- **On-ice team rates** (xGF/60, xGA/60, Corsi for/against): the *team's* rate while he's on the ice,
-  **not** isolated to him.
-- **Individual rates** (Shot Rate, Shot Quality, Expected Goal Rate, Goal/Assist Rate, Penalty
-  Draw/Take Rate): his own on-puck production, per 60 of all-situations ice time.
+- **On-ice team rates** (xGF/60, xGA/60, Corsi): the team's rate while he's on the ice, not
+  isolated to him.
+- **Player stats** (shot rate, goal/assist rates, penalties drawn/taken, faceoffs, zone starts):
+  counted straight from events, per 60.
 
 ## Caveats
 
-- Attribution is **approximate per stint** (ridge shrinkage pulls coefficients toward zero; the tiny
-  league baseline `μ` is unattributed) but **calibrated in aggregate** — leaguewide the shares
-  reconcile to actual goals.
-- These are per-player attributions, so a **roster's `g_net` does not sum to the team's goal
-  differential** — expected for marginal/share quantities, and distinct from the league-level
-  `goal_accounting` identity in [`modeling.md`](modeling.md).
+- Skills are **shrunk estimates** (empirical-Bayes priors): small samples pull toward the
+  position average — that's the honest read, and it's why low-TOI cards grey out rather than
+  showing noise as skill.
+- GA/60 is a **vs-average** comparison and WAR a **vs-replacement** total — they answer different
+  questions and won't rank identically (a durable average player can out-WAR a brilliant
+  part-timer).
+- A roster's WAR does not sum exactly to team wins — replacement level and goals-per-win are
+  league-calibrated constants, not team accounting identities.
+- The model validates out-of-sample (held-out-season harness, model doc §7): skill reads carry
+  corr ≈ 0.84 to next-season shot rates with calibrated totals; projections are honest
+  extrapolations, not guarantees.

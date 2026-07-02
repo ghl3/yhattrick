@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { type ColumnDef, type SortingState } from "@tanstack/react-table";
 import type { GameIndexRow, GoalieRow, PlayerRow } from "@/lib/types";
-import { seasonLabel } from "@/lib/format";
+import { pctColor, seasonLabel } from "@/lib/format";
 import { teamFullName, teamLogo } from "@/lib/teams";
 import { DataTable } from "@/components/DataTable";
 
@@ -46,6 +46,29 @@ const rosterColumns = (team: string): ColumnDef<PlayerRow>[] => {
     {
       header: "TOI", id: "toi", accessorFn: (p) => st(p)?.toi_s ?? 0, meta: { title: `Total time on ice for ${team} (minutes)` },
       cell: (c) => <span className="num">{Math.round(c.getValue<number>() / 60)}</span>,
+    },
+    // player-card headline metrics (overall, not split by team — the isolation already removes team context)
+    {
+      header: "WAR", id: "war", accessorFn: (p) => p.war ?? null,
+      meta: { title: "Wins above replacement, latest season (all teams; 0 = replacement level)" },
+      cell: (c) => {
+        const p = c.row.original;
+        return p.war == null ? <span className="metric-cell muted">—</span> : (
+          <span className="metric-cell" style={{ background: pctColor(p.war_pct ?? null) }}>{p.war.toFixed(2)}</span>
+        );
+      },
+    },
+    {
+      header: "GA/60", id: "ga60", accessorFn: (p) => p.ga60 ?? null,
+      meta: { title: "Goals Added per 60 vs a league-average player at his position (5v5, baseline team)" },
+      cell: (c) => {
+        const p = c.row.original;
+        return p.ga60 == null ? <span className="metric-cell muted">—</span> : (
+          <span className="metric-cell" style={{ background: pctColor(p.ga60_pct ?? null) }}>
+            {`${p.ga60 >= 0 ? "+" : ""}${p.ga60.toFixed(2)}`}
+          </span>
+        );
+      },
     },
   ];
 };
@@ -184,7 +207,7 @@ export default function Team() {
           rowHref={(p) => `/player/${p.id}`}
           className="games ptable"
         />
-        <p className="muted card-note">Every skater who appeared for {team} in our data. GP, G, A, P and TOI are for {team} only — click a skater for full career detail.</p>
+        <p className="muted card-note">Every skater who appeared for {team} in our data. GP, G, A, P and TOI are for {team} only; WAR and GA/60 are the player&apos;s overall card metrics (color = percentile vs position). Click a skater for full career detail.</p>
       </div>
 
       {teamGoalies.length > 0 && (

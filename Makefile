@@ -36,7 +36,7 @@ SEASON ?=
 FAMILY ?= gaussian        # response family for `make model`: gaussian | tweedie
 
 .DEFAULT_GOAL := all
-.PHONY: all fetch fetch-season fetch-handedness fetch-htmlshifts clean-data xg stints box model shooting goal-accounting games gamelog players goalie-box goalie-gamelog goalies generative-model publish-data validate test pipeline web-dev web-build
+.PHONY: all fetch fetch-season fetch-handedness fetch-htmlshifts clean-data xg stints box model shooting goal-accounting games gamelog players goalie-box goalie-gamelog goalies generative-model generative-cards publish-data validate test pipeline web-dev web-build
 
 all: clean-data xg stints box model shooting goal-accounting games gamelog players goalie-gamelog goalie-box goalies
 
@@ -98,6 +98,11 @@ goalies:
 # dep group (JAX); NOT part of `all` and not wired into the site. See docs/modeling.md.
 generative-model:
 	mkdir -p $(LOGDIR) && cd pipeline && uv run --group experimental python -m yhattrick.models.generative_model --count nb 2>&1 | tee $(LOGDIR)/generative_model.log
+
+# Cards v2: GA/60 + WAR + trajectories from the latest POOLED generative fit -> data/models/gen_cards.json
+# (export_players merges it into the site JSONs; run `make players` after). Needs the experimental group.
+generative-cards:
+	mkdir -p $(LOGDIR) && cd pipeline && uv run --group experimental python -m yhattrick.models.generative_cards 2>&1 | tee $(LOGDIR)/generative_cards.log
 
 # final validation: read the exported artifacts and confirm the inference-stage invariants hold
 # (EXACT identities + APPROX at-scale bands). Report-only; never blocks `all`. Add --strict for CI.

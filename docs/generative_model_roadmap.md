@@ -96,9 +96,17 @@ likelihood; do the design in the doc first.
 ### 5. Card-level CIs via parametric bootstrap
 Sample parameters from their Laplace posteriors (per-player SEs already computed; diagonal
 approximation is acceptable), push through `player_values`, report percentile CIs on
-scoring/playmaking/defense (+ projections). This is what makes the weak-tier features (`fin`,
-`pp_shoot`) honestly displayable on cards.
-**Effort:** small — pure post-processing in `run()`/`_save`.
+scoring/playmaking/defense (+ projections, GA/60, and **WAR** — Cards v2 ships them without CIs).
+This is what makes the weak-tier features (`fin`, `pp_shoot`) honestly displayable on cards.
+**Effort:** small — pure post-processing in `run()`/`_save`/`generative_cards`.
+
+### 5b. Cards v2 — ✅ SHIPPED (July 2026); refinements open
+`generative_cards.py` + site UI (GA/60 baseline-team rate, stint-counterfactual WAR, trajectory
+chart with projection + league age-reference). Open refinements, in priority order: bootstrap CIs
+(#5); penalties into WAR (#8); season-estimated goals-per-win (replaces the 6.0 constant);
+replacement-level sensitivity study (the 8th–12th GA/60 percentile band is a documented knob);
+exact defender-quality treatment in the WAR swap (currently a multiplicative approximation);
+uncertainty band on the trajectory chart (needs per-season state SEs exported).
 
 ## Tier 2 — valuable, after Tier 1
 
@@ -144,16 +152,24 @@ loop in `_shooter_counts`. Do before/with item 7.
 
 ## Tier 3 — opportunistic
 
-- **13. Lineup-diversity reliability diagnostic** — entropy of each player's teammate distribution;
+- **13. Feature-based `qcreate`** — the identifiable middle ground between the position pair and a
+  (hopeless) per-player parameter: `qcreate(c) = position_c + γ·x_c` with 2–3 GLOBAL coefficients
+  on observable creator features (e.g., mean xG of the shots he's credited with assisting, or his
+  setup-location profile). Every labeled goal informs γ, so it fits today's data; creation quality
+  then varies across players exactly as far as evidence supports. Rationale: per-player `qcreate`
+  needs ~20 labels/player ⇒ SE ≈ 0.5 vs plausible talent spread ≤ 0.1 — a data ceiling that
+  sharper `create` (A2) does not lift (Stage-2 labels are A1-only by design). The full per-player
+  slot stays reserved for pass-tracking data (#18).
+- **14. Lineup-diversity reliability diagnostic** — entropy of each player's teammate distribution;
   `create` is identified by lineup variation, so low-entropy players get a "context-dependent" flag
   on cards.
-- **14. Playoffs** — fetched but filtered out everywhere (regular-season gate in `_load_stints`).
+- **15. Playoffs** — fetched but filtered out everywhere (regular-season gate in `_load_stints`).
   ~5% more games; needs a playoff environment flag. Decide whether cards should include them at all.
-- **15. Handedness / off-wing** — already fetched (`fetch-handedness`); could refine position
+- **16. Handedness / off-wing** — already fetched (`fetch-handedness`); could refine position
   offsets (LD/RD, off-wing one-timers). Marginal until the bigger signals land.
-- **16. Empty-net / extra-attacker bucket** — 6v5/5v6 currently excluded; could become a third
+- **17. Empty-net / extra-attacker bucket** — 6v5/5v6 currently excluded; could become a third
   strength bucket like MA. Small.
-- **17. Pass-tracking / NHL EDGE data (external)** — the only route to a real per-player
+- **18. Pass-tracking / NHL EDGE data (external)** — the only route to a real per-player
   creation-quality (`qcreate`), i.e. upgrading Playmaking's quality half. Mechanism: the last pass
   before EVERY shot is an "assist on a shot that wasn't a goal" — ~16× more creator labels — and the
   shot's xG is the outcome that identifies per-player setup danger. Everything upgrades in place:
@@ -176,7 +192,8 @@ loop in `_shooter_counts`. Do before/with item 7.
 - **Per-player parametric aging curves:** dominated by the RW drift states, which capture atypical
   trajectories without assuming they're age-shaped.
 - **Per-player `qcreate` on current data:** structurally unidentifiable (~20 observed setups/player);
-  resolved as position-level (A1). Only pass/tracking data (item 17) reopens this.
+  resolved as position-level (A1). Only pass/tracking data (item 18) reopens this — or, partially,
+  the feature-based γ compromise (item 13).
 
 ---
 

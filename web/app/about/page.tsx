@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 export const metadata: Metadata = {
   title: "About",
   description:
-    "An independent NHL analytics site: an in-house expected-goals model, isolated player-impact ratings, descriptive stats, and a shift-by-shift view of every game — all from public NHL data.",
+    "An independent NHL analytics site: an in-house expected-goals model, player cards inferred by a generative player model, descriptive stats, and a shift-by-shift view of every game — all from public NHL data.",
 };
 
 export default function About() {
@@ -13,9 +13,9 @@ export default function About() {
         <div>
           <h1><span className="brand-y">ŷ</span>Trick</h1>
           <p className="lede">
-            An independent NHL analytics site: an in-house expected-goals model, isolated
-            player-impact ratings, descriptive stats, and a shift-by-shift view of every game — all
-            built from public NHL data.
+            An independent NHL analytics site: an in-house expected-goals model, player cards
+            inferred by a generative player model, descriptive stats, and a shift-by-shift view of
+            every game — all built from public NHL data.
           </p>
         </div>
       </div>
@@ -28,11 +28,13 @@ export default function About() {
             unblocked shot by its chance of going in, using shot geometry and pre-shot context.
           </li>
           <li>
-            <strong>Modeled impact.</strong>{" "}
-            For each skater, the goals we credit to him — split into scoring (his own shots),
-            playmaking (chances he creates for teammates), defense (chances he prevents), and
-            penalties, separated from linemates and competition. Across the league these credits sum
-            to actual goals; each is shown with units and a within-position percentile.
+            <strong>Player cards.</strong>{" "}
+            For each skater, the skills a generative model infers from every shot and shift —
+            scoring, shooting, finishing, playmaking, defense — isolated from linemates,
+            competition, arena scorekeeping, and age, plus two aggregates: <strong>Goals Added
+            per 60</strong> (skill vs a position-average player on equal footing) and{" "}
+            <strong>WAR</strong> (wins added over his actual season vs a replacement player). Each
+            card shows units and a within-position percentile.
           </li>
           <li>
             <strong>Descriptive stats.</strong> Box score, on-ice team rates (xG, Corsi, shares), and
@@ -70,25 +72,24 @@ export default function About() {
           — rebound, rush, shot type, and strength and score state, among others.
         </p>
 
-        <h3>Player Impact Models</h3>
+        <h3>The Player Model</h3>
         <p>
-          The impact ratings are a regularized adjusted plus-minus model. Every stint becomes an
-          observation: the response is a team&apos;s expected goals per 60 minutes of that ice time,
-          and the predictors are indicators for who is on the ice — an offense term for each attacker
-          and a defense term for each defender. Ridge regression untangles teammates from opponents;
-          even strength and special teams are fit separately, regular season only, and pooled across
-          seasons, with a 95% confidence interval on every rating.
+          The player cards come from a <strong>generative model</strong>: it writes down how a shift
+          produces shots and goals — who shoots, who creates for teammates, who suppresses, how
+          dangerous the shots are, who converts them — and fits one latent skill per player for each
+          of those verbs, jointly across five seasons. Every skill is isolated from linemates,
+          competition, arena scorekeeping, and age (the model carries explicit terms for each), and
+          each player gets a per-season skill trajectory with a shared aging curve and a next-season
+          projection. Assists (primary and secondary) anchor playmaking; the model validates against
+          held-out seasons before we publish it.
         </p>
         <p>
-          Finishing is a related player model: a skater&apos;s goals above what their shots were
-          expected to yield, shrunk toward zero until the sample is large enough to trust.
-        </p>
-        <p>
-          On the player page these become <strong>goals attributed</strong>: we fold each model&apos;s
-          baseline back in so the offense and defense terms read as the goals a player is credited with
-          creating and allowing (his share of on-ice expected goals), rather than a difference from an
-          average player. The full method — how the baseline is split, why the numbers reconcile to
-          actual goals, and what each card means — is in <code>docs/metrics.md</code>.
+          <strong>Goals Added /60</strong> plugs a player&apos;s inferred skills into the model&apos;s
+          own production equations and differences against a position-average player — an
+          equal-footing skill read. <strong>WAR</strong> replays his actual season, swapping him for
+          a replacement-level player in every real stint, and converts the goal difference to wins.
+          The full method, formulas, and honest caveats are in <code>docs/metrics.md</code>; the model
+          itself is specified in <code>docs/generative_model.md</code>.
         </p>
       </div>
 
@@ -101,8 +102,8 @@ export default function About() {
           served from the NHL&apos;s asset CDN.
         </p>
         <p>
-          Everything derived — the xG model, impact ratings, finishing, and the box, on-ice, and
-          individual stats — is computed in-house from those raw feeds.
+          Everything derived — the xG model, the generative player model behind the cards, and the
+          box, on-ice, and individual stats — is computed in-house from those raw feeds.
         </p>
         <p>
           The ratings and analysis here are free to use. The underlying NHL data remains the

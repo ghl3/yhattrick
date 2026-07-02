@@ -525,6 +525,21 @@ def main() -> None:
     keep_ids = set(table.player_id)
     bios = player_bios({int(i) for i in keep_ids})
 
+    # generative player-card block (Cards v2): merged verbatim when the artifact exists
+    # (make generative-cards). Pure JSON merge — the JAX side stays in the experimental group.
+    gen_players, gen_meta = {}, None
+    gcp = C.MODELS / "gen_cards.json"
+    if gcp.exists():
+        gj = json.loads(gcp.read_text())
+        gen_players = gj.get("players", {})
+        gm = gj.get("meta", {})
+        gen_meta = {k: gm.get(k) for k in ("kappa", "goals_per_win", "latest_season",
+                                           "age_curves", "rw_sd", "seasons", "replacement")}
+        print(f"[export] gen_cards: {len(gen_players)} players (fit: {gm.get('fit', '?')})")
+    else:
+        print("[export] no gen_cards.json — details ship without the gen block "
+              "(run `make generative-cards`)")
+
     C.SITE_JSON.mkdir(parents=True, exist_ok=True)
     pdir = C.SITE_JSON / "player"
     pdir.mkdir(exist_ok=True)
@@ -558,10 +573,25 @@ def main() -> None:
             acc = by_team.setdefault(grow["team"], {"gp": 0, "g": 0, "a": 0, "p": 0, "toi_s": 0})
             acc["gp"] += 1
             acc["g"] += grow["g"]; acc["a"] += grow["a"]; acc["p"] += grow["p"]; acc["toi_s"] += grow["toi_s"]
+        gnp = gen_players.get(str(pid))
+        # generative-card columns for the index tables: the four headline metrics + the five skill
+        # attributes (prefixed gen_ where a production-model column of the same name exists)
+        gen_cols = {}
+        if gnp:
+            attrs = gnp["attrs"]
+            for key, col in (("war", "war"), ("ga60", "ga60"), ("pp_ga60", "pp_ga60"),
+                             ("pk_ga60", "pk_ga60"), ("scoring", "gen_scoring"),
+                             ("shooting", "gen_shooting"), ("finishing", "gen_finishing"),
+                             ("playmaking", "gen_playmaking"), ("defense", "gen_defense")):
+                a = attrs.get(key)
+                if a is not None:
+                    gen_cols[col] = a["v"]
+                    gen_cols[f"{col}_pct"] = a["pct"]
         index.append({
             "id": pid, "name": r.name, "pos": r.pos, "group": r.group,
             "team": current_team, "teams": team_list, "by_team": by_team,
             "ev_toi": r.ev_off_toi, "gp": gp, "g": goals, "a": assists, "points": pts,
+            **gen_cols,
             **{c: getattr(r, c) for c in METRICS},
             **{f"{c}_pct": getattr(r, f"{c}_pct") for c in METRICS},
             **{c: onval(r, c) for c in ONICE},
@@ -640,6 +670,8 @@ def main() -> None:
             "games": glog.get(pid, []),
             "heat": heat.get(pid),
             "bio": bios.get(pid),
+            "gen": gnp,
+            "gen_meta": gen_meta if gnp else None,
         }
         (pdir / f"{pid}.json").write_text(_dump(detail))
 

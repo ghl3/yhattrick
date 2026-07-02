@@ -3,8 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
-  CartesianGrid, Line, LineChart, PolarAngleAxis, PolarGrid, PolarRadiusAxis,
-  Radar, RadarChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  CartesianGrid, ComposedChart, Line, LineChart, PolarAngleAxis, PolarGrid, PolarRadiusAxis,
+  Radar, RadarChart, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis,
 } from "recharts";
 import type {
   AnyPlayerDetail, GameLogRow, GoalieDetail, GoalieMetricKey, GoalieSeasonRow,
@@ -85,9 +85,9 @@ const COLS: Col[] = [
 ];
 
 // shared box: a colored bar with the metric NAME and its percentile, then the value + a description.
-function BoxShell({ name, pctile, groupLabel, explain, value, footer }: {
+function BoxShell({ name, pctile, groupLabel, explain, value, footer, rankNote }: {
   name: string; pctile: number | null; groupLabel: string; explain: string;
-  value: React.ReactNode; footer?: React.ReactNode;
+  value: React.ReactNode; footer?: React.ReactNode; rankNote?: string;
 }) {
   const has = pctile != null;
   return (
@@ -96,7 +96,7 @@ function BoxShell({ name, pctile, groupLabel, explain, value, footer }: {
         <span className="mb-head">{name}</span>
         <span className="mb-rank">
           {has ? <><span className="mb-pctile">{Math.round(pctile!)}%</span><span className="mb-vs">among {groupLabel}</span></>
-               : <span className="mb-vs">not enough volume</span>}
+               : <span className="mb-vs">{rankNote ?? "not enough volume"}</span>}
         </span>
       </div>
       <div className="mb-body">
@@ -122,12 +122,12 @@ function OniceBox({ name, explain, v, pctile, group, fmt, se, signed: sgn, unit 
 
 // player-value box: a goals number (per-60 share, per-game, or season total) + unit, colored by
 // percentile. `signed` (default true) prepends + on differential metrics (net, penalties).
-function ValueBox({ name, explain, v, pctile, group, fmt, footer, unit, signed: sgn = true }: {
+function ValueBox({ name, explain, v, pctile, group, fmt, footer, unit, signed: sgn = true, rankNote }: {
   name: string; explain: string; v: number | null; pctile: number | null; group: string;
-  fmt: (v: number) => string; footer?: React.ReactNode; unit?: string; signed?: boolean;
+  fmt: (v: number) => string; footer?: React.ReactNode; unit?: string; signed?: boolean; rankNote?: string;
 }) {
   return (
-    <BoxShell name={name} pctile={v != null ? pctile : null} groupLabel={group === "D" ? "defensemen" : "forwards"} explain={explain}
+    <BoxShell name={name} pctile={v != null ? pctile : null} groupLabel={group === "D" ? "defensemen" : "forwards"} explain={explain} rankNote={rankNote}
       value={v != null ? <>{sgn && v >= 0 ? "+" : ""}{fmt(v)}{unit && <span className="mb-unit">{unit}</span>}</> : <span className="muted">—</span>} footer={footer} />
   );
 }
@@ -239,17 +239,17 @@ function RadarTick({ x, y, textAnchor, payload }: { x: number; y: number; textAn
   );
 }
 
-// percentile radar across the headline skills (0 = no qualifying ice time / bottom, 100 = best).
-// Axis names match the cards above (modeled impact + player stats).
+// percentile radar across the generative card attributes (0 = bottom / no qualifying ice time).
 function ProfileRadar({ p }: { p: PlayerDetail }) {
+  const g = p.gen!;
   const data = [
-    { axis: "Scoring", v: p.value.rates.scoring60?.pct ?? null },
-    { axis: "Playmaking", v: p.value.rates.playmaking60?.pct ?? null },
-    { axis: "Power-Play Scoring", v: p.value.rates.pp_scoring60?.pct ?? null },
-    { axis: "Power-Play Playmaking", v: p.value.rates.pp_playmaking60?.pct ?? null },
-    { axis: "Penalties", v: p.value.rates.pen_net60?.pct ?? null },
-    { axis: "Penalty-Kill Defense", v: p.value.rates.pk_allow60?.pct ?? null },
-    { axis: "Defense", v: p.value.rates.allow60?.pct ?? null },
+    { axis: "Scoring", v: g.attrs.scoring.pct },
+    { axis: "Shooting", v: g.attrs.shooting.pct },
+    { axis: "Finishing", v: g.attrs.finishing.pct },
+    { axis: "Playmaking", v: g.attrs.playmaking.pct },
+    { axis: "Power-Play Impact", v: g.attrs.pp_ga60.pct },
+    { axis: "Penalty-Kill Defense", v: g.attrs.pk_ga60.pct },
+    { axis: "Defense", v: g.attrs.defense.pct },
   ].map((d) => ({ ...d, v: d.v ?? 0 }));
   return (
     <ResponsiveContainer width="100%" height={360}>
@@ -350,9 +350,128 @@ function GameLog({ games }: { games: GameLogRow[] }) {
   );
 }
 
+// ── generative Player Card (Cards v2): current skill inferred by the shot-generation model ──────
+function GenCards({ p }: { p: PlayerDetail }) {
+  const g = p.gen!;
+  const A = g.attrs;
+  const seasonLbl = seasonLabel(g.last_season);
+  const projLbl = g.projection?.season != null ? seasonLabel(g.projection.season) : null;
+  return (
+    <div className="panel">
+      <h2>Player Card</h2>
+      <p className="section-sub">
+        Skills inferred from every shot and shift by our generative model — isolated from linemates,
+        competition, arena, and age. Values are his skill now ({seasonLbl}); rates are per 60.
+      </p>
+      <div className="metric-grid">
+        <ValueBox name={`WAR ${seasonLbl}`} group={p.group} v={A.war.v} pctile={A.war.pct} fmt={num2} unit="wins"
+          explain="Wins above replacement: expected goals with him vs a replacement-level player in his slot, added up over his actual shifts, linemates, and opposition this season." />
+        <ValueBox name="Goals Added /60" group={p.group} v={A.ga60.v} pctile={A.ga60.pct} fmt={num2} unit="goals/60"
+          explain="Net goals per 60 vs a league-average player at his position on a baseline team, at 5-on-5 — scoring, playmaking, and defense priced on one goals scale." />
+        <ValueBox name="PP Goals Added /60" group={p.group} v={A.pp_ga60.v} pctile={A.pp_ga60.pct} fmt={num2} unit="goals/60"
+          explain="Power-play goals added per 60 vs a position-average player — his own scoring plus the chances he creates for teammates." />
+        <ValueBox name="PK Goals Added /60" group={p.group} v={A.pk_ga60.v} pctile={A.pk_ga60.pct} fmt={num2} unit="goals/60"
+          explain="Penalty-kill goals saved per 60 vs a position-average player — the opponent chance value he erases." />
+      </div>
+      <div className="metric-grid" style={{ marginTop: 10 }}>
+        <OniceBox name="Scoring" group={p.group} v={A.scoring.v} pctile={A.scoring.pct} fmt={num2} unit="goals/60" signed={false}
+          explain="Goals from his own shots per 60 at 5-on-5: shot volume × shot danger × finishing." />
+        <OniceBox name="Shooting" group={p.group} v={A.shooting.v} pctile={A.shooting.pct} fmt={num1} unit="% shot volume" signed
+          explain="How much more (or less) he shoots than a typical player at his position and age." />
+        <OniceBox name="Finishing" group={p.group} v={A.finishing.v} pctile={A.finishing.pct} fmt={num2} unit="goals/100 shots"
+          se={A.finishing.se ?? undefined} signed
+          explain="Goals above what his shot locations predict, for his position and age. The wide error bars are honest — finishing is a small, hard-to-see skill." />
+        <OniceBox name="Playmaking" group={p.group} v={A.playmaking.v} pctile={A.playmaking.pct} fmt={num2} unit="xG/60"
+          se={A.playmaking.se ?? undefined} signed={false}
+          explain="Extra chances his teammates get with him on the ice, per 60, valued in expected goals. The creation volume is his; chance quality is priced at his position's rate." />
+        <OniceBox name="Defense" group={p.group} v={A.defense.v} pctile={A.defense.pct} fmt={num2} unit="xG/60" signed
+          explain="Opponent chance value he erases per 60 at 5-on-5 vs an average defender — shots suppressed plus danger suppressed." />
+        <ValueBox name={projLbl ? `Projected GA/60 ${projLbl}` : "Projected GA/60"} group={p.group}
+          v={g.projection?.ga60 ?? null} pctile={null} fmt={num2} unit="goals/60" rankNote="projection"
+          explain="His skill projected one season ahead: latest state carried along the league aging curve for his position. Uncertainty widens with any projection." />
+        <ValueBox name="WAR (5-season window)" group={p.group} v={g.war.total} pctile={null} fmt={num2} unit="wins" rankNote="window total"
+          explain="Wins above replacement summed over every season in the data window — his actual shifts, linemates, and opposition throughout." />
+        <ValueBox name="Penalties" group={p.group} v={p.value.rates.pen_net60?.v ?? null} pctile={p.value.rates.pen_net60?.pct ?? null} fmt={num2} unit="goals/60"
+          explain="Net goals from penalties he draws minus takes (from the production model — not yet inside WAR)." />
+      </div>
+    </div>
+  );
+}
+
+// ── skill trajectory: inferred per-season skill + projection + league age reference + raw dots ──
+const TRAJ_TABS = [
+  { key: "ga60", label: "Goals Added /60", unit: "goals/60" },
+  { key: "scoring", label: "Scoring", unit: "goals/60" },
+  { key: "playmaking", label: "Playmaking", unit: "xG/60" },
+  { key: "defense", label: "Defense", unit: "xG/60" },
+] as const;
+type TrajKey = (typeof TRAJ_TABS)[number]["key"];
+
+function TrajectoryChart({ p }: { p: PlayerDetail }) {
+  const g = p.gen!;
+  const [attr, setAttr] = useState<TrajKey>("ga60");
+  const data = useMemo(() => {
+    const per = new Map(p.per_season.map((r) => [r.season, r]));
+    const lg = (tp: Record<string, unknown>) =>
+      attr === "ga60" ? 0 : ((tp[`lg_${attr}`] as number | null) ?? null);
+    const pts = g.trajectory.map((tp) => ({
+      season: seasonLabel(tp.season),
+      age: tp.age,
+      skill: tp[attr],
+      league: lg(tp as unknown as Record<string, unknown>),
+      raw: attr === "scoring" ? per.get(tp.season)?.scoring60 ?? null
+        : attr === "playmaking" ? per.get(tp.season)?.playmaking60 ?? null : null,
+      proj: null as number | null,
+    }));
+    if (g.projection?.season != null && pts.length) {
+      pts[pts.length - 1].proj = pts[pts.length - 1].skill;      // connect the dashed segment
+      pts.push({
+        season: seasonLabel(g.projection.season), age: null, skill: null, raw: null,
+        league: lg(g.projection as unknown as Record<string, unknown>),
+        proj: (g.projection as unknown as Record<string, number | null>)[attr] ?? null,
+      });
+    }
+    return pts;
+  }, [g, attr, p]);
+  const tab = TRAJ_TABS.find((t) => t.key === attr)!;
+  return (
+    <div>
+      <div className="seg" style={{ marginBottom: 8 }}>
+        {TRAJ_TABS.map((t) => (
+          <button key={t.key} className={attr === t.key ? "active" : ""} onClick={() => setAttr(t.key)}>{t.label}</button>
+        ))}
+      </div>
+      <ResponsiveContainer width="100%" height={240}>
+        <ComposedChart data={data} margin={{ top: 8, right: 16, bottom: 4, left: -8 }}>
+          <CartesianGrid stroke="#e7f1fb" />
+          <XAxis dataKey="season" tick={{ fontSize: 12, fill: "#6b7e90" }} />
+          <YAxis tick={{ fontSize: 12, fill: "#6b7e90" }} width={48} domain={["auto", "auto"]} />
+          <Tooltip formatter={(v: unknown, name: unknown) => [typeof v === "number" ? `${v.toFixed(2)} ${tab.unit}` : String(v), String(name)]}
+            labelFormatter={(l, payload) => {
+              const a = (payload?.[0]?.payload as { age?: number | null } | undefined)?.age;
+              return a != null ? `${l} · age ${a}` : String(l);
+            }} />
+          <Line type="monotone" dataKey="league" name="typical for position + age" stroke="#b6c4d2"
+            strokeDasharray="2 5" strokeWidth={1.5} dot={false} connectNulls />
+          <Scatter dataKey="raw" name="single-season estimate" fill="#9db8d4" />
+          <Line type="monotone" dataKey="skill" name="modeled skill" stroke="#2f6cb0" strokeWidth={2.5}
+            dot={{ r: 3 }} connectNulls />
+          <Line type="monotone" dataKey="proj" name="projection" stroke="#2f6cb0" strokeWidth={2}
+            strokeDasharray="6 4" dot={{ r: 4, fill: "#fff", stroke: "#2f6cb0" }} connectNulls />
+        </ComposedChart>
+      </ResponsiveContainer>
+      <p className="section-sub" style={{ marginTop: 4 }}>
+        Solid line: skill the model infers each season (smoothed, deployment-free). Dashed: next-season
+        projection along his position&apos;s aging curve. Grey dotted: a typical {p.group === "D" ? "defenseman" : "forward"} his
+        age. Dots: unsmoothed single-season estimates.
+      </p>
+    </div>
+  );
+}
+
 function SkaterView({ p }: { p: PlayerDetail }) {
-  const [stat, setStat] = useState("points");
-  const col = COLS.find((c) => c.key === stat)!;
+  const [stat, setStat] = useState(p.gen ? "__traj__" : "points");
+  const col = COLS.find((c) => c.key === stat) ?? COLS.find((c) => c.key === "points")!;
   const chartData = useMemo(
     () => p.per_season.map((r) => ({ season: seasonLabel(r.season), value: col.get(r) })),
     [p, col]
@@ -375,31 +494,7 @@ function SkaterView({ p }: { p: PlayerDetail }) {
         </div>
       </div>
 
-      <div className="panel">
-        <h2>Modeled Impact</h2>
-        <p className="section-sub">
-          What our models credit him with, adjusted for the linemates and competition he played with.
-        </p>
-
-        <div className="metric-grid">
-          <ValueBox name="Net Goals Added per Game" group={p.group} v={p.value.actual.net_pg} pctile={p.value.actual.net_pg_pct} fmt={num2} unit="goals/game"
-            explain="Net goals created (scoring + playmaking) minus goals allowed, per game." />
-          <OniceBox name="Scoring" group={p.group} v={p.value.rates.scoring60?.v ?? null} pctile={p.value.rates.scoring60?.pct ?? null} fmt={num2} unit="goals/60" signed={false}
-            explain="Goals from his own shots — their expected value plus his finishing." />
-          <OniceBox name="Playmaking" group={p.group} v={p.value.rates.playmaking60?.v ?? null} pctile={p.value.rates.playmaking60?.pct ?? null} fmt={num2} unit="goals/60" signed={false}
-            explain="Expected goals he creates for teammates at 5-on-5 — the part of his offense that isn't his own shots." />
-          <OniceBox name="Defense" group={p.group} v={p.value.rates.allow60?.v ?? null} pctile={p.value.rates.allow60?.pct ?? null} fmt={num2} unit="goals/60" se={p.impact.ev_def.se} signed={false}
-            explain="His share of the expected goals allowed at 5-on-5 while he's on the ice. Lower is better." />
-          <OniceBox name="Power-Play Scoring" group={p.group} v={p.value.rates.pp_scoring60?.v ?? null} pctile={p.value.rates.pp_scoring60?.pct ?? null} fmt={num2} unit="goals/60" signed={false}
-            explain="Goals from his own shots on the power play — their expected value plus his finishing." />
-          <OniceBox name="Power-Play Playmaking" group={p.group} v={p.value.rates.pp_playmaking60?.v ?? null} pctile={p.value.rates.pp_playmaking60?.pct ?? null} fmt={num2} unit="goals/60" signed={false}
-            explain="Expected goals he creates for teammates on the power play — the part of his offense that isn't his own shots." />
-          <OniceBox name="Penalty-Kill Defense" group={p.group} v={p.value.rates.pk_allow60?.v ?? null} pctile={p.value.rates.pk_allow60?.pct ?? null} fmt={num2} unit="goals/60" se={p.impact.pk_def.se} signed={false}
-            explain="His share of the expected goals allowed on the penalty kill while he's on the ice. Lower is better." />
-          <ValueBox name="Penalties" group={p.group} v={p.value.rates.pen_net60?.v ?? null} pctile={p.value.rates.pen_net60?.pct ?? null} fmt={num2} unit="goals/60"
-            explain="Net goals from penalties he draws minus takes." />
-        </div>
-      </div>
+      {p.gen && <GenCards p={p} />}
 
       <div className="panel">
         <h2>Player stats</h2>
@@ -424,17 +519,34 @@ function SkaterView({ p }: { p: PlayerDetail }) {
       </div>
 
       <div className="panel">
-        <h2>By season — click a stat to chart it</h2>
+        <h2>{p.gen ? "Skill trajectory & seasons" : "By season — click a stat to chart it"}</h2>
+        {p.gen && (
+          <p className="section-sub">
+            Where his skills have been and where they&apos;re heading — or click any stat in the table to
+            chart it season by season.
+          </p>
+        )}
         <div className="chart-wrap">
-          <ResponsiveContainer width="100%" height={220}>
-            <LineChart data={chartData} margin={{ top: 8, right: 16, bottom: 4, left: -8 }}>
-              <CartesianGrid stroke="#e7f1fb" />
-              <XAxis dataKey="season" tick={{ fontSize: 12, fill: "#6b7e90" }} />
-              <YAxis tick={{ fontSize: 12, fill: "#6b7e90" }} width={48} />
-              <Tooltip formatter={(v: unknown) => (typeof v === "number" && col.fmt ? col.fmt(v) : String(v))} />
-              <Line type="monotone" dataKey="value" name={col.label} stroke="#2f6cb0" strokeWidth={2} dot={{ r: 3 }} connectNulls />
-            </LineChart>
-          </ResponsiveContainer>
+          {p.gen && stat === "__traj__" ? (
+            <TrajectoryChart p={p} />
+          ) : (
+            <>
+              {p.gen && (
+                <div className="seg" style={{ marginBottom: 8 }}>
+                  <button onClick={() => setStat("__traj__")}>← skill trajectory</button>
+                </div>
+              )}
+              <ResponsiveContainer width="100%" height={220}>
+                <LineChart data={chartData} margin={{ top: 8, right: 16, bottom: 4, left: -8 }}>
+                  <CartesianGrid stroke="#e7f1fb" />
+                  <XAxis dataKey="season" tick={{ fontSize: 12, fill: "#6b7e90" }} />
+                  <YAxis tick={{ fontSize: 12, fill: "#6b7e90" }} width={48} />
+                  <Tooltip formatter={(v: unknown) => (typeof v === "number" && col.fmt ? col.fmt(v) : String(v))} />
+                  <Line type="monotone" dataKey="value" name={col.label} stroke="#2f6cb0" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                </LineChart>
+              </ResponsiveContainer>
+            </>
+          )}
         </div>
         <table className="players season-table">
           <thead>
@@ -481,10 +593,12 @@ function SkaterView({ p }: { p: PlayerDetail }) {
               <ShotMap heat={p.heat} />
             </div>
           )}
-          <div className="viz-cell">
-            <p className="section-sub">Percentile rank across key skills, within position ({p.group === "D" ? "defensemen" : "forwards"}). Further out is better.</p>
-            <ProfileRadar p={p} />
-          </div>
+          {p.gen && (
+            <div className="viz-cell">
+              <p className="section-sub">Percentile rank across the card attributes, within position ({p.group === "D" ? "defensemen" : "forwards"}). Further out is better.</p>
+              <ProfileRadar p={p} />
+            </div>
+          )}
         </div>
       </div>
 

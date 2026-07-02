@@ -6,30 +6,33 @@ import type { GoalieRow, PlayerRow } from "@/lib/types";
 import { pctColor } from "@/lib/format";
 import { DataTable } from "@/components/DataTable";
 
-type View = "value" | "impact" | "onice" | "individual";
+type View = "cards" | "skills" | "onice" | "individual";
 type Pos = "SKATERS" | "F" | "D" | "G";
 const num3 = (v: number) => v.toFixed(3);
 const num2 = (v: number) => v.toFixed(2);
 const num1 = (v: number) => v.toFixed(1);
+const num2s = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}`; // signed (zero = position average)
+const pctVol = (v: number) => `${v >= 0 ? "+" : ""}${Math.round(v)}%`;
 const svFmt = (v: number) => v.toFixed(3).replace(/^0/, ""); // .915
 
-// metric columns per view: modeled (isolated) impact vs raw on-ice rates
+// metric columns per view: generative player-card metrics vs raw on-ice / individual rates.
+// Cards + Skills mirror the player-page card layout (docs/metrics.md); zero = position average
+// (WAR: zero = replacement level).
 type MetricCol = { key: keyof PlayerRow; label: string; title: string; fmt: (v: number) => string };
 const VIEWS: Record<View, MetricCol[]> = {
-  value: [
-    { key: "gnet_pg", label: "Net G/G", title: "Net goals added per game (top-line modeled value)", fmt: num2 },
-    { key: "g_net", label: "Net G", title: "Net goals added — window total, all situations", fmt: num1 },
-    { key: "scoring60", label: "Scoring", title: "Scoring: goals from his own shots per 60 (expected value + finishing)", fmt: num2 },
-    { key: "playmaking60", label: "Playmaking", title: "Playmaking: expected goals he creates for teammates per 60 (on-ice offense − own shots)", fmt: num2 },
-    { key: "allow60", label: "Defense", title: "Defense: expected goals allowed per 60 at 5-on-5, his share (lower is better)", fmt: num2 },
-    { key: "pk_allow60", label: "PK Def", title: "Penalty-kill defense: expected goals allowed per 60, his share (lower is better)", fmt: num2 },
-    { key: "pen_net60", label: "Pen", title: "Net penalty goals per 60 (drawn − taken × penalty value)", fmt: num2 },
+  cards: [
+    { key: "war", label: "WAR", title: "Wins above replacement, latest season — his actual stints, linemates, and opposition; 0 = replacement level", fmt: num2 },
+    { key: "ga60", label: "GA/60", title: "Goals Added per 60 vs a league-average player at his position, on a baseline team (5v5)", fmt: num2s },
+    { key: "pp_ga60", label: "PP GA/60", title: "Power-play Goals Added per 60 vs a position-average PP player", fmt: num2s },
+    { key: "pk_ga60", label: "PK GA/60", title: "Penalty-kill Goals Added per 60 (chance value erased above position average)", fmt: num2s },
+    { key: "pen_net60", label: "Pen", title: "Net penalty goals per 60 (drawn − taken, priced in goals) — production model, not yet inside WAR", fmt: num2 },
   ],
-  impact: [
-    { key: "ev_off", label: "EV O", title: "Even-strength offense impact, isolated (xGF/60 added)", fmt: num2 },
-    { key: "ev_def", label: "EV D", title: "Even-strength defense impact, isolated (xGA/60 suppressed)", fmt: num2 },
-    { key: "pp_off", label: "PP", title: "Power-play offense impact, isolated (xGF/60)", fmt: num2 },
-    { key: "pk_def", label: "PK", title: "Penalty-kill defense impact, isolated (xGA/60 suppressed)", fmt: num2 },
+  skills: [
+    { key: "gen_scoring", label: "Scoring", title: "Goals from his own shots per 60 at 5v5: shot volume × shot danger × finishing", fmt: num2 },
+    { key: "gen_shooting", label: "Shooting", title: "Shot volume vs a position/age-typical player (% more or fewer shots)", fmt: pctVol },
+    { key: "gen_finishing", label: "Finishing", title: "Goals per 100 shots above what his shot locations predict, for his position and age", fmt: num2s },
+    { key: "gen_playmaking", label: "Playmaking", title: "Extra chances teammates get with him on the ice, per 60, in expected goals", fmt: num2 },
+    { key: "gen_defense", label: "Defense", title: "Opponent chance value erased per 60 (volume + danger suppression)", fmt: num2 },
   ],
   onice: [
     { key: "ev_xgf60", label: "xGF/60", title: "5v5 on-ice expected goals for / 60", fmt: num2 },
@@ -119,8 +122,8 @@ export default function Players() {
   const [error, setError] = useState<string | null>(null);
   const [globalFilter, setGlobalFilter] = useState("");
   const [posFilter, setPosFilter] = useState<Pos>("SKATERS");
-  const [view, setView] = useState<View>("value");
-  const [sorting, setSorting] = useState<SortingState>([{ id: "gnet_pg", desc: true }]);
+  const [view, setView] = useState<View>("cards");
+  const [sorting, setSorting] = useState<SortingState>([{ id: "war", desc: true }]);
   const [gsorting, setGsorting] = useState<SortingState>([{ id: "gsax_per100", desc: true }]);
 
   useEffect(() => {
@@ -165,9 +168,9 @@ export default function Players() {
         </div>
         {!isG && (
           <div className="seg">
-            {(["value", "impact", "individual", "onice"] as const).map((v) => (
+            {(["cards", "skills", "individual", "onice"] as const).map((v) => (
               <button key={v} className={view === v ? "active" : ""} onClick={() => switchView(v)}>
-                {v === "value" ? "Value" : v === "impact" ? "Isolated impact" : v === "individual" ? "Individual rates" : "Team rates"}
+                {v === "cards" ? "Player cards" : v === "skills" ? "Skills" : v === "individual" ? "Individual rates" : "Team rates"}
               </button>
             ))}
           </div>

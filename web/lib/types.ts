@@ -197,6 +197,25 @@ export interface PlayerRow {
   pk_allow60_pct: number | null;
   pen_net60_pct: number | null;
   g_net_pct: number | null;
+  // generative player-card columns (headline metrics + skill attributes; absent pre-publish)
+  war?: number | null;
+  war_pct?: number | null;
+  ga60?: number | null;
+  ga60_pct?: number | null;
+  pp_ga60?: number | null;
+  pp_ga60_pct?: number | null;
+  pk_ga60?: number | null;
+  pk_ga60_pct?: number | null;
+  gen_scoring?: number | null;
+  gen_scoring_pct?: number | null;
+  gen_shooting?: number | null;
+  gen_shooting_pct?: number | null;
+  gen_finishing?: number | null;
+  gen_finishing_pct?: number | null;
+  gen_playmaking?: number | null;
+  gen_playmaking_pct?: number | null;
+  gen_defense?: number | null;
+  gen_defense_pct?: number | null;
 }
 
 export interface PlayerMetric {
@@ -302,6 +321,43 @@ export interface PlayerDetail {
   games: GameLogRow[];
   heat: PlayerHeat | null;
   bio: PlayerBio | null;
+  gen?: GenBlock | null;      // generative player card (Cards v2); absent until gen_cards is built
+  gen_meta?: GenMeta | null;
+}
+
+// ── generative player card (Cards v2; pipeline models/generative_cards.py) ─────────────────────
+// Values are CURRENT SKILL: last drift state + position offset + aging curve at his latest-season
+// age, in the reference environment. GA/60 is vs a baseline team (league-average player at his
+// position — TOI-weighted zero within group). WAR is his ACTUAL season: stint-by-stint expected
+// goals with him vs a replacement player in his slot, ÷ goals-per-win. See docs/metrics.md.
+export interface GenAttr { v: number | null; se?: number | null; pct: number | null }
+export interface GenTrajPoint {
+  season: number; age: number | null;
+  scoring: number | null; playmaking: number | null; defense: number | null; ga60: number | null;
+  // league-reference underlay: a position-average player AT HIS AGE that season
+  lg_scoring?: number | null; lg_playmaking?: number | null; lg_defense?: number | null;
+}
+export interface GenBlock {
+  pos: "F" | "D";
+  age: number | null;
+  last_season: number;
+  attrs: {
+    war: GenAttr; ga60: GenAttr; pp_ga60: GenAttr; pk_ga60: GenAttr;
+    scoring: GenAttr; shooting: GenAttr; finishing: GenAttr; playmaking: GenAttr; defense: GenAttr;
+  };
+  war: {
+    latest: number | null; total: number | null; ev: number | null; pp: number | null; pk: number | null;
+    by_season: Record<string, number | null>;
+  };
+  trajectory: GenTrajPoint[];
+  projection: (Omit<GenTrajPoint, "age"> & { season: number | null }) | null;
+}
+export interface GenMeta {
+  kappa: number; goals_per_win: number; latest_season: number;
+  seasons: number[]; rw_sd: Record<string, number> | null;
+  replacement: Record<string, Record<string, number>>;
+  age_curves: Record<string, { coef: Record<string, number>; d_offset: number;
+                               curve: Record<"F" | "D", Record<string, number>> }>;
 }
 
 // player value (export_players.py): GOALS ATTRIBUTED. `rates` are deployment-free per-60 shares by
