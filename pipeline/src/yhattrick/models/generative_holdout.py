@@ -96,10 +96,24 @@ def candidates(M, target):
     }
 
 
-def _fit_train_side(train, train_through, target, count_model, spg_scale):
+def _hyper_tag(ma_anchor_scale, ma_create_prior_sd):
+    """Cache-file suffix for non-default MA hyperparameters (sweep candidates keep separate caches)."""
+    tag = ""
+    if ma_anchor_scale != 1.0:
+        tag += f"_a{ma_anchor_scale:g}"
+    if ma_create_prior_sd:
+        tag += f"_p{ma_create_prior_sd:g}"
+    return tag
+
+
+def _fit_train_side(train, train_through, target, count_model, spg_scale,
+                    ma_anchor_scale=1.0, ma_create_prior_sd=None):
     """Run the training fit and reduce it to the slim scoring inputs; cached as an npz so scoring
-    can iterate without re-fitting."""
-    M = G.fit_all(train, count_model=count_model, spg_scale=spg_scale)
+    can iterate without re-fitting. The train side keeps its OWN θ̂ checkpoint chain
+    (holdout_ckpt.npz): sweep candidates warm-start each other — never a fit that saw test data."""
+    M = G.fit_all(train, count_model=count_model, spg_scale=spg_scale,
+                  ma_anchor_scale=ma_anchor_scale, ma_create_prior_sd=ma_create_prior_sd,
+                  warm=True, save_ckpt=True, ckpt_path=C.MODELS / "holdout_ckpt.npz")
     evt = M["rates"]["ev"]
     Rt = evt["R"]
     P = len(M["players"])
@@ -114,32 +128,62 @@ def _fit_train_side(train, train_through, target, count_model, spg_scale):
           "t_last": np.bincount(Rt["shooter_idx"][mlast], weights=Rt["dur"][mlast], minlength=P),
           "tm_last": tm_last,
           "a2_q": np.float64(evt.get("a2_q") if evt.get("a2_q") is not None else np.nan),
-          "train": np.array(train, dtype=np.int64)}
+          "train": np.array(train, dtype=np.int64),
+          "ma_anchor_scale": np.float64(ma_anchor_scale),
+          "ma_create_prior_sd": np.float64(ma_create_prior_sd if ma_create_prior_sd else np.nan)}
     for name, c in candidates(M, target).items():
         for blk in BLOCKS:
             ts[f"cand_{name}_{blk}"] = c[blk]
-    path = C.MODELS / f"holdout_fit_{train_through}.npz"
+    mat = M["rates"].get("ma")
+    if mat is not None:                                      # MA track: EFFECTIVE per-player params
+        re_last, _, _ = G.effective_params(M["rates"], M["qual"], M["conv"], M["players"],
+                                           M["agepos"], M["last_season"])
+        for blk in BLOCKS:
+            ts[f"ma_{blk}"] = re_last["ma"][blk]
+        ts["ma_intercept"] = np.float64(mat["intercept"])
+        ts["ma_ctx_names"] = np.array(mat["ctx_names"])
+        ts["ma_beta"] = np.asarray(mat["beta"], dtype=np.float64)
+    path = C.MODELS / f"holdout_fit_{train_through}{_hyper_tag(ma_anchor_scale, ma_create_prior_sd)}.npz"
     C.MODELS.mkdir(parents=True, exist_ok=True)
     np.savez(path, **ts)
     print(f"[holdout] training side cached -> {path.name}")
     return ts
 
 
-def evaluate(train_through, target=None, count_model="nb", spg_scale=1.0, rescore=False):
+def calibration_slope(N, offset, base, term, iters=40):
+    """Out-of-sample calibration slope γ for one parameter block: the 1-D Poisson MLE of
+    μ = exp(base + γ·term + offset) on held-out rows, all other blocks held at training values.
+    γ = 1 ⇔ the block's fitted spread predicts at face value; γ < 1 ⇔ the fit's spread is wider
+    than what it can demonstrate out of sample (e.g. the PP create split inside long-lived units,
+    where assists reflect role rather than creation). Newton on the concave log-likelihood."""
+    g = 1.0
+    for _ in range(iters):
+        mu = np.exp(base + g * term + offset)
+        step = float(np.sum(term * (N - mu))) / max(float(np.sum(term * term * mu)), 1e-12)
+        g += float(np.clip(step, -0.5, 0.5))
+        if abs(step) < 1e-9:
+            break
+    return float(g)
+
+
+def evaluate(train_through, target=None, count_model="nb", spg_scale=1.0, rescore=False,
+             ma_anchor_scale=1.0, ma_create_prior_sd=None):
     sd = C.PROCESSED / "shots_onice"
     avail = sorted(int(f.stem) for f in sd.glob("*.parquet")) if sd.exists() else []
     train = [s for s in avail if s <= train_through]
     target = target or train_through + 1
     if target not in avail:
         raise SystemExit(f"target season {target} not in processed data {avail}")
-    cache = C.MODELS / f"holdout_fit_{train_through}.npz"
+    tag = _hyper_tag(ma_anchor_scale, ma_create_prior_sd)
+    cache = C.MODELS / f"holdout_fit_{train_through}{tag}.npz"
     if rescore and cache.exists():
         print(f"[holdout] rescoring from {cache.name}")
         z = np.load(cache)
         ts = {k: z[k] for k in z.files}
     else:
         print(f"[holdout] train {train} → target {target} — fitting …")
-        ts = _fit_train_side(train, train_through, target, count_model, spg_scale)
+        ts = _fit_train_side(train, train_through, target, count_model, spg_scale,
+                             ma_anchor_scale=ma_anchor_scale, ma_create_prior_sd=ma_create_prior_sd)
     players_t = ts["players"]
     idx_t = {int(p): i for i, p in enumerate(players_t)}
 
@@ -246,9 +290,63 @@ def evaluate(train_through, target=None, count_model="nb", spg_scale=1.0, rescor
     out["league_mean_mae60"] = wmae(np.full(int(elig.sum()), lm), obs_rate[elig], w[elig])
     print(f"{'league-mean':14s} {'—':>11s} {'—':>8s} {'0.000':>7s} {out['league_mean_mae60']:7.3f}")
 
-    path = C.MODELS / f"holdout_{target}.json"
+    # ── calibration slopes γ (face-value honesty per block) + the MA track ────────────────────────
+    # γ = 1 ⇔ that block's fitted spread predicts held-out reality at face value. EV uses the
+    # last-state candidate (the "current skill" read the cards/WAR consume); MA uses the bucket's
+    # static effective params. This is the selection criterion for the MA anchor/prior sweep.
+    out["ma_anchor_scale"] = float(ts.get("ma_anchor_scale", 1.0))
+    mcp = float(ts.get("ma_create_prior_sd", np.nan))
+    out["ma_create_prior_sd"] = None if np.isnan(mcp) else mcp
+    gamma = {"ev": {}, "ma": {}}
+    ev_terms = {
+        "shoot": to_hold(ts["cand_last-state_shoot"])[Rh["shooter_idx"]],
+        "create": to_hold(ts["cand_last-state_create"])[Rh["team_idx"]].sum(1),
+        "def": (to_hold(ts["cand_last-state_def"])[Rh["def_idx"]] * Rh["def_mask"]).sum(1),
+    }
+    ev_all = ev_terms["shoot"] + ev_terms["create"] + ev_terms["def"]
+    for blk, term in ev_terms.items():
+        gamma["ev"][blk] = calibration_slope(N, Rh["offset"], mu0 + ctx_base + ev_all - term, term)
+    if "ma_shoot" in ts:
+        Rm = G.rate_rows([target], G.MA_STRENGTHS, False, players_h, idx_h, agepos_h,
+                         states=False, arenas=False)
+        cmm = G._coef_map([str(n) for n in ts["ma_ctx_names"]], ts["ma_beta"])
+        ctx_ma = np.full(len(Rm["count"]), cmm.get(f"season_{train_through}", 0.0))
+        for j, nm in enumerate(Rm["ctx_names"]):
+            if nm in cmm and nm in set(G.RATE_CTX):
+                ctx_ma = ctx_ma + cmm[nm] * Rm["Xctx"][:, j]
+        ma_terms = {
+            "shoot": to_hold(ts["ma_shoot"])[Rm["shooter_idx"]],
+            "create": to_hold(ts["ma_create"])[Rm["team_idx"]].sum(1),
+            "def": (to_hold(ts["ma_def"])[Rm["def_idx"]] * Rm["def_mask"]).sum(1),
+        }
+        ma_all = ma_terms["shoot"] + ma_terms["create"] + ma_terms["def"]
+        mu0_ma = float(ts["ma_intercept"])
+        Nm = Rm["count"]
+        for blk, term in ma_terms.items():
+            gamma["ma"][blk] = calibration_slope(Nm, Rm["offset"],
+                                                 mu0_ma + ctx_ma + ma_all - term, term)
+        mu_ma = np.exp(mu0_ma + ctx_ma + ma_all + Rm["offset"])
+        out["ma_track"] = {"n_rows": int(len(Nm)),
+                           "row_deviance_per_1k": poisson_deviance(Nm, mu_ma) / len(Nm) * 1000.0,
+                           "sum_mu": float(mu_ma.sum()), "sum_N": float(Nm.sum())}
+        print(f"\n[MA track] rows {len(Nm):,}  Σμ/ΣN {mu_ma.sum() / max(Nm.sum(), 1.0):.3f}  "
+              f"dev/1k {out['ma_track']['row_deviance_per_1k']:.3f}")
+    else:
+        print("\n[MA track] skipped — cache predates the MA params (re-run without --rescore)")
+    out["gamma"] = gamma
+    gs = "  ".join(f"{b}:{k} {v:+.3f}" for b in ("ev", "ma") for k, v in gamma[b].items())
+    print(f"[γ] calibration slopes (1 = face value honest): {gs}")
+    cal = {"train_through": int(train_through), "target": int(target),
+           "count_model": count_model, "spg_scale": spg_scale,
+           "ma_anchor_scale": out["ma_anchor_scale"],
+           "ma_create_prior_sd": out["ma_create_prior_sd"], "gamma": gamma}
+    cpath = C.MODELS / f"holdout_calibration{tag}.json"
+    cpath.write_text(json.dumps(cal, indent=1))
+    print(f"  -> {cpath}")
+
+    path = C.MODELS / f"holdout_{target}{tag}.json"
     path.write_text(json.dumps(out, indent=1))
-    print(f"\n  -> {path}")
+    print(f"  -> {path}")
     return out
 
 
@@ -260,9 +358,14 @@ def main(argv=None):
     p.add_argument("--spg-scale", type=float, default=1.0)
     p.add_argument("--rescore", action="store_true",
                    help="reuse the cached training side (holdout_fit_<train>.npz) — skip the fit")
+    p.add_argument("--ma-anchor-scale", type=float, default=1.0,
+                   help="sweep candidate: scale the MA bucket's assist-anchor weight")
+    p.add_argument("--ma-create-prior", type=float, default=None,
+                   help="sweep candidate: create prior SD for the MA bucket")
     args = p.parse_args(argv)
     evaluate(args.train_through, args.target, count_model=args.count,
-             spg_scale=args.spg_scale, rescore=args.rescore)
+             spg_scale=args.spg_scale, rescore=args.rescore,
+             ma_anchor_scale=args.ma_anchor_scale, ma_create_prior_sd=args.ma_create_prior)
 
 
 if __name__ == "__main__":

@@ -586,3 +586,60 @@ def test_ckpt_save_load_roundtrip(tmp_path):
     c2 = G.fit_conversion(Cr, P=25, warm=G._ck_stage(ck, "conv"), reuse=True, pids=R["players"])
     assert np.array_equal(c2["theta"], conv["theta"])
     assert G._ck_stage(ck, "ma") is None                     # absent stage → no warm block
+
+
+# ── per-bucket anchor weight / create prior (the MA identification hyperparameters) ───────────────
+
+def _synth_fixed_units(P=10, n=40000, seed=11, role_player=0):
+    """Fixed-unit rows (PP1-style): the same five players ALWAYS appear together, so shot counts
+    identify only the unit's create SUM; assist labels all go to `role_player` (role, not skill —
+    every player's TRUE create is 0). The assist anchor alone then splits the sum: at full weight
+    the role player inflates and his unit-mates sink negative (the residual-sink mechanism)."""
+    rng = np.random.default_rng(seed)
+    units = [np.arange(5), np.arange(5, 10)]
+    dur, mu0 = 45.0, np.log(11.0)
+    rowsu = rng.integers(0, 2, n)
+    atk = np.array([np.concatenate([units[u][k:], units[u][:k]])
+                    for u, k in zip(rowsu, rng.integers(0, 5, n))])
+    dff = np.array([units[1 - u] for u in rowsu])
+    shooter, team = atk[:, 0], atk[:, 1:5]
+    lam = np.exp(mu0) * dur / 3600.0
+    count = rng.poisson(lam, n).astype(float)
+    R = {"players": list(range(P)), "idx": {p: p for p in range(P)}, "shooter_idx": shooter,
+         "team_idx": team, "def_idx": dff,
+         "Xctx": rng.integers(0, 2, (n, 1)).astype(float),   # non-degenerate ctx (β is unpenalized)
+         "count": count,
+         "offset": np.full(n, np.log(dur / 3600.0)), "dur": np.full(n, dur),
+         "def_goalie": np.zeros(n, dtype=object), "toi": np.full(P, 1e6)}
+    ng = 1200
+    gu = rng.integers(0, 2, ng)
+    gt = np.zeros((ng, 4), dtype=np.int64)
+    gc = np.zeros(ng, dtype=np.int64)
+    for i in range(ng):                                      # shooter ≠ role player; A1 = role player
+        u = units[gu[i]]
+        sh_i = u[(1 + rng.integers(0, 4))] if u[0] == role_player * (1 - gu[i]) else u[rng.integers(0, 5)]
+        mates = np.array([q for q in u if q != sh_i])
+        gt[i] = mates
+        rp = role_player if gu[i] == 0 else 5                # each unit has its own "role" assister
+        gc[i] = 1 + int(np.where(mates == rp)[0][0]) if rp in mates else 0
+    return R, gt, gc
+
+
+def test_ma_anchor_weight_and_prior_shrink_fixed_unit_split():
+    """On fixed units, a lower anchor weight / tighter create prior shrinks the assist-driven
+    create split toward the (identified) unit mean; a mixed-lineup fit keeps recovering truth."""
+    R, gt, gc = _synth_fixed_units()
+    full = G.fit_rate_create(R, gt, gc, shots_per_goal=16)
+    quarter = G.fit_rate_create(R, gt, gc, shots_per_goal=4)         # anchor ×0.25
+    tight = G.fit_rate_create(R, gt, gc, shots_per_goal=16, create_prior_sd=0.05)
+    sd_full = float(np.std(full["create"]))
+    # every player's true create is 0 — the anchor-driven spread IS the artifact, and both knobs
+    # shrink it (sublinearly: concentrated assists still dominate a ridge at these weights)
+    assert sd_full > 0.5                                     # the mechanism reproduces at full weight
+    assert float(np.std(quarter["create"])) < 0.75 * sd_full
+    assert float(np.std(tight["create"])) < 0.70 * sd_full
+
+    # mixed lineups: identification survives a reduced anchor (counts carry the split)
+    Rm, gtm, gcm, create_true, *_ = _synth_create(P=40, n=30000, seed=5)
+    mixed = G.fit_rate_create(Rm, gtm, gcm, shots_per_goal=4)
+    assert np.corrcoef(mixed["create"], create_true)[0, 1] > 0.8

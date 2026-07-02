@@ -104,6 +104,7 @@ import pandas as pd
 from scipy import sparse
 from scipy.optimize import minimize
 from scipy.sparse.linalg import splu
+from scipy.special import betaincinv
 
 import jax
 import jax.numpy as jnp
@@ -844,10 +845,14 @@ def _stage_conv(conv, pids):
             "se_fin": conv["se_fin"], "se_gsave": conv["se_gsave"]}
 
 
-def ckpt_save(seasons, count_model, spg_scale, rates, qual, conv, players, path=None):
+def ckpt_save(seasons, count_model, spg_scale, rates, qual, conv, players, path=None,
+              ma_anchor_scale=1.0, ma_create_prior_sd=None):
     pids = np.asarray(players)
     z = {"seasons": np.asarray([int(s) for s in seasons]), "count_model": np.asarray(count_model),
-         "spg_scale": np.asarray(float(spg_scale))}
+         "spg_scale": np.asarray(float(spg_scale)),
+         "ma_anchor_scale": np.asarray(float(ma_anchor_scale)),
+         "ma_create_prior_sd": np.asarray(float(ma_create_prior_sd)
+                                          if ma_create_prior_sd else np.nan)}
     for key, rate in rates.items():
         for k, v in _stage_rate(rate, pids).items():
             z[f"{key}_{k}"] = v
@@ -1046,7 +1051,7 @@ def _rate_ses(H, M, NU, lu):
 
 
 def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson", a2=None,
-                    warm=None, reuse=False):
+                    warm=None, reuse=False, create_prior_sd=None):
     """UNIFIED CREATION over per-(player, season) STATES. One `create` parameter per unit that does
     double duty:
       (i) lifts teammates' shot rate in the Poisson/NB count layer, and
@@ -1080,7 +1085,8 @@ def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson", a2
     solution mapped by key; `reuse=True` additionally SKIPS optimization and the SE Hessian,
     taking θ and SEs straight from the checkpoint — valid only for the exact same fit (enforced)."""
     P, k = len(R["players"]), R["Xctx"].shape[1]
-    lsh, lcr, ldf = 1 / PRIOR_SD_SHOOT ** 2, 1 / PRIOR_SD_CREATE ** 2, 1 / PRIOR_SD_SHOOT ** 2
+    lsh, ldf = 1 / PRIOR_SD_SHOOT ** 2, 1 / PRIOR_SD_SHOOT ** 2
+    lcr = 1 / (create_prior_sd if create_prior_sd else PRIOR_SD_CREATE) ** 2
     nb = count_model == "nb"
     dmask = R.get("def_mask")
     if dmask is None:                                        # synthetic/legacy rows: all defenders real
@@ -1550,9 +1556,10 @@ def effective_params(rates, qual, conv, players, agepos, last_season, target=Non
         }
     qcm = _coef_map(qual.get("ctx_names"), qual["beta"])
     qc = np.asarray(qual["qcreate"])
-    qual_eff = {"mu_qual": qual["mu_qual"],
+    qual_eff = {"mu_qual": qual["mu_qual"], "beta_s": qual.get("beta_s"),
                 "qshoot": qual["qshoot"] + isD * qcm.get("shooter_D", 0.0),
                 "qcreate": qc[isD.astype(np.int64)] if qc.shape == (2,) else qc,   # A1: position pair
+                "qcreate_pos": qc if qc.shape == (2,) else None,   # the [F, D] pair (creator classes)
                 "qdef": qual["qdef"] + isD * qcm.get("def_D", 0.0)}
     ccm = _coef_map(conv.get("ctx_names"), conv.get("beta", []))
     conv_eff = {"a": conv["a"], "b": conv["b"],
@@ -1576,17 +1583,62 @@ def unit_effective(rate, agepos):
 
 # ── attribution: merge the rate (volume) and quality loadings into goal-scale numbers ──────────────
 
-def player_values(rates, qual, conv, players):
+_GL_X, _GL_W = np.polynomial.legendre.leggauss(40)          # fixed nodes on (0,1) for the Beta marginal
+_GL_X = 0.5 * (_GL_X + 1.0)
+_GL_W = 0.5 * _GL_W
+
+
+def marginal_goal_prob(qbar, s, a, b, fin=0.0):
+    """The model's own goals-per-shot: E[sigmoid(a·logit(x) + b + fin)] under the model's fitted
+    shot-quality distribution x ~ Beta(s·qbar, s·(1−qbar)) (Stage 2's mean qbar + concentration
+    beta_s). The point shortcut sigmoid(a·logit(qbar)+b+fin) evaluates the conversion curve at the
+    MEAN quality and overstates goals over the right-skewed quality distribution (a Jensen gap of
+    ~+13% league-wide); this computes the marginal the PPC simulator computes by Monte Carlo, but
+    deterministically. Quadrature runs in CDF space — E[f(X)] = ∫₀¹ f(Q(u)) du with Q the Beta
+    quantile function — so the α<1 density singularity (low-quality shooters) costs no accuracy
+    and s → ∞ recovers the point evaluation exactly. Vectorized over players."""
+    qbar = np.clip(np.atleast_1d(np.asarray(qbar, dtype=np.float64)), EPS, 1 - EPS)
+    al, be = s * qbar, s * (1.0 - qbar)                      # (P,)
+    x = np.clip(betaincinv(al[:, None], be[:, None], _GL_X[None, :]), EPS, 1 - EPS)   # (P, K)
+    lx = np.log(x / (1.0 - x))
+    f = _sigmoid(a * lx + b + np.atleast_1d(np.asarray(fin, dtype=np.float64))[:, None])
+    return np.sum(_GL_W[None, :] * f, axis=1)
+
+
+def creator_mix(psi0, isD, key):
+    """Creator-class weights (unassisted, F-created, D-created) per shooter, in the model's own
+    REFERENCE environment (teammate creates = 0): w0 = e^psi0/(e^psi0 + 4); the rest splits by the
+    on-ice teammate position mix — EV 5v5 rosters are 3F+2D (an F shooter has 2F+2D teammates, a D
+    has 3F+1D); the MA bucket uses the typical 4F+1D PP unit. A documented convention for the
+    deployment-free VALUES; the WAR engine uses each stint's actual teammates instead."""
+    isD = np.asarray(isD, dtype=np.float64)
+    w0 = float(np.exp(psi0) / (np.exp(psi0) + 4.0))
+    n_f = np.where(isD > 0, 3.0, 2.0) if key == "ev" else np.where(isD > 0, 4.0, 3.0)
+    w_f = (1.0 - w0) * n_f / 4.0
+    return w0, w_f, (1.0 - w0) - w_f
+
+
+def player_values(rates, qual, conv, players, isD=None):
     """Per-strength deployment-free per-60 goal values. `rates` = {"ev": rate_fit, "ma": rate_fit}.
     For each strength (rate loadings are per-strength; quality/finishing loadings are POOLED, only the
     intercept splits):
-       scoring(j)    = exp(mu_rate+shoot) · sigmoid(a·logit(sigmoid(mu_qual+qshoot)) + b + fin)   own shots, converted
+       scoring(j)    = exp(mu_rate+shoot) · ḡ_j                                                   own shots, converted
        playmaking(p) = N_TM · exp(mu_rate) · (exp(create)−1) · sigmoid(mu_qual+qcreate)           teammate xG added
        defense(d)    = N_DEF · [exp(mu_rate)·sigmoid(mu_qual) − exp(mu_rate+def)·sigmoid(mu_qual+qdef)]  suppression
+    ḡ_j is the model's own goals-per-shot: the conversion curve marginalized over BOTH the fitted
+    shot-quality distribution (Beta, concentration beta_s — see marginal_goal_prob) AND the creator
+    classes (unassisted / F-created / D-created; qcreate is parameterized with unassisted as the
+    reference and created shots carry the negative position bumps, so skipping this marginalization
+    prices every shot as unassisted ≈ +13% goals league-wide). Falls back to the point shortcut when
+    beta_s / the qcreate pair / isD are unavailable (synthetic fixtures).
     EV → ev_scoring/playmaking/defense (N_DEF=5). MA → pp_scoring/pp_playmaking + pk_defense (N_DEF=4;
     the MA `def` loadings ARE the penalty-killers). All per 60; defense >0 = suppresses (good)."""
     out = {}
     qshoot, qcreate, qdef, fin = qual["qshoot"], qual["qcreate"], qual["qdef"], conv["fin"]
+    s_conc = qual.get("beta_s")                              # Stage-2 Beta concentration
+    qc_pos = qual.get("qcreate_pos")                         # the [F, D] creator-class pair
+    if qc_pos is None and np.asarray(qcreate).shape == (2,):
+        qc_pos = np.asarray(qcreate)
     for key, rate in rates.items():
         ml, mq = rate["intercept"], qual["mu_qual"][key]
         n_def = N_DEF_EV if key == "ev" else N_DEF_MA
@@ -1594,9 +1646,20 @@ def player_values(rates, qual, conv, players):
         cr, shoot, defn = rate["create"], rate["shoot"], rate["def"]
         shots = np.exp(ml + shoot)
         q_own = np.clip(_sigmoid(mq + qshoot), EPS, 1 - EPS)
-        lq = np.log(q_own / (1 - q_own))
-        p_own = _sigmoid(a * lq + b + fin)
-        p_own0 = _sigmoid(a * lq + b)
+        if s_conc and qc_pos is not None and isD is not None:
+            w0, wf, wd = creator_mix(rate["psi0"], isD, key)
+            p_own = p_own0 = 0.0
+            for w, qc in ((w0, 0.0), (wf, float(qc_pos[0])), (wd, float(qc_pos[1]))):
+                qb = np.clip(_sigmoid(mq + qshoot + qc), EPS, 1 - EPS)
+                p_own = p_own + w * marginal_goal_prob(qb, float(s_conc), a, b, fin)
+                p_own0 = p_own0 + w * marginal_goal_prob(qb, float(s_conc), a, b)
+        elif s_conc:                                         # Beta marginal, no creator classes
+            p_own = marginal_goal_prob(q_own, float(s_conc), a, b, fin)
+            p_own0 = marginal_goal_prob(q_own, float(s_conc), a, b)
+        else:                                                # point shortcut (synthetic fixtures)
+            lq = np.log(q_own / (1 - q_own))
+            p_own = _sigmoid(a * lq + b + fin)
+            p_own0 = _sigmoid(a * lq + b)
         base = np.exp(ml) * _sigmoid(mq)
         out[key] = {
             "scoring": shots * p_own,                          # own shots, converted to goals
@@ -1768,7 +1831,7 @@ def _curve_json(cm, blk, off_name=None):
 
 
 def fit_all(seasons, count_model="poisson", spg_scale=1.0, warm=False, reexport=False,
-            save_ckpt=False):
+            save_ckpt=False, ckpt_path=None, ma_anchor_scale=1.0, ma_create_prior_sd=None):
     """Fit every stage on `seasons` and return the raw fit objects — the shared engine behind run()
     (which adds leaderboards, values, PPC, projection, JSON) and the held-out predictive harness
     (generative_holdout, which needs the fits without the reporting tail). Returns a dict with
@@ -1778,18 +1841,33 @@ def fit_all(seasons, count_model="poisson", spg_scale=1.0, warm=False, reexport=
     exact refits converge in a handful of iterations, incremental refits (new season/players) in a
     fraction of a cold run. `reexport` skips optimization AND the SE Hessians entirely (requires a
     checkpoint from the exact same fit signature) — for regenerating reports/JSON after export-side
-    changes. `save_ckpt` writes the checkpoint after fitting (run() passes True; the holdout harness
-    leaves warm/save off so its train fits never touch a solution that saw test data)."""
+    changes. `save_ckpt` writes the checkpoint after fitting; `ckpt_path` overrides its location
+    (run() uses the production path; the holdout harness keeps its own chain, so train-side fits
+    never touch a solution that saw test data).
+
+    `ma_anchor_scale` / `ma_create_prior_sd`: the MA (PP/PK) bucket's assist-anchor weight scale
+    and create prior SD — hyperparameters selected by held-out validation (docs §7): on fixed PP
+    units the shot counts pin only the unit's total creation, so the assist anchor alone splits
+    it, and assists on the PP reflect ROLE (who touches the puck last), not creation skill. The EV
+    bucket is untouched (linemate mixing identifies its split; validated at full weight)."""
     print(f"[generative_model:shooter-resolved] seasons {seasons} — count {count_model} — EV + PP/PK …")
-    ck = ckpt_load() if (warm or reexport) else None
+    if ma_anchor_scale != 1.0 or ma_create_prior_sd:
+        print(f"  MA bucket: anchor×{ma_anchor_scale:g}"
+              + (f", create prior sd {ma_create_prior_sd:g}" if ma_create_prior_sd else ""))
+    ck = ckpt_load(ckpt_path) if (warm or reexport) else None
     if reexport:
         if ck is None:
             raise SystemExit("--reexport needs a θ̂ checkpoint from a prior full fit")
+        ck_mas = float(ck.get("ma_anchor_scale", 1.0))
+        ck_mcp = float(ck.get("ma_create_prior_sd", np.nan))
         if (list(map(int, ck["seasons"])) != [int(s) for s in seasons]
                 or str(ck["count_model"]) != count_model
-                or float(ck["spg_scale"]) != float(spg_scale)):
-            raise SystemExit("--reexport: checkpoint signature (seasons/count/spg-scale) differs — "
-                             "run a full fit")
+                or float(ck["spg_scale"]) != float(spg_scale)
+                or ck_mas != float(ma_anchor_scale)
+                or not (np.isnan(ck_mcp) and ma_create_prior_sd is None
+                        or ck_mcp == float(ma_create_prior_sd or np.nan))):
+            raise SystemExit("--reexport: checkpoint signature (seasons/count/spg-scale/MA hypers) "
+                             "differs — run a full fit")
     elif ck is not None:
         print(f"  warm start ← checkpoint ({'+'.join(str(int(s)) for s in ck['seasons'])}, "
               f"{ck['count_model']})")
@@ -1814,7 +1892,8 @@ def fit_all(seasons, count_model="poisson", spg_scale=1.0, warm=False, reexport=
         slab = 0 if key == "ev" else 1
         gm = (Q["goal"] == 1) & (Q["strength"] == slab)
         ngoal = int(gm.sum()); nun = int(((Q["creator"] == 4) & (Q["strength"] == slab)).sum())
-        spg[key] = spg_scale * float(R["count"].sum()) / max(ngoal, 1)   # per-strength IPW weight (×A3 scale)
+        aw = ma_anchor_scale if key == "ma" else 1.0         # per-bucket anchor weight (docs §7)
+        spg[key] = aw * spg_scale * float(R["count"].sum()) / max(ngoal, 1)  # IPW weight (×A3 scale)
         anchor = gm & (Q["creator"] >= 0)                    # F4: off-ice-assister goals are latent
         gt, gc = Q["team_idx"][anchor], cidx_all[anchor]
         sord = {s: i for i, s in enumerate(R["seasons"])}
@@ -1837,7 +1916,8 @@ def fit_all(seasons, count_model="poisson", spg_scale=1.0, warm=False, reexport=
               f"spg {spg[key]:.1f}  anchored {len(gc)} ({100 * nun / max(ngoal, 1):.0f}% unassisted, "
               f"{len(gc2)} with A2)")
         rate = fit_rate_create(R, gt, gc, spg[key], count_model=count_model, a2=(gt2, g1c, gc2),
-                               warm=_ck_stage(ck, key), reuse=reexport)
+                               warm=_ck_stage(ck, key), reuse=reexport,
+                               create_prior_sd=(ma_create_prior_sd if key == "ma" else None))
         rate["R"] = R
         rates[key] = rate
         last_season = np.maximum(last_season, R["last_season"])
@@ -1889,22 +1969,25 @@ def fit_all(seasons, count_model="poisson", spg_scale=1.0, warm=False, reexport=
             rc = "  ".join(f"{s}:{v[0]:.0f}/{v[1]:.0f}" for s, v in sorted(conv["recon_season"].items()))
             print(f"    per-season Σp/Σy (F6): {rc}")
     if save_ckpt:
-        cp = ckpt_save(seasons, count_model, spg_scale, rates, qual, conv, players)
+        cp = ckpt_save(seasons, count_model, spg_scale, rates, qual, conv, players, path=ckpt_path,
+                       ma_anchor_scale=ma_anchor_scale, ma_create_prior_sd=ma_create_prior_sd)
         print(f"  θ̂ checkpoint → {cp} (warm starts / --reexport)")
     return {"players": players, "idx": idx, "agepos": agepos, "Q": Q, "rates": rates, "spg": spg,
             "qual": qual, "conv": conv, "last_season": last_season}
 
 
-def run(seasons, count_model="poisson", spg_scale=1.0, warm=True, reexport=False):
+def run(seasons, count_model="poisson", spg_scale=1.0, warm=True, reexport=False,
+        ma_anchor_scale=1.0, ma_create_prior_sd=None):
     names = roster_names(seasons)
     M = fit_all(seasons, count_model=count_model, spg_scale=spg_scale, warm=warm,
-                reexport=reexport, save_ckpt=not reexport)
+                reexport=reexport, save_ckpt=not reexport,
+                ma_anchor_scale=ma_anchor_scale, ma_create_prior_sd=ma_create_prior_sd)
     players, agepos, Q = M["players"], M["agepos"], M["Q"]
     rates, spg, qual, conv, last_season = M["rates"], M["spg"], M["qual"], M["conv"], M["last_season"]
 
     # effective per-player params (last state + position offset + curve) → values
     eff_rates, eff_qual, eff_conv = effective_params(rates, qual, conv, players, agepos, last_season)
-    vals = player_values(eff_rates, eff_qual, eff_conv, players)
+    vals = player_values(eff_rates, eff_qual, eff_conv, players, isD=agepos["isD"])
 
     # pooled (shared) skill leaderboards — once. RAW player residuals, not effective params: the
     # position offsets / age curves are calibration terms (A2), and adding them back would turn a
@@ -1944,7 +2027,7 @@ def run(seasons, count_model="poisson", spg_scale=1.0, warm=True, reexport=False
     if len(set(seasons)) >= 2:
         target = int(max(seasons)) + 1
         pr, pq, pc = effective_params(rates, qual, conv, players, agepos, last_season, target=target)
-        pvals = player_values(pr, pq, pc, players)
+        pvals = player_values(pr, pq, pc, players, isD=agepos["isD"])
         proj = {"season": target, "vals": pvals}
         print(f"\n──[projection → {target}] (last RW state + aging curve; reference environment) ──")
         _board(names, players, pvals["ev"]["scoring"], ev_toi, f"PROJECTED {target} EV SCORING (goals/60):")
@@ -2059,6 +2142,11 @@ def main(argv=None):
                    help="count layer: poisson (Var=μ) or nb (negative binomial, Var=μ+μ²/r)")
     p.add_argument("--spg-scale", type=float, default=1.0,
                    help="multiply the assist-credit weight (A3 sensitivity checks: 0.5 / 2.0)")
+    p.add_argument("--ma-anchor-scale", type=float, default=1.0,
+                   help="scale the PP/PK bucket's assist-anchor weight (validated per docs §7; "
+                        "the EV bucket is untouched)")
+    p.add_argument("--ma-create-prior", type=float, default=None,
+                   help="create prior SD for the PP/PK bucket (default: shared PRIOR_SD_CREATE)")
     p.add_argument("--cold", action="store_true",
                    help="ignore the θ̂ checkpoint (default: warm-start each stage from the last fit)")
     p.add_argument("--reexport", action="store_true",
@@ -2071,7 +2159,8 @@ def main(argv=None):
         raise SystemExit("no processed shots — run `make stints` first")
     seasons = avail if args.pool else ([args.season] if args.season else [avail[-1]])
     run(seasons, count_model=args.count, spg_scale=args.spg_scale,
-        warm=not args.cold, reexport=args.reexport)
+        warm=not args.cold, reexport=args.reexport,
+        ma_anchor_scale=args.ma_anchor_scale, ma_create_prior_sd=args.ma_create_prior)
 
 
 if __name__ == "__main__":
