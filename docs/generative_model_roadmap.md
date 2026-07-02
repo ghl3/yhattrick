@@ -40,12 +40,20 @@ doc §7. Still open from this item: **RW_SD grid tuning** (rerun the harness und
 `quality_creator_rows` reads `assist1PlayerId` and discards `assist2PlayerId` from the same pbp
 JSON. Design: treat (A1, A2) as a PARTIAL RANKING of the on-ice teammates by creation involvement —
 an exploded-logit second stage reusing the same `create` parameters:
-`credit = log softmax([create_0, create_T])[c1] + λ · log softmax(create_{T\c1})[c2]`
-(A2 stage: A1's column masked out, no unassisted option — an A2 implies a second passer existed).
-Both terms keep the `spg` IPW weight; the F1 sandwich extends mechanically (bread `λ·spg·π(1−π)`,
-meat `(λ·spg)²·F`). `A2_WEIGHT = λ ≈ 0.5` to start — A2 rates are much less repeatable than A1, and
-λ guards `create` against drifting from "creates chances" toward "touches the puck"; tune λ with the
-held-out harness (#1). Label yield ≈ 1.6–1.7× (≈94% of EV goals have an A1, ~60% an A2).
+`credit = log softmax([create_0, create_T])[c1] + A2 term` (A2 stage: A1's column masked out, no
+unassisted option — an A2 implies a second passer existed). Both terms keep the `spg` IPW weight;
+the F1 sandwich extends mechanically.
+**Setting the A1-vs-A2 balance:** a bare weight λ on the A2 log-likelihood is NOT fittable by MLE
+(a pseudo-likelihood temperature — degenerate). Instead model A2 label noise as a MIXTURE with a
+proper MLE parameter `q` = P(recorded A2 reflects creation):
+`P(A2=c₂|c₁,T) = q·softmax(create_{T\c₁})[c₂] + (1−q)/|T\c₁|` — `q` is identified by A2's
+concordance with the create ordering already pinned by counts + A1; the effective down-weight
+emerges from the fit. Sandwich uses q-weighted responsibilities.
+**Measured priors (July 2026, our exports, 2,166 consecutive-season pairs ≥400 min):** YoY
+repeatability A1/60 = 0.73, A2/60 = 0.55 (ratio ≈ 0.75 — an upper bound for `q`, since
+repeatability includes deployment persistence); volumes A1 0.62/60 vs A2 0.49/60 ⇒ ~1.8× labeled
+events. Validate with ONE harness A/B (no-A2 vs mixture-A2) against the recorded bars
+(naive corr 0.864; row-dev 126.66).
 **Deliberately NOT in Stage 2 (`qcreate`/`qbar`):** a shot's xG is set by its final geometry — the
 LAST pass — so A2's danger effect flows through A1; adding it would double-count the causal path.
 Stage 2 still benefits indirectly: better-anchored `create` sharpens the latent-creator `pi` on
