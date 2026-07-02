@@ -48,7 +48,7 @@ from datetime import date
 import numpy as np
 
 from .. import config as C
-from .generative_model import (_load_stints, _sigmoid, _zone,
+from .generative_model import (_load_stints, _sigmoid, _zone, creator_mix, marginal_goal_prob,
                                EV_STRENGTHS, MA_STRENGTHS, AGE_PEAK, AGE_SCALE)
 
 EV_GATE = 6000.0            # seconds (100 min) — EV card eligibility, matches export_players
@@ -124,17 +124,37 @@ def fin_eff_at(fit, t, z):
 
 # ── the closed-form value equations (docs/generative_model.md §2) ────────────────────────────────
 
+def gbar_classes(fit, key, qshoot_eff, fin_eff, season=None):
+    """(g0, gF, gD): the model's own goals-per-shot per CREATOR CLASS (unassisted / F-created /
+    D-created), each the conversion curve marginalized over the fitted Beta shot-quality
+    distribution (marginal_goal_prob). qcreate is parameterized with unassisted as the reference
+    and created shots carry the (negative) position bumps — pricing every shot as unassisted is
+    the ≈+13% level bug the 2026-07 audit found. `season` adds the quality model's own season
+    offset (WAR rows are season-specific; the deployment-free values stay in the reference
+    environment)."""
+    mq = fit["mu_qual"]["ev" if key == "ev" else "ma"]
+    if season is not None:
+        mq = mq + fit["quality_ctx"].get(f"season_{season}", 0.0)
+    a, b = fit["conv"]["a"]["ev" if key == "ev" else "ma"], fit["conv"]["b"]["ev" if key == "ev" else "ma"]
+    s = float(fit["beta_s"])
+    out = []
+    for qc in (0.0, fit["qcreate"]["F"], fit["qcreate"]["D"]):
+        qb = np.clip(_sigmoid(mq + qshoot_eff + qc), EPS, 1 - EPS)
+        out.append(marginal_goal_prob(qb, s, a, b, fin_eff))
+    return out
+
+
 def values_at(fit, t, key, sh, cr, df, fin_eff, n_def):
     """(scoring, playmaking, defense) per 60 at the given effective rate params, using the fit's
-    intercepts for strength bucket `key` and the pooled quality/conversion effectives."""
+    intercepts for strength bucket `key` and the pooled quality/conversion effectives. Scoring's
+    goals-per-shot is the creator-class + Beta marginal (mirrors player_values in the model)."""
     mu = fit["strengths"][key]["rate_intercept"]
     mq = fit["mu_qual"]["ev" if key == "ev" else "ma"]
-    a, b = fit["conv"]["a"]["ev" if key == "ev" else "ma"], fit["conv"]["b"]["ev" if key == "ev" else "ma"]
     qc_pos = np.where(t["isD"] > 0, fit["qcreate"]["D"], fit["qcreate"]["F"])
     shots = np.exp(mu + sh)
-    q_own = np.clip(_sigmoid(mq + t["qshoot_eff"]), EPS, 1 - EPS)
-    p_goal = _sigmoid(a * _logit(q_own) + b + fin_eff)
-    sc = shots * p_goal
+    g0, gF, gD = gbar_classes(fit, key, t["qshoot_eff"], fin_eff)
+    w0, wf, wd = creator_mix(fit["strengths"][key]["psi0"], t["isD"], key)
+    sc = shots * (w0 * g0 + wf * gF + wd * gD)
     pm = 4.0 * np.exp(mu) * (np.exp(cr) - 1.0) * _sigmoid(mq + qc_pos)
     base = np.exp(mu) * _sigmoid(mq)
     dfv = n_def * (base - np.exp(mu + df) * _sigmoid(mq + t["qdef_eff"]))
@@ -176,6 +196,23 @@ def ga60_of(t, base, sc, pm, df, kap):
     bp = np.where(t["isD"] > 0, base["D"]["pm"], base["F"]["pm"])
     bd = np.where(t["isD"] > 0, base["D"]["df"], base["F"]["df"])
     return (sc - bs) + kap * (pm - bp) + kap * (df - bd)
+
+
+def band_mean(arr, toi, elig, pct, isD, band=None):
+    """Per-position TOI-weighted mean of `arr` over the replacement percentile band of `pct`
+    among the CONTEXT-eligible (`elig`) players — the archetype builder for one parameter block.
+    Falls back to the whole eligible group if the band is empty. Returns (per-player array mapped
+    by position, {F/D: value})."""
+    lo, hi = band or REPL_BAND
+    v, meta = np.zeros(len(isD)), {}
+    for g, gm in (("F", isD < 0.5), ("D", isD > 0.5)):
+        b = gm & elig & (pct >= lo) & (pct <= hi)
+        if b.sum() == 0:
+            b = gm & elig
+        mv = _wmean(arr, toi, b)
+        v[gm] = mv
+        meta[g] = round(mv, 4)
+    return v, meta
 
 
 def pct_within(v, elig, isD):
@@ -235,32 +272,70 @@ def war_rows(seasons, idx):
     return out
 
 
-def war_bucket(rows, P, sh, cr, df, g_logit, kq, gsave, cx, repl, n_atk_slots=5):
+def bucket_E(rows, sh, cr, df, gcl, kq, cx, psi0, isD, gsave=None):
+    """E[GF] per side-row under the given parameter arrays — the same equation war_bucket uses
+    for its base world (creator-marginalized ḡ per shooter from the row's actual teammates,
+    goalie tilt, defenders' K_B). Exposed for the WAR audit's joint (whole-team) counterfactuals:
+    pass replacement arrays to price an all-replacement attack."""
+    A, B, dm = rows["atk"], rows["def"], rows["dmask"]
+    gs = rows["gsave"] if gsave is None else gsave
+    g0, gF, gD = gcl
+    e_cr = np.exp(cr[A])
+    fmask = (isD < 0.5).astype(np.float64)[A]
+    p0 = float(np.exp(psi0))
+    S_k = e_cr.sum(1)[:, None] - e_cr
+    SF_k = (e_cr * fmask).sum(1)[:, None] - e_cr * fmask
+    SD_k = S_k - SF_k
+    gbar = (p0 * g0[A] + SF_k * gF[A] + SD_k * gD[A]) / (p0 + S_k)
+    tj = np.exp(sh[A] - cr[A]) * gbar * np.exp((1.0 - g0[A]) * gs[:, None])
+    lKB = (np.log(np.clip(kq[B], EPS, None)) * dm).sum(1)
+    return (cx * np.exp(cr[A].sum(1) + (df[B] * dm).sum(1) + lKB)
+            * tj.sum(1) * rows["dur"] / 3600.0)
+
+
+def war_bucket(rows, P, sh, cr, df, gcl, kq, gsave, cx, repl, psi0, isD):
     """GAR per player for ONE (season, bucket)'s stint-side rows — closed-form replacement swaps.
 
-    Per side-row: E[GF]/h = cx·e^{Σcr_A}·e^{Σdf_B·mask}·K_B·Σ_j e^{sh_j − cr_j}·g_j, with
-    g_j = sigmoid(g_logit_j + gsave) and K_B = Π_d κ_d. Each attacker slot's swap perturbs the
-    shared e^{Σcr} and his own term; each defender slot's swap perturbs e^{Σdf} and K_B.
-    `repl` = dict(sh, cr, df, g_logit, kq) of PER-PLAYER replacement arrays (each player's value =
-    his position's replacement archetype). Returns (gar_atk, gar_def), each (P,) in goals
-    (positive = adds goals vs replacement) — attacker-slot vs defender-slot contributions kept
-    separate so the caller can book them to the right strength bucket (EV: both; MA: PP vs PK)."""
+    Per side-row: E[GF]/h = cx·e^{Σcr_A}·e^{Σdf_B·mask}·K_B·Σ_j e^{sh_j − cr_j}·ḡ_j(row), where
+    ḡ_j(row) is the model's own goals-per-shot for shooter j marginalized EXACTLY over the row's
+    creator distribution π = softmax([ψ₀, create of j's four actual teammates]) with the three
+    creator-class conversions `gcl` = (g0, gF, gD) (each already a Beta-marginal, see
+    gbar_classes), tilted log-linearly for the row's goalie (·e^{(1−ḡ)·gsave}); K_B = Π_d κ_d.
+    Each attacker slot's swap perturbs the shared e^{Σcr} and his own term (his teammates' creator
+    mixes are held fixed — a second-order cross term); each defender slot's swap perturbs e^{Σdf}
+    and K_B. `repl` = per-player replacement arrays (sh, cr, df, g0, gF, gD, kq — each player's
+    value = his position's CONTEXT-MATCHED archetype: EV band for EV, PP band for attack slots,
+    PK band for defender slots). Returns (gar_atk, gar_def, E): per-player goals vs replacement
+    (attack/defense booked separately: EV takes both; MA books attack=PP, defense=PK) and the
+    per-row expected goals (the audit's raw material)."""
     A, B, dm = rows["atk"], rows["def"], rows["dmask"]
     hrs = rows["dur"] / 3600.0
     gs = rows["gsave"]                                       # per-row goalie gsave (n,)
+    g0, gF, gD = gcl
     crA = cr[A].sum(1)
     dfB = (df[B] * dm).sum(1)
     lKB = (np.log(np.clip(kq[B], EPS, None)) * dm).sum(1)
-    tj = np.exp(sh[A] - cr[A]) * _sigmoid(g_logit[A] + gs[:, None])      # (n,5) own terms
+    # per-shooter creator mix over the row's ACTUAL teammates (exact, model-defined)
+    e_cr = np.exp(cr[A])                                     # (n,5)
+    fmask = (isD < 0.5).astype(np.float64)[A]                # (n,5): attacker is a forward
+    p0 = float(np.exp(psi0))
+    S_k = e_cr.sum(1)[:, None] - e_cr                        # (n,5) each shooter's 4 teammates
+    SF_k = (e_cr * fmask).sum(1)[:, None] - e_cr * fmask
+    SD_k = S_k - SF_k
+    Z = p0 + S_k
+    gbar = (p0 * g0[A] + SF_k * gF[A] + SD_k * gD[A]) / Z    # (n,5) creator-marginal ḡ per shooter
+    tj = np.exp(sh[A] - cr[A]) * gbar * np.exp((1.0 - g0[A]) * gs[:, None])
     T = tj.sum(1)
     E = cx * np.exp(crA + dfB + lKB) * T * hrs               # E[GF] per side-row (goals)
     gar_atk, gar_def = np.zeros(P), np.zeros(P)
     # attacker slots: swap p → repl(pos_p): Σcr shifts by (cr_r − cr_p); own term t_p → t_r
     for k in range(A.shape[1]):
         p = A[:, k]
-        cr_r, sh_r, gl_r = repl["cr"][p], repl["sh"][p], repl["g_logit"][p]
-        t_r = np.exp(sh_r - cr_r) * _sigmoid(gl_r + gs)
-        E_swp = cx * np.exp(crA - cr[p] + cr_r + dfB + lKB) * (T - tj[:, k] + t_r) * hrs
+        gbar_r = (p0 * repl["g0"][p] + SF_k[:, k] * repl["gF"][p]
+                  + SD_k[:, k] * repl["gD"][p]) / Z[:, k]
+        t_r = (np.exp(repl["sh"][p] - repl["cr"][p]) * gbar_r
+               * np.exp((1.0 - repl["g0"][p]) * gs))
+        E_swp = cx * np.exp(crA - cr[p] + repl["cr"][p] + dfB + lKB) * (T - tj[:, k] + t_r) * hrs
         np.add.at(gar_atk, p, E - E_swp)
     # defender slots: swap d → repl: Σdf shifts, K_B ratio; sign: reducing opp GF is positive GAR
     for k in range(B.shape[1]):
@@ -269,7 +344,7 @@ def war_bucket(rows, P, sh, cr, df, g_logit, kq, gsave, cx, repl, n_atk_slots=5)
         ratio = np.exp(repl["df"][d_] - df[d_]) * (np.clip(repl["kq"][d_], EPS, None)
                                                    / np.clip(kq[d_], EPS, None))
         np.add.at(gar_def, d_, E[m] * (ratio - 1.0))         # with him, opp scores E; with repl,
-    return gar_atk, gar_def                                  # E·ratio — he saves E·(ratio−1)
+    return gar_atk, gar_def, E                               # E·ratio — he saves E·(ratio−1)
 
 
 # ── assembly ─────────────────────────────────────────────────────────────────────────────────────
@@ -287,8 +362,9 @@ def build(fit_path=None):
                             t["fin_eff"], n_def=5)
     err = np.nanmax(np.abs(sc - t["ev_scoring"]))
     if err > 5e-3:
-        print(f"  [warn] recomputed ev_scoring differs from fit JSON by up to {err:.4f} "
-              "(check quality_ctx wiring)")
+        print(f"  [note] recomputed ev_scoring differs from fit JSON by up to {err:.4f} — "
+              "expected if the fit predates the marginal-conversion fix (cards use the "
+              "recomputed values); otherwise check quality_ctx wiring")
     pp_sc, pp_pm, _ = values_at(fit, t, "ma", t["pp_shoot"], t["pp_create"], t["pp_def"],
                                 t["fin_eff"], n_def=4)
     _, _, pk_df = values_at(fit, t, "ma", t["pp_shoot"], t["pp_create"], t["pp_def"],
@@ -302,22 +378,31 @@ def build(fit_path=None):
     pp_ga60 = (pp_sc - bppsc) + kap * (pp_pm - bpppm)
     pk_ga60 = kap * (pk_df - bpkdf)
 
-    # replacement archetype: params of the GA/60 REPL_BAND percentile band, per position
+    # replacement archetypes: CONTEXT-MATCHED bands — the "freely available player" for each role.
+    # EV: the REPL_BAND GA/60 percentile band among EV regulars; PP: the same band of PP GA/60
+    # among PP regulars; PK: the band of PK GA/60 among PK regulars. (Averaging EV-band players'
+    # PP parameters would collect the ridge-shrunk ~zeros of players who never play PP — i.e. a
+    # league-AVERAGE PP baseline, far too strong; the 2026-07 audit's fix-2 finding.)
     ev_el = t["toi_ev"] >= EV_GATE
+    pp_el = t["toi_pp"] >= MA_GATE
+    pk_el = t["toi_pk"] >= MA_GATE
     ga_pct = pct_within(ga60, ev_el, t["isD"])
-    repl_params, repl_meta = {}, {}
-    for blk, arr in (("sh", t["ev_shoot"]), ("cr", t["ev_create"]), ("df", t["ev_def"]),
-                     ("pp_sh", t["pp_shoot"]), ("pp_cr", t["pp_create"]), ("pp_df", t["pp_def"]),
-                     ("qs", t["qshoot_eff"]), ("qd", t["qdef_eff"]), ("fin", t["fin_eff"])):
-        v = np.zeros(n)
-        for g, gm in (("F", t["isD"] < 0.5), ("D", t["isD"] > 0.5)):
-            band = gm & ev_el & (ga_pct >= REPL_BAND[0]) & (ga_pct <= REPL_BAND[1])
-            if band.sum() == 0:
-                band = gm & ev_el
-            mv = _wmean(arr, t["toi_ev"], band)
-            v[gm] = mv
-            repl_meta.setdefault(g, {})[blk] = round(mv, 4)
-        repl_params[blk] = v
+    pp_pct = pct_within(pp_ga60, pp_el, t["isD"])
+    pk_pct = pct_within(pk_ga60, pk_el, t["isD"])
+    repl_params, repl_meta = {}, {"ev": {}, "pp": {}, "pk": {}}
+    for ctx_key, toi, elig, pct, blocks in (
+            ("ev", t["toi_ev"], ev_el, ga_pct,
+             (("sh", t["ev_shoot"]), ("cr", t["ev_create"]), ("df", t["ev_def"]),
+              ("qs", t["qshoot_eff"]), ("qd", t["qdef_eff"]), ("fin", t["fin_eff"]))),
+            ("pp", t["toi_pp"], pp_el, pp_pct,
+             (("pp_sh", t["pp_shoot"]), ("pp_cr", t["pp_create"]),
+              ("pp_qs", t["qshoot_eff"]), ("pp_fin", t["fin_eff"]))),
+            ("pk", t["toi_pk"], pk_el, pk_pct,
+             (("pk_df", t["pp_def"]), ("pk_qd", t["qdef_eff"])))):
+        for blk, arr in blocks:
+            repl_params[blk], m = band_mean(arr, toi, elig, pct, t["isD"])
+            for g, mv in m.items():
+                repl_meta[ctx_key].setdefault(g, {})[blk] = mv
 
     # WAR
     rows = war_rows(seasons, idx)
@@ -333,26 +418,25 @@ def build(fit_path=None):
         r["gsave"] = np.array([gsave_map.get(int(g), 0.0) if g == g and g is not None else 0.0
                                for g in r["goalie"]])
         mq = fit["mu_qual"]["ev" if key == "ev" else "ma"]
-        a, b = (fit["conv"]["a"]["ev" if key == "ev" else "ma"],
-                fit["conv"]["b"]["ev" if key == "ev" else "ma"])
         zs = t["z_last"] - (t["last_season"] - s) / AGE_SCALE            # age-z in season s
         fin_s = fin_eff_at(fit, t, np.where(np.isnan(t["age"]), 0.0, zs))
-        q_own = np.clip(_sigmoid(mq + t["qshoot_eff"]), EPS, 1 - EPS)
-        g_logit = a * _logit(q_own) + b + fin_s
         kq = _sigmoid(mq + t["qdef_eff"]) / max(_sigmoid(mq), EPS)
         if key == "ev":                                     # per-season EV states from the trend
             sh = np.array([tr.get(str(s), {}).get("shoot", 0.0) for tr in t["trend"]])
             cr = np.array([tr.get(str(s), {}).get("create", 0.0) for tr in t["trend"]])
             df_ = np.array([tr.get(str(s), {}).get("def", 0.0) for tr in t["trend"]])
             repl = {"sh": repl_params["sh"], "cr": repl_params["cr"], "df": repl_params["df"]}
-        else:
+            r_qs, r_fin, r_qd = repl_params["qs"], repl_params["fin"], repl_params["qd"]
+        else:                                               # attack = PP archetype, defense = PK
             sh, cr, df_ = t["pp_shoot"], t["pp_create"], t["pp_def"]
             repl = {"sh": repl_params["pp_sh"], "cr": repl_params["pp_cr"],
-                    "df": repl_params["pp_df"]}
-        rq_own = np.clip(_sigmoid(mq + repl_params["qs"]), EPS, 1 - EPS)
-        repl["g_logit"] = a * _logit(rq_own) + b + repl_params["fin"]
-        repl["kq"] = _sigmoid(mq + repl_params["qd"]) / max(_sigmoid(mq), EPS)
-        ga, gd = war_bucket(r, n, sh, cr, df_, g_logit, kq, r["gsave"], cx, repl)
+                    "df": repl_params["pk_df"]}
+            r_qs, r_fin, r_qd = repl_params["pp_qs"], repl_params["pp_fin"], repl_params["pk_qd"]
+        gcl = gbar_classes(fit, key, t["qshoot_eff"], fin_s, season=s)
+        repl["g0"], repl["gF"], repl["gD"] = gbar_classes(fit, key, r_qs, r_fin, season=s)
+        repl["kq"] = _sigmoid(mq + r_qd) / max(_sigmoid(mq), EPS)
+        ga, gd, _ = war_bucket(r, n, sh, cr, df_, gcl, kq, r["gsave"], cx, repl,
+                               fit["strengths"][key]["psi0"], t["isD"])
         if key == "ev":
             gar["ev"] += ga + gd
         else:                                               # attacker slots = PP, defender = PK
