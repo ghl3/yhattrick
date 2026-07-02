@@ -246,12 +246,23 @@ All values are computed from each player's **effective parameters** — his last
 + his position offset + the aging curve at his last-season age (`effective_params()`), in the
 reference-season environment:
 ```
-q_own_j       = sigmoid(mu_qual+qshoot_j)                                                          # own-shot mean xG
-scoring(j)    = exp(mu_rate+shoot_j) · sigmoid(a·logit(q_own_j) + b + fin_j)                        # own shots, CONVERTED
+q_own_j(c)    = sigmoid(mu_qual + qshoot_j + qcreate_pos(c))                    # mean xG per own shot, by CREATOR CLASS c
+ḡ_j           = Σ_c π_c · E[ sigmoid(a·logit(x)+b+fin_j) ],  x ~ Beta(s·q_own_j(c), s·(1−q_own_j(c)))
+scoring(j)    = exp(mu_rate+shoot_j) · ḡ_j                                                          # own shots, CONVERTED
 playmaking(p) = N_TM · exp(mu_rate) · (exp(create_p) − 1) · sigmoid(mu_qual + qcreate_pos(p))       # teammate xG added
 defense(d)    = N_DEF · [ exp(mu_rate)·sigmoid(mu_qual) − exp(mu_rate+def_d)·sigmoid(mu_qual+qdef_d) ]  # opp xG suppressed
 creator_share(p) = exp(create_p) / ( exp(create_0) + exp(create_p) + (N_TM−1) )                    # per-teammate-shot
 ```
+**ḡ is the model's own goals-per-shot, marginalized twice** (`marginal_goal_prob` +
+`creator_mix`): over the fitted Beta shot-quality distribution (concentration `beta_s` — the same
+distribution the PPC draws from; quadrature in CDF space) and over the creator classes
+c ∈ {unassisted, F-created, D-created} with weights π from `create_0` and a reference teammate
+mix (the WAR engine instead uses each stint's actual teammates). Both marginalizations matter:
+`qcreate` is parameterized with UNASSISTED as the reference and created shots carry the negative
+position bumps, so evaluating the conversion at `sigmoid(mu_qual+qshoot)` alone prices every shot
+as unassisted — the +13% league-wide goals overshoot the 2026-07 WAR audit traced. With both, the
+engine's ΣE[GF] reconciles to actual goals within ~1% with NO correction factors (the audit
+asserts this; a residual is a modeling finding, not a knob).
 Computed **per strength** with that bucket's rate loadings + intercepts and the pooled
 quality/finishing loadings: EV → `ev_scoring/playmaking/defense` (`N_DEF=5`); MA → `pp_scoring/
 pp_playmaking` and `pk_defense` (`N_DEF=4`; the MA `def` loadings are the penalty-killers).
@@ -539,6 +550,46 @@ Follow-ups: RW_SD grid (one training fit per value; the training side caches to
 `holdout_fit_<T>.npz` and `--rescore` re-scores in minutes) and extending scoring beyond the rate
 stage (on-ice xGF, goals) where the joint structure should differentiate.
 
+### Calibration slopes (γ) + the MA identification sweep (2026-07)
+
+The harness also estimates, per parameter block, an out-of-sample **calibration slope** γ: the
+1-D Poisson MLE of μ = exp(base + γ·term) on the held-out rows, where `term` is that block's
+fitted contribution and everything else is held at training values. γ = 1 ⇔ the block's fitted
+spread predicts next season at face value. γ < 1 has two causes and only one is a defect:
+(a) genuine year-over-year skill drift attenuates any one-step forecast (the RW_SD values imply a
+ceiling ≈ 0.9 for EV shoot/create, lower for def), and (b) within-season **misallocation** —
+spread the data never identified. The EV blocks sit on their drift ceilings (0.94 / 0.90 / 0.80);
+PP create at the default settings sat at **0.31** — the fixed-unit residual-sink problem (§8):
+on five-man units that never change, shot counts pin only the unit's creation SUM, the assist
+anchor splits it, and PP assists are ROLE (who touches the puck last), not creation. Assist-light
+net-front players absorb the negative residual of their anchored teammates.
+
+The fix is in the fit: the MA bucket's anchor weight and create/def priors became hyperparameters
+selected BY this harness (γ toward the EV ceiling, subject to held-out MA deviance not degrading;
+EV settings untouched). The sweep (train ≤2024 → score 2025; warm-started via the holdout θ̂
+chain, ~15–45 min per candidate):
+
+| MA anchor | create prior | def prior | γ shoot | γ create | γ def | MA dev/1k | Σμ/ΣN |
+|---|---|---|---|---|---|---|---|
+| ×1.0 (old default) | 0.12 | 0.30 | 0.77 | 0.31 | 0.64 | 233.8 | 1.011 |
+| ×0.5 | 0.12 | 0.30 | 0.80 | 0.40 | 0.58 | 232.0 | 1.000 |
+| ×0.25 | 0.12 | 0.30 | 0.82 | 0.51 | 0.53 | 231.1 | 0.993 |
+| ×0.1 | 0.12 | 0.30 | 0.83 | 0.60 | 0.50 | 230.8 | 0.987 |
+| ×0.25 | 0.06 | 0.30 | 0.82 | 0.63 | 0.49 | 230.7 | 0.990 |
+| ×0.25 | 0.04 | 0.30 | 0.82 | 0.75 | 0.48 | 230.6 | 0.989 |
+| ×0.1 | 0.06 | 0.30 | 0.83 | 0.74 | 0.47 | 230.6 | 0.987 |
+| ×0.25 | 0.04 | 0.15 | 0.81 | 0.77 | 0.64 | 230.2 | 0.993 |
+| **×0.25 (selected)** | **0.04** | **0.10** | 0.81 | **0.78** | **0.74** | **230.0** | 0.994 |
+
+Three lessons the table encodes: (i) down-weighting the anchor monotonically improves held-out PP
+prediction — the model predicts power plays better when it stops over-trusting PP assists;
+(ii) misallocation migrates to the loosest block (γ_def slid 0.64 → 0.48 as create tightened,
+recovering only when def got the same prior treatment); (iii) the selected setting is best on
+every axis simultaneously — honesty and prediction were not in tension. Escalation if a future
+sweep can't reach the ceiling: a separate per-player assist-style offset in the MA anchor
+(decoupling "last passer" from "chance creator"). Slopes land in
+`data/models/holdout_calibration*.json`; the WAR audit reports them alongside the card numbers.
+
 ---
 
 ## 8. Resolved problem — per-player `qcreate`; open threads
@@ -617,11 +668,85 @@ intercepts, and the 2016–2020 window extension — lives in
   - `projection` (target season + per-player projected values, §3d);
   - `goalies[]` (gsave + SE).
 - **Strength config:** `EV_STRENGTHS`, `MA_STRENGTHS` (extensible — e.g. add `5v3/3v5` to MA); the
-  defender mask (`MAX_DEF`) handles the varying PK size. **Tunables:** `RW_SD_*` (drift flexibility),
-  `PRIOR_SD_*` (level priors; conversion priors are data-estimated each fit), `AGE_PEAK`/`AGE_SCALE`
-  (basis), `ARENA_SD`/`ARENA_RW_SD`/`ARENA_MIN_GAMES` (arena nuisance prior), `MIN_SHOTS_*`,
-  `SNIFF_MIN_TOI`/`SNIFF_MIN_TOI_MA` (leaderboard gates), `DENSE_H_MAX` (SE path cutoff),
-  `--count poisson|nb`, `--spg-scale`.
+  defender mask (`MAX_DEF`) handles the varying PK size. All tunable constants: see the
+  **hyperparameter reference** below.
+
+### Hyperparameter reference — every assumed value, what it controls, where it came from
+
+Provenance legend — **rules**: fixed by how hockey works; **data**: re-estimated from the data at
+every fit (not assumed); **hand-set**: chosen at design time with the stated rationale, then
+retrospectively supported by the held-out harness; **validated**: selected BY the held-out
+calibration sweep (§7) — the value is evidence, not judgment; **numerics**: computational only,
+no statistical content.
+
+**Structure (rules)**
+
+| Constant | Value | Controls |
+|---|---|---|
+| `EV_STRENGTHS` / `MA_STRENGTHS` | 5v5 / {5v4, 4v5} | which stints feed each bucket |
+| `N_TM`, `N_DEF_EV`, `N_DEF_MA` | 4, 5, 4 | teammates per shooter; defenders per side |
+
+**Anchor weight w — the assist↔create tie (data × validated)**
+
+`w` multiplies the assist-credit likelihood term (A1 + A2): "one credited goal stands in for w
+shots whose creator is unobserved" (inverse-probability weighting).
+
+| Bucket | Value | Provenance |
+|---|---|---|
+| EV | shots-per-goal, data-derived each fit (≈ 16.5) | data; full weight validated — adding anchor signal (A2) improved held-out teammate rates, and γ_create ≈ 0.90 = the drift ceiling |
+| PP/PK | shots-per-goal × **0.25** (≈ 2.6) | **validated** (2026-07 sweep): PP assists are role-censored, so each carries far less creation information; γ_create 0.31 → 0.75 with held-out PP deviance improving |
+| `--spg-scale` | 1.0 | CLI multiplier for A3 sensitivity checks only |
+
+**Level priors — ridge SD per parameter block (how much individual talent can differ)**
+
+| Constant | Value | Scale | Controls | Provenance |
+|---|---|---|---|---|
+| `PRIOR_SD_SHOOT` | 0.30 | log shot rate | `shoot_j` and (EV) `def_d` spread | hand-set; EV γ_shoot 0.94 ≈ ceiling |
+| `PRIOR_SD_CREATE` | 0.12 | log rate (per-teammate) | EV `create_p` spread | hand-set; EV γ_create 0.90 ≈ ceiling |
+| MA create prior | **0.04** | log rate | PP `create_p` spread | **validated** (sweep; fixed units can't identify a wider individual spread) |
+| MA def prior | **0.10** | log rate | PK `def_d` spread | **validated** (sweep: restores γ_def to 0.74 ≈ the EV-def ceiling after the create cap pushed unit residual into def; best held-out PP deviance) |
+| `PRIOR_SD_QSHOOT` | 0.20 | logit xG | `qshoot_j` / `qdef_d` spread | hand-set |
+| `PRIOR_SD_QCREATE` | 0.25 | logit xG | `qcreate` (position pair) spread | hand-set (identification resolved at position level, §8) |
+
+**Conversion priors (data — estimated every fit, then held fixed during it)**
+
+| Constant | Value | Controls | Provenance |
+|---|---|---|---|
+| fin / gsave prior SDs | estimated (2021-25 fit: 0.157 / 0.056) | finishing & goalie talent spread on the logit-conversion scale | data (empirical Bayes, Stage 0) |
+| `PRIOR_SD_FIN` / `PRIOR_SD_GSAVE` | 0.20 / 0.20 | fallback if the EB estimate is unavailable | hand-set, rarely used |
+| `PRIOR_SD_FLOOR` | 0.02 | floor on the EB estimate (keeps the ridge finite) | numerics |
+| `MIN_SHOTS_FIN_EST` / `MIN_SHOTS_GSAVE_EST` | 200 / 1000 | who enters the talent-SD estimate | hand-set gates |
+
+**Drift & aging (the player-curve machinery, §3)**
+
+| Constant | Value | Controls | Provenance |
+|---|---|---|---|
+| `RW_SD_SHOOT` / `RW_SD_CREATE` / `RW_SD_DEF` | 0.10 / 0.05 / 0.10 | per-season random-walk SD of each EV state (per √season gap) — how fast skill can drift | hand-set; holdout shows drift/aging a wash one step ahead and γ ceilings consistent with these values |
+| `AGE_PEAK` / `AGE_SCALE` | 27 / 10 | aging basis z = (age−27)/10; curve = deviation from peak age | convention (hockey aging literature); curve shapes are fitted, only the basis is assumed |
+
+**Arena nuisance states (§2)**
+
+| Constant | Value | Controls | Provenance |
+|---|---|---|---|
+| `ARENA_SD` | 0.05 | ridge SD per (venue, season) recording-bias state | hand-set (biases are small) |
+| `ARENA_RW_SD` | 0.03 | random-walk SD between a venue's consecutive seasons (scorer crews persist) | hand-set |
+| `ARENA_MIN_GAMES` | 20 | venues below this map to no offset (outdoor/neutral) | hand-set gate |
+
+**Numerics & reporting (no statistical content)**
+
+| Constant | Value | Controls |
+|---|---|---|
+| `--count` | nb (production) | count layer: Poisson or negative binomial (r fitted) |
+| L-BFGS-B `maxiter/ftol/gtol` | 1500 / 1e-10 / 1e-7 | optimizer stopping |
+| `DENSE_H_MAX` | 8000 | dense vs sparse SE path |
+| quadrature nodes | 40 (CDF space) | the ḡ Beta marginal (§2) — exact to MC noise |
+| `EPS` | 1e-6 | clipping |
+| `SNIFF_MIN_TOI` / `SNIFF_MIN_TOI_MA` | 24000 s / 2400 s | leaderboard eligibility (reporting only) |
+
+Fitted quantities are deliberately NOT here: `beta_s` (shot-quality concentration), the A2 mixture
+`q`, the NB dispersion `r`, aging-curve shapes, arena states, and all player parameters are
+estimated from data every fit. Card-layer knobs (replacement band, goals-per-win, card TOI gates)
+live in `docs/metrics.md`.
 - **Longer windows:** the model is now correct for arbitrarily long windows (drift states + season
   effects in every stage). The practical gate is data (pre-2021 fetch/process is a separate task) and
   two Python-loop hotspots that will grow linearly (`_shooter_counts`, the per-game PBP assist reads) —

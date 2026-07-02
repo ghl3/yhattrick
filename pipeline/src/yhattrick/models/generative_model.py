@@ -846,13 +846,14 @@ def _stage_conv(conv, pids):
 
 
 def ckpt_save(seasons, count_model, spg_scale, rates, qual, conv, players, path=None,
-              ma_anchor_scale=1.0, ma_create_prior_sd=None):
+              ma_anchor_scale=1.0, ma_create_prior_sd=None, ma_def_prior_sd=None):
     pids = np.asarray(players)
     z = {"seasons": np.asarray([int(s) for s in seasons]), "count_model": np.asarray(count_model),
          "spg_scale": np.asarray(float(spg_scale)),
          "ma_anchor_scale": np.asarray(float(ma_anchor_scale)),
          "ma_create_prior_sd": np.asarray(float(ma_create_prior_sd)
-                                          if ma_create_prior_sd else np.nan)}
+                                          if ma_create_prior_sd else np.nan),
+         "ma_def_prior_sd": np.asarray(float(ma_def_prior_sd) if ma_def_prior_sd else np.nan)}
     for key, rate in rates.items():
         for k, v in _stage_rate(rate, pids).items():
             z[f"{key}_{k}"] = v
@@ -1051,7 +1052,7 @@ def _rate_ses(H, M, NU, lu):
 
 
 def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson", a2=None,
-                    warm=None, reuse=False, create_prior_sd=None):
+                    warm=None, reuse=False, create_prior_sd=None, def_prior_sd=None):
     """UNIFIED CREATION over per-(player, season) STATES. One `create` parameter per unit that does
     double duty:
       (i) lifts teammates' shot rate in the Poisson/NB count layer, and
@@ -1085,7 +1086,8 @@ def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson", a2
     solution mapped by key; `reuse=True` additionally SKIPS optimization and the SE Hessian,
     taking θ and SEs straight from the checkpoint — valid only for the exact same fit (enforced)."""
     P, k = len(R["players"]), R["Xctx"].shape[1]
-    lsh, ldf = 1 / PRIOR_SD_SHOOT ** 2, 1 / PRIOR_SD_SHOOT ** 2
+    lsh = 1 / PRIOR_SD_SHOOT ** 2
+    ldf = 1 / (def_prior_sd if def_prior_sd else PRIOR_SD_SHOOT) ** 2
     lcr = 1 / (create_prior_sd if create_prior_sd else PRIOR_SD_CREATE) ** 2
     nb = count_model == "nb"
     dmask = R.get("def_mask")
@@ -1831,7 +1833,8 @@ def _curve_json(cm, blk, off_name=None):
 
 
 def fit_all(seasons, count_model="poisson", spg_scale=1.0, warm=False, reexport=False,
-            save_ckpt=False, ckpt_path=None, ma_anchor_scale=1.0, ma_create_prior_sd=None):
+            save_ckpt=False, ckpt_path=None, ma_anchor_scale=1.0, ma_create_prior_sd=None,
+            ma_def_prior_sd=None):
     """Fit every stage on `seasons` and return the raw fit objects — the shared engine behind run()
     (which adds leaderboards, values, PPC, projection, JSON) and the held-out predictive harness
     (generative_holdout, which needs the fits without the reporting tail). Returns a dict with
@@ -1851,9 +1854,10 @@ def fit_all(seasons, count_model="poisson", spg_scale=1.0, warm=False, reexport=
     it, and assists on the PP reflect ROLE (who touches the puck last), not creation skill. The EV
     bucket is untouched (linemate mixing identifies its split; validated at full weight)."""
     print(f"[generative_model:shooter-resolved] seasons {seasons} — count {count_model} — EV + PP/PK …")
-    if ma_anchor_scale != 1.0 or ma_create_prior_sd:
+    if ma_anchor_scale != 1.0 or ma_create_prior_sd or ma_def_prior_sd:
         print(f"  MA bucket: anchor×{ma_anchor_scale:g}"
-              + (f", create prior sd {ma_create_prior_sd:g}" if ma_create_prior_sd else ""))
+              + (f", create prior sd {ma_create_prior_sd:g}" if ma_create_prior_sd else "")
+              + (f", def prior sd {ma_def_prior_sd:g}" if ma_def_prior_sd else ""))
     ck = ckpt_load(ckpt_path) if (warm or reexport) else None
     if reexport:
         if ck is None:
@@ -1917,7 +1921,8 @@ def fit_all(seasons, count_model="poisson", spg_scale=1.0, warm=False, reexport=
               f"{len(gc2)} with A2)")
         rate = fit_rate_create(R, gt, gc, spg[key], count_model=count_model, a2=(gt2, g1c, gc2),
                                warm=_ck_stage(ck, key), reuse=reexport,
-                               create_prior_sd=(ma_create_prior_sd if key == "ma" else None))
+                               create_prior_sd=(ma_create_prior_sd if key == "ma" else None),
+                               def_prior_sd=(ma_def_prior_sd if key == "ma" else None))
         rate["R"] = R
         rates[key] = rate
         last_season = np.maximum(last_season, R["last_season"])
@@ -1970,18 +1975,20 @@ def fit_all(seasons, count_model="poisson", spg_scale=1.0, warm=False, reexport=
             print(f"    per-season Σp/Σy (F6): {rc}")
     if save_ckpt:
         cp = ckpt_save(seasons, count_model, spg_scale, rates, qual, conv, players, path=ckpt_path,
-                       ma_anchor_scale=ma_anchor_scale, ma_create_prior_sd=ma_create_prior_sd)
+                       ma_anchor_scale=ma_anchor_scale, ma_create_prior_sd=ma_create_prior_sd,
+                       ma_def_prior_sd=ma_def_prior_sd)
         print(f"  θ̂ checkpoint → {cp} (warm starts / --reexport)")
     return {"players": players, "idx": idx, "agepos": agepos, "Q": Q, "rates": rates, "spg": spg,
             "qual": qual, "conv": conv, "last_season": last_season}
 
 
 def run(seasons, count_model="poisson", spg_scale=1.0, warm=True, reexport=False,
-        ma_anchor_scale=1.0, ma_create_prior_sd=None):
+        ma_anchor_scale=1.0, ma_create_prior_sd=None, ma_def_prior_sd=None):
     names = roster_names(seasons)
     M = fit_all(seasons, count_model=count_model, spg_scale=spg_scale, warm=warm,
                 reexport=reexport, save_ckpt=not reexport,
-                ma_anchor_scale=ma_anchor_scale, ma_create_prior_sd=ma_create_prior_sd)
+                ma_anchor_scale=ma_anchor_scale, ma_create_prior_sd=ma_create_prior_sd,
+                ma_def_prior_sd=ma_def_prior_sd)
     players, agepos, Q = M["players"], M["agepos"], M["Q"]
     rates, spg, qual, conv, last_season = M["rates"], M["spg"], M["qual"], M["conv"], M["last_season"]
 
@@ -2142,11 +2149,13 @@ def main(argv=None):
                    help="count layer: poisson (Var=μ) or nb (negative binomial, Var=μ+μ²/r)")
     p.add_argument("--spg-scale", type=float, default=1.0,
                    help="multiply the assist-credit weight (A3 sensitivity checks: 0.5 / 2.0)")
-    p.add_argument("--ma-anchor-scale", type=float, default=1.0,
-                   help="scale the PP/PK bucket's assist-anchor weight (validated per docs §7; "
-                        "the EV bucket is untouched)")
-    p.add_argument("--ma-create-prior", type=float, default=None,
-                   help="create prior SD for the PP/PK bucket (default: shared PRIOR_SD_CREATE)")
+    p.add_argument("--ma-anchor-scale", type=float, default=0.25,
+                   help="scale the PP/PK bucket's assist-anchor weight (default: the value the "
+                        "2026-07 held-out calibration sweep selected — docs §7/§9; EV untouched)")
+    p.add_argument("--ma-create-prior", type=float, default=0.04,
+                   help="create prior SD for the PP/PK bucket (default: sweep-selected)")
+    p.add_argument("--ma-def-prior", type=float, default=0.10,
+                   help="def prior SD for the PP/PK bucket (default: sweep-selected)")
     p.add_argument("--cold", action="store_true",
                    help="ignore the θ̂ checkpoint (default: warm-start each stage from the last fit)")
     p.add_argument("--reexport", action="store_true",
@@ -2160,7 +2169,8 @@ def main(argv=None):
     seasons = avail if args.pool else ([args.season] if args.season else [avail[-1]])
     run(seasons, count_model=args.count, spg_scale=args.spg_scale,
         warm=not args.cold, reexport=args.reexport,
-        ma_anchor_scale=args.ma_anchor_scale, ma_create_prior_sd=args.ma_create_prior)
+        ma_anchor_scale=args.ma_anchor_scale, ma_create_prior_sd=args.ma_create_prior,
+        ma_def_prior_sd=args.ma_def_prior)
 
 
 if __name__ == "__main__":

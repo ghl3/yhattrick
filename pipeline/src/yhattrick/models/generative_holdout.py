@@ -96,23 +96,26 @@ def candidates(M, target):
     }
 
 
-def _hyper_tag(ma_anchor_scale, ma_create_prior_sd):
+def _hyper_tag(ma_anchor_scale, ma_create_prior_sd, ma_def_prior_sd=None):
     """Cache-file suffix for non-default MA hyperparameters (sweep candidates keep separate caches)."""
     tag = ""
     if ma_anchor_scale != 1.0:
         tag += f"_a{ma_anchor_scale:g}"
     if ma_create_prior_sd:
         tag += f"_p{ma_create_prior_sd:g}"
+    if ma_def_prior_sd:
+        tag += f"_d{ma_def_prior_sd:g}"
     return tag
 
 
 def _fit_train_side(train, train_through, target, count_model, spg_scale,
-                    ma_anchor_scale=1.0, ma_create_prior_sd=None):
+                    ma_anchor_scale=1.0, ma_create_prior_sd=None, ma_def_prior_sd=None):
     """Run the training fit and reduce it to the slim scoring inputs; cached as an npz so scoring
     can iterate without re-fitting. The train side keeps its OWN θ̂ checkpoint chain
     (holdout_ckpt.npz): sweep candidates warm-start each other — never a fit that saw test data."""
     M = G.fit_all(train, count_model=count_model, spg_scale=spg_scale,
                   ma_anchor_scale=ma_anchor_scale, ma_create_prior_sd=ma_create_prior_sd,
+                  ma_def_prior_sd=ma_def_prior_sd,
                   warm=True, save_ckpt=True, ckpt_path=C.MODELS / "holdout_ckpt.npz")
     evt = M["rates"]["ev"]
     Rt = evt["R"]
@@ -130,7 +133,8 @@ def _fit_train_side(train, train_through, target, count_model, spg_scale,
           "a2_q": np.float64(evt.get("a2_q") if evt.get("a2_q") is not None else np.nan),
           "train": np.array(train, dtype=np.int64),
           "ma_anchor_scale": np.float64(ma_anchor_scale),
-          "ma_create_prior_sd": np.float64(ma_create_prior_sd if ma_create_prior_sd else np.nan)}
+          "ma_create_prior_sd": np.float64(ma_create_prior_sd if ma_create_prior_sd else np.nan),
+          "ma_def_prior_sd": np.float64(ma_def_prior_sd if ma_def_prior_sd else np.nan)}
     for name, c in candidates(M, target).items():
         for blk in BLOCKS:
             ts[f"cand_{name}_{blk}"] = c[blk]
@@ -143,7 +147,8 @@ def _fit_train_side(train, train_through, target, count_model, spg_scale,
         ts["ma_intercept"] = np.float64(mat["intercept"])
         ts["ma_ctx_names"] = np.array(mat["ctx_names"])
         ts["ma_beta"] = np.asarray(mat["beta"], dtype=np.float64)
-    path = C.MODELS / f"holdout_fit_{train_through}{_hyper_tag(ma_anchor_scale, ma_create_prior_sd)}.npz"
+    path = C.MODELS / (f"holdout_fit_{train_through}"
+                       f"{_hyper_tag(ma_anchor_scale, ma_create_prior_sd, ma_def_prior_sd)}.npz")
     C.MODELS.mkdir(parents=True, exist_ok=True)
     np.savez(path, **ts)
     print(f"[holdout] training side cached -> {path.name}")
@@ -167,14 +172,14 @@ def calibration_slope(N, offset, base, term, iters=40):
 
 
 def evaluate(train_through, target=None, count_model="nb", spg_scale=1.0, rescore=False,
-             ma_anchor_scale=1.0, ma_create_prior_sd=None):
+             ma_anchor_scale=1.0, ma_create_prior_sd=None, ma_def_prior_sd=None):
     sd = C.PROCESSED / "shots_onice"
     avail = sorted(int(f.stem) for f in sd.glob("*.parquet")) if sd.exists() else []
     train = [s for s in avail if s <= train_through]
     target = target or train_through + 1
     if target not in avail:
         raise SystemExit(f"target season {target} not in processed data {avail}")
-    tag = _hyper_tag(ma_anchor_scale, ma_create_prior_sd)
+    tag = _hyper_tag(ma_anchor_scale, ma_create_prior_sd, ma_def_prior_sd)
     cache = C.MODELS / f"holdout_fit_{train_through}{tag}.npz"
     if rescore and cache.exists():
         print(f"[holdout] rescoring from {cache.name}")
@@ -183,7 +188,8 @@ def evaluate(train_through, target=None, count_model="nb", spg_scale=1.0, rescor
     else:
         print(f"[holdout] train {train} → target {target} — fitting …")
         ts = _fit_train_side(train, train_through, target, count_model, spg_scale,
-                             ma_anchor_scale=ma_anchor_scale, ma_create_prior_sd=ma_create_prior_sd)
+                             ma_anchor_scale=ma_anchor_scale, ma_create_prior_sd=ma_create_prior_sd,
+                             ma_def_prior_sd=ma_def_prior_sd)
     players_t = ts["players"]
     idx_t = {int(p): i for i, p in enumerate(players_t)}
 
@@ -297,6 +303,8 @@ def evaluate(train_through, target=None, count_model="nb", spg_scale=1.0, rescor
     out["ma_anchor_scale"] = float(ts.get("ma_anchor_scale", 1.0))
     mcp = float(ts.get("ma_create_prior_sd", np.nan))
     out["ma_create_prior_sd"] = None if np.isnan(mcp) else mcp
+    mdp = float(ts.get("ma_def_prior_sd", np.nan))
+    out["ma_def_prior_sd"] = None if np.isnan(mdp) else mdp
     gamma = {"ev": {}, "ma": {}}
     ev_terms = {
         "shoot": to_hold(ts["cand_last-state_shoot"])[Rh["shooter_idx"]],
@@ -339,7 +347,8 @@ def evaluate(train_through, target=None, count_model="nb", spg_scale=1.0, rescor
     cal = {"train_through": int(train_through), "target": int(target),
            "count_model": count_model, "spg_scale": spg_scale,
            "ma_anchor_scale": out["ma_anchor_scale"],
-           "ma_create_prior_sd": out["ma_create_prior_sd"], "gamma": gamma}
+           "ma_create_prior_sd": out["ma_create_prior_sd"],
+           "ma_def_prior_sd": out["ma_def_prior_sd"], "gamma": gamma}
     cpath = C.MODELS / f"holdout_calibration{tag}.json"
     cpath.write_text(json.dumps(cal, indent=1))
     print(f"  -> {cpath}")
@@ -362,10 +371,13 @@ def main(argv=None):
                    help="sweep candidate: scale the MA bucket's assist-anchor weight")
     p.add_argument("--ma-create-prior", type=float, default=None,
                    help="sweep candidate: create prior SD for the MA bucket")
+    p.add_argument("--ma-def-prior", type=float, default=None,
+                   help="sweep candidate: def prior SD for the MA bucket")
     args = p.parse_args(argv)
     evaluate(args.train_through, args.target, count_model=args.count,
              spg_scale=args.spg_scale, rescore=args.rescore,
-             ma_anchor_scale=args.ma_anchor_scale, ma_create_prior_sd=args.ma_create_prior)
+             ma_anchor_scale=args.ma_anchor_scale, ma_create_prior_sd=args.ma_create_prior,
+             ma_def_prior_sd=args.ma_def_prior)
 
 
 if __name__ == "__main__":

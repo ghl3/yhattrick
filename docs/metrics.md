@@ -54,9 +54,10 @@ logit shot quality, `a`,`b` = the xG→goal conversion map) and a player's effec
 
 ```
 shots60(θ)   = exp(mu_rate + shoot)                       his own unblocked shots per 60
-q_own(θ)     = sigmoid(mu_qual + qshoot)                  mean xG of his shots
-p_goal(θ)    = sigmoid(a·logit(q_own) + b + fin)          goals per shot (quality × finishing)
-Scoring      = shots60 · p_goal                                       [goals/60]
+q_own(θ, c)  = sigmoid(mu_qual + qshoot + qcreate_c)      mean xG of his shots, by creator class c
+ḡ(θ)         = Σ_c π_c · E[ sigmoid(a·logit(x) + b + fin) ]   over the model's own shot-quality
+                 distribution (x ~ Beta around q_own) and creator mix π (unassisted/F/D)
+Scoring      = shots60 · ḡ                                            [goals/60]
 
 Playmaking   = 4 · exp(mu_rate) · (e^create − 1) · sigmoid(mu_qual + qcreate_pos)   [xG/60]
 Defense      = 5 · [exp(mu_rate)·sigmoid(mu_qual) − exp(mu_rate + def)·sigmoid(mu_qual + qdef)]
@@ -88,11 +89,17 @@ WAR  = GAR ÷ goals-per-win
 ```
 
 The swap is closed-form (the rate model is exponential-additive), computed per season with his
-per-season drift states, across EV + PP + PK.
+per-season drift states, across EV + PP + PK. Each shooter's shots convert at the model's own
+marginal goals-per-shot ḡ, with the creator mix taken from the stint's ACTUAL teammates — so the
+engine's expected goals reconcile to the goals the model was fit on within ~1%, with no
+correction factors (the WAR audit asserts this).
 
 **Calibration knobs (explicit and revisable):**
-- **Replacement level**: the TOI-weighted average parameters of players in the **8th–12th
-  percentile of GA/60** within his position — an empirical "freely available player" archetype.
+- **Replacement level, context-matched**: the TOI-weighted average parameters of players in the
+  **8th–12th percentile band** within his position — of GA/60 among EV regulars for EV slots, of
+  PP GA/60 among PP regulars for PP slots, and of PK GA/60 among PK regulars for PK slots. (One
+  EV-wide band would make the PP baseline a league-average PP player, because non-PP players'
+  PP parameters shrink to zero = average.)
 - **Goals-per-win = 6.0** (the standard rule of thumb; a season-estimated value is a listed
   follow-up).
 

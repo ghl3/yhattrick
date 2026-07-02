@@ -104,9 +104,26 @@ This is what makes the weak-tier features (`fin`, `pp_shoot`) honestly displayab
 `generative_cards.py` + site UI (GA/60 baseline-team rate, stint-counterfactual WAR, trajectory
 chart with projection + league age-reference). Open refinements, in priority order: bootstrap CIs
 (#5); penalties into WAR (#8); season-estimated goals-per-win (replaces the 6.0 constant);
-replacement-level sensitivity study (the 8th–12th GA/60 percentile band is a documented knob);
+replacement-level sensitivity study (the 8th–12th percentile band is a documented knob);
 exact defender-quality treatment in the WAR swap (currently a multiplicative approximation);
 uncertainty band on the trajectory chart (needs per-season state SEs exported).
+
+### 5c. WAR audit fixes — ✅ SHIPPED (July 2026)
+The 2026-07 WAR audit (now a permanent harness: `generative_war_audit.py`) found and fixed three
+defects, all in the model / its honest evaluation — no post-processing:
+- **Marginal conversion**: values + WAR convert shots at the model's own goals-per-shot —
+  marginalized over the fitted Beta shot-quality distribution AND the creator classes (qcreate's
+  reference is unassisted; skipping creator marginalization priced every shot as unassisted =
+  +13% league E[GF]). Audited residual: +0.8%, zero correction factors.
+- **Context-matched replacement**: PP/PK archetypes from the PP/PK GA/60 bands among PP/PK
+  regulars (the EV-band players' shrunk-to-zero PP params had made replacement = league-average).
+- **PP identification (the residual-sink bug)**: on fixed units, counts pin only the unit
+  creation SUM; role-driven assists split it, sinking net-front players (Hyman pp_create −0.64,
+  −23 PP wins). Fixed IN the fit: the MA anchor weight + create/def priors are now selected by
+  the held-out calibration-slope sweep (γ_create 0.31 → 0.78, γ_def restored to 0.74, held-out
+  PP deviance improved throughout) — model doc §7/§9. **Escalation if a future sweep stalls**: a
+  per-player assist-style offset in the MA anchor (decouples "last passer" from "chance
+  creator"), with its own validation round.
 
 ## Tier 2 — valuable, after Tier 1
 
@@ -122,7 +139,11 @@ seasons, then validate: shiftchart completeness per season (the empty-feed probl
 but verify), stints golden-equivalence checks, xG calibration per era (rule/equipment changes), and
 `_age_position` coverage for retired players (their landing JSONs may need fetching). Then extend
 `--pool`. The curves/drift machinery is already built for it; watch `splu` runtime and memory at
-~10 seasons (`DENSE_H_MAX` path) and do item 12 first if slow.
+~10 seasons (`DENSE_H_MAX` path) and do item 12 first if slow. **Before shipping a 10-season fit,
+re-run the holdout + γ sweep on the extended window** (add a 2016–19 → 2020 target): the MA
+hyperparameters were selected on the 2021–25 era and must be re-validated, not assumed (decided
+2026-07 — the WAR-fix refit deliberately stayed on 2021–25 for this reason). The θ̂ checkpoint
+chain makes the sweep iterations cheap.
 
 ### 8. Penalties drawn/taken stage
 The one production card family the generative model doesn't cover. Penalty draw/take are per-player
