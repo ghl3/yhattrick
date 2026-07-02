@@ -363,6 +363,41 @@ def test_sparse_dense_se_parity(monkeypatch):
         np.testing.assert_allclose(fit_d[k], fit_s[k], rtol=1e-6, atol=1e-10)
 
 
+def _synth_a2(gt, gc, create, q_true=0.6, seed=21):
+    """Secondary-assist labels for _synth_create's goals: on teammate-created goals (gc ≥ 1) the A2
+    is drawn from the create-ranking over the 3 remaining teammates with prob q_true, else uniformly
+    (label noise) — exactly the mixture the fit estimates."""
+    rng = np.random.default_rng(seed)
+    m = gc >= 1
+    gt2 = gt[m]
+    g1c = (gc[m] - 1).astype(np.int64)                       # A1's column in the 4-teammate matrix
+    gc2 = np.zeros(len(g1c), dtype=np.int64)
+    for i in range(len(g1c)):
+        cols = [t for t in range(4) if t != g1c[i]]
+        if rng.random() < q_true:
+            lo = create[gt2[i, cols]]
+            p = np.exp(lo - lo.max()); p /= p.sum()
+            gc2[i] = cols[rng.choice(3, p=p)]
+        else:
+            gc2[i] = cols[rng.integers(0, 3)]
+    return gt2, g1c, gc2
+
+
+def test_a2_mixture_recovers_q_and_create():
+    """The A2 stage's mixture probability q = P(A2 reflects creation) is a proper MLE parameter:
+    generated at q_true = 0.6, it is recovered, and the extra labels never hurt `create`."""
+    R, gt, gc, create, shoot, deff = _synth_create(seed=23)
+    gt2, g1c, gc2 = _synth_a2(gt, gc, create, q_true=0.6)
+    fit0 = G.fit_rate_create(R, gt, gc, shots_per_goal=16)
+    fit2 = G.fit_rate_create(R, gt, gc, shots_per_goal=16, a2=(gt2, g1c, gc2))
+    assert fit2["converged"] and fit2["a2_q"] is not None
+    assert abs(fit2["a2_q"] - 0.6) < 0.12                    # mixture share recovered
+    c0 = np.corrcoef(fit0["create"], create)[0, 1]
+    c2 = np.corrcoef(fit2["create"], create)[0, 1]
+    assert c2 >= c0 - 0.01                                   # A2 evidence sharpens (or is neutral)
+    assert fit0["a2_q"] is None                              # back-compat: no A2 ⇒ no q
+
+
 def test_arena_offsets_recovered_without_biasing_players():
     """Arena recording bias: known per-venue log-rate offsets are recovered (modulo the nuisance
     ridge) and the player loadings stay clean."""

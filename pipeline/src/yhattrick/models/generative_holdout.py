@@ -104,11 +104,16 @@ def _fit_train_side(train, train_through, target, count_model, spg_scale):
     Rt = evt["R"]
     P = len(M["players"])
     mlast = Rt["season_row"] == train_through                # naive baseline: final-season raw rates
+    tm_last = np.zeros(P)                                    # teammate shots while on ice (create side)
+    for t in range(Rt["team_idx"].shape[1]):
+        np.add.at(tm_last, Rt["team_idx"][mlast, t], Rt["count"][mlast])
     ts = {"players": np.array(M["players"], dtype=np.int64),
           "intercept": np.float64(evt["intercept"]),
           "ctx_names": np.array(evt["ctx_names"]), "beta": np.asarray(evt["beta"], dtype=np.float64),
           "s_last": np.bincount(Rt["shooter_idx"][mlast], weights=Rt["count"][mlast], minlength=P),
           "t_last": np.bincount(Rt["shooter_idx"][mlast], weights=Rt["dur"][mlast], minlength=P),
+          "tm_last": tm_last,
+          "a2_q": np.float64(evt.get("a2_q") if evt.get("a2_q") is not None else np.nan),
           "train": np.array(train, dtype=np.int64)}
     for name, c in candidates(M, target).items():
         for blk in BLOCKS:
@@ -172,6 +177,10 @@ def evaluate(train_through, target=None, count_model="nb", spg_scale=1.0, rescor
     toi_h = Rh["toi_atk"]
     obs_shots = np.bincount(Rh["shooter_idx"], weights=N, minlength=Ph)
     obs_rate = np.where(toi_h > 0, obs_shots / np.maximum(toi_h, 1.0) * 3600.0, 0.0)
+    obs_tm = np.zeros(Ph)                                    # create side: teammate shots while on ice
+    for t in range(Rh["team_idx"].shape[1]):
+        np.add.at(obs_tm, Rh["team_idx"][:, t], N)
+    obs_tm_rate = np.where(toi_h > 0, obs_tm / np.maximum(toi_h, 1.0) * 3600.0, 0.0)
     elig = (toi_h >= MIN_TOI_EVAL) & seen
     w = toi_h
     mu0 = float(ts["intercept"])
@@ -181,9 +190,13 @@ def evaluate(train_through, target=None, count_model="nb", spg_scale=1.0, rescor
            "n_eligible": int(elig.sum()),
            "rw_sd": {"shoot": G.RW_SD_SHOOT, "create": G.RW_SD_CREATE, "def": G.RW_SD_DEF},
            "candidates": {}}
+    if np.isfinite(float(ts.get("a2_q", np.nan))):
+        out["a2_q"] = float(ts["a2_q"])
+        print(f"[holdout] training fit A2 mixture q = {out['a2_q']:.3f}")
     print(f"\n[holdout] eligible for the player table: {int(elig.sum())} "
           f"(≥{MIN_TOI_EVAL / 60:.0f} EV min in {target} + trained)")
-    print(f"{'candidate':14s} {'row-dev/1k':>11s} {'Σμ/ΣN':>8s} {'corr':>7s} {'MAE/60':>7s}")
+    print(f"{'candidate':14s} {'row-dev/1k':>11s} {'Σμ/ΣN':>8s} {'corr':>7s} {'MAE/60':>7s} "
+          f"{'tm-corr':>8s} {'tm-MAE':>7s}")
     for name in CAND_ORDER:
         sh = to_hold(ts[f"cand_{name}_shoot"])
         cr = to_hold(ts[f"cand_{name}_create"])
@@ -195,24 +208,39 @@ def evaluate(train_through, target=None, count_model="nb", spg_scale=1.0, rescor
         dev = poisson_deviance(N, mu)
         pred_shots = np.bincount(Rh["shooter_idx"], weights=mu, minlength=Ph)
         pred_rate = np.where(toi_h > 0, pred_shots / np.maximum(toi_h, 1.0) * 3600.0, 0.0)
+        pred_tm = np.zeros(Ph)                               # create side: predicted teammate shots
+        for t in range(Rh["team_idx"].shape[1]):
+            np.add.at(pred_tm, Rh["team_idx"][:, t], mu)
+        pred_tm_rate = np.where(toi_h > 0, pred_tm / np.maximum(toi_h, 1.0) * 3600.0, 0.0)
         corr = wpearson(pred_rate[elig], obs_rate[elig], w[elig])
         mae = wmae(pred_rate[elig], obs_rate[elig], w[elig])
+        tcorr = wpearson(pred_tm_rate[elig], obs_tm_rate[elig], w[elig])
+        tmae = wmae(pred_tm_rate[elig], obs_tm_rate[elig], w[elig])
         out["candidates"][name] = {"row_deviance_per_1k": dev / len(N) * 1000.0,
                                    "sum_mu": float(mu.sum()), "sum_N": float(N.sum()),
-                                   "rate_corr": corr, "rate_mae60": mae}
+                                   "rate_corr": corr, "rate_mae60": mae,
+                                   "tm_corr": tcorr, "tm_mae60": tmae}
         wm = w[seen] / max(w[seen].sum(), 1e-9)              # block-mean diagnostic (level-bug canary)
         print(f"{name:14s} {dev / len(N) * 1000.0:11.3f} {mu.sum() / N.sum():8.3f} "
-              f"{corr:7.3f} {mae:7.3f}   blocks sh {np.sum(wm * sh[seen]):+.2f} "
+              f"{corr:7.3f} {mae:7.3f} {tcorr:8.3f} {tmae:7.3f}   blocks sh {np.sum(wm * sh[seen]):+.2f} "
               f"cr {np.sum(wm * cr[seen]):+.2f} df {np.sum(wm * df[seen]):+.2f}")
 
-    # naive baseline: the player's raw final-training-season shots/60 predicts his target rate
+    # naive baseline: the player's raw final-training-season rates predict his target rates
     naive_t = np.where(ts["t_last"] > 0, ts["s_last"] / np.maximum(ts["t_last"], 1.0) * 3600.0, 0.0)
     naive_h = to_hold(naive_t)
     en = elig & (to_hold(ts["t_last"]) >= MIN_TOI_EVAL)
     corr = wpearson(naive_h[en], obs_rate[en], w[en])
     mae = wmae(naive_h[en], obs_rate[en], w[en])
     out["naive_last_season"] = {"rate_corr": corr, "rate_mae60": mae, "n": int(en.sum())}
-    print(f"{'naive-' + str(train_through):14s} {'—':>11s} {'—':>8s} {corr:7.3f} {mae:7.3f}"
+    tcorr = tmae = None
+    if "tm_last" in ts:
+        naive_tm = to_hold(np.where(ts["t_last"] > 0,
+                                    ts["tm_last"] / np.maximum(ts["t_last"], 1.0) * 3600.0, 0.0))
+        tcorr = wpearson(naive_tm[en], obs_tm_rate[en], w[en])
+        tmae = wmae(naive_tm[en], obs_tm_rate[en], w[en])
+        out["naive_last_season"].update(tm_corr=tcorr, tm_mae60=tmae)
+    tstr = f" {tcorr:8.3f} {tmae:7.3f}" if tcorr is not None else ""
+    print(f"{'naive-' + str(train_through):14s} {'—':>11s} {'—':>8s} {corr:7.3f} {mae:7.3f}{tstr}"
           f"   (n={int(en.sum())}, needs {train_through} TOI too)")
     lm = float(np.sum(w[elig] * obs_rate[elig]) / w[elig].sum())
     out["league_mean_mae60"] = wmae(np.full(int(elig.sum()), lm), obs_rate[elig], w[elig])

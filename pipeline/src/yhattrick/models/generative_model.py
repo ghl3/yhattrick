@@ -545,8 +545,8 @@ def quality_creator_rows(seasons, idx, strengths, agepos=None, arenas=True):
     scol, nseas = _season_cols(seasons)
     isD = agepos["isD"] if agepos else None
     ven, acol_of, amach = _arena_index(seasons) if arenas else ({}, {}, None)
-    shooter, team, dff, dmask, ctx, y, goal, creator, slab, seas_row, arena = \
-        [], [], [], [], [], [], [], [], [], [], []
+    shooter, team, dff, dmask, ctx, y, goal, creator, creator2, slab, seas_row, arena = \
+        [], [], [], [], [], [], [], [], [], [], [], []
     for s in seasons:
         p = C.PROCESSED / "shots_onice" / f"{s}.parquet"
         if not p.exists():
@@ -555,13 +555,16 @@ def quality_creator_rows(seasons, idx, strengths, agepos=None, arenas=True):
                                         "goal", "shooter_id", "home_skaters", "away_skaters"])
         d = d[d.strength.isin(strengths) & d.xg.notna() & d.shooter_id.notna()]
         for gid, sub in d.groupby("nhl_game_id"):
-            a1 = {}
+            a1, a2 = {}, {}
             ac_i = acol_of.get((ven.get(int(gid)), s), -1)    # −1 = rare/unknown venue
             pf = C.RAW_PBP / f"{int(gid)}.json"
             if pf.exists():
                 plays = json.loads(pf.read_text()).get("plays", [])
-                a1 = {pl.get("sortOrder"): pl.get("details", {}).get("assist1PlayerId")
-                      for pl in plays if pl.get("typeDescKey") == "goal"}
+                for pl in plays:
+                    if pl.get("typeDescKey") == "goal":
+                        det = pl.get("details", {})
+                        a1[pl.get("sortOrder")] = det.get("assist1PlayerId")
+                        a2[pl.get("sortOrder")] = det.get("assist2PlayerId")
             for r in sub.itertuples():
                 hs, as_ = list(r.home_skaters), list(r.away_skaters)
                 atk, dfd = (hs, as_) if r.is_home == 1 else (as_, hs)
@@ -598,13 +601,18 @@ def quality_creator_rows(seasons, idx, strengths, agepos=None, arenas=True):
                         creator.append(mates.index(int(ap)))
                     else:
                         creator.append(-1)                   # assister not an on-ice teammate (data
-                else:                                        # glitch / goalie assist): latent, and
-                    creator.append(-1)                       # excluded from the assist-credit anchor
+                    ap2 = a2.get(int(r.event_idx))           # glitch / goalie assist): latent, and
+                    creator2.append(mates.index(int(ap2))    # excluded from the assist-credit anchor
+                                    if ap2 is not None and int(ap2) in mates else -1)
+                else:
+                    creator.append(-1)
+                    creator2.append(-1)
     out = {"shooter_idx": np.asarray(shooter, dtype=np.int64), "team_idx": np.asarray(team, dtype=np.int64),
            "def_idx": np.asarray(dff, dtype=np.int64), "def_mask": np.asarray(dmask, dtype=np.float64),
            "Xctx": np.asarray(ctx, dtype=np.float64),
            "y": np.asarray(y, dtype=np.float64), "goal": np.asarray(goal, dtype=np.int64),
            "creator": np.asarray(creator, dtype=np.int64), "strength": np.asarray(slab, dtype=np.int64),
+           "creator2": np.asarray(creator2, dtype=np.int64),
            "season": np.asarray(seas_row, dtype=np.int64),
            "ctx_names": ["home", "pp"] + [f"season_{s}" for s in sorted(set(seasons))[1:]]
                         + (["shooter_D", "def_D"] if isD is not None else [])}
@@ -814,7 +822,7 @@ def _rate_ses(H, M, NU, lu):
     return se
 
 
-def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson"):
+def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson", a2=None):
     """UNIFIED CREATION over per-(player, season) STATES. One `create` parameter per unit that does
     double duty:
       (i) lifts teammates' shot rate in the Poisson/NB count layer, and
@@ -830,6 +838,16 @@ def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson"):
     level ridge on the first state, N(prev, rw_sd²·gap) between consecutive states. Without it
     (the MA bucket, synthetic fixtures) units == players and the penalty is the old static ridge —
     the model degenerates exactly to the pre-curves behavior.
+
+    SECONDARY ASSISTS (`a2` = (g2_team, g2_c1, g2_c2), unit-indexed like g_team): the (A1, A2) pair
+    is a partial ranking of the teammates by creation involvement — an exploded-logit second stage
+    over the 3 teammates left after masking A1's column. Because recorded A2s are part creation
+    signal, part puck-touching noise, the second stage is a MIXTURE with a FITTED probability
+    q = P(A2 reflects creation):  P(A2=c₂) = q·softmax(create_{T\c₁})[c₂] + (1−q)/3.
+    A bare weight on the A2 log-likelihood would be a pseudo-likelihood temperature (not MLE-
+    fittable); q is a proper parameter, identified by A2's concordance with the create ordering
+    already pinned by the counts + A1 anchor. The A2 term carries the same spg IPW weight, and its
+    responsibility-weighted Fisher joins the create bread/meat.
 
     Returns per-unit shoot/create/def plus per-player `*_last` views (each player's most recent
     state — the "current skill" read) with SEs (`se_create_last` sandwich-corrected, F1)."""
@@ -862,11 +880,21 @@ def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson"):
     a_en = jnp.asarray(R.get("arena_e_next", np.zeros(0, dtype=np.int64)))
     a_iw = jnp.asarray(1.0 / np.maximum(R.get("arena_e_gap", np.ones(0)), 1e-9))
     has_ar_rw = int(a_ep.shape[0]) > 0
+    has_a2 = a2 is not None and len(a2[0]) > 0               # A2 mixture stage; q at index PS+1+n_ar
+    if has_a2:
+        g2_team, g2_c1, g2_c2 = (np.asarray(a2[0], dtype=np.int64),
+                                 np.asarray(a2[1], dtype=np.int64),
+                                 np.asarray(a2[2], dtype=np.int64))
+    else:
+        g2_team = np.zeros((0, 4), dtype=np.int64)
+        g2_c1 = g2_c2 = np.zeros(0, dtype=np.int64)
 
     def split(th):
         return th[1:1 + NU], th[1 + NU:1 + 2 * NU], th[1 + 2 * NU:1 + 3 * NU], th[1 + 3 * NU:PS], th[PS]
 
-    def nll(th, sh_j, tm_j, df_j, dm, X, cnt, ofs, gt, gc, fmj, ep, en, iw, acl):
+    QI = PS + 1 + n_ar                                       # q's logit sits after the arena block
+
+    def nll(th, sh_j, tm_j, df_j, dm, X, cnt, ofs, gt, gc, fmj, ep, en, iw, acl, g2t, g2a, g2b):
         sh, cr, df, b, psi0 = split(th)
         eta = th[0] + sh[sh_j] + jnp.sum(cr[tm_j], 1) + jnp.sum(df[df_j] * dm, 1) + X @ b
         if n_ar:                                             # venue recording-bias offset (−1 = ref)
@@ -882,6 +910,12 @@ def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson"):
         logit5 = jnp.concatenate([jnp.full((gt.shape[0], 1), psi0), cr[gt]], axis=1)   # [create_0, create(4)]
         logpi = logit5 - logsumexp(logit5, axis=1)[:, None]
         credit = -jnp.sum(jnp.take_along_axis(logpi, gc[:, None], 1)[:, 0])
+        if has_a2:                                           # A2 mixture stage (A1's column masked)
+            q = jax.nn.sigmoid(th[QI])
+            lg2 = jnp.where(jnp.arange(4)[None, :] == g2a[:, None], -1e30, cr[g2t])
+            logpi2 = lg2 - logsumexp(lg2, axis=1)[:, None]
+            pl2 = jnp.exp(jnp.take_along_axis(logpi2, g2b[:, None], 1)[:, 0])
+            credit = credit - jnp.sum(jnp.log(q * pl2 + (1.0 - q) / 3.0 + 1e-12))
         pen = 0.5 * (lsh * jnp.sum(fmj * sh ** 2) + lcr * jnp.sum(fmj * cr ** 2)
                      + ldf * jnp.sum(fmj * df ** 2))
         if has_rw:                                           # RW: θ_next ~ N(θ_prev, rw_sd²·gap)
@@ -894,12 +928,14 @@ def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson"):
                 pen += 0.5 * lrw_ar * jnp.sum(a_iw * (ar[a_en] - ar[a_ep]) ** 2)
         return pois + shots_per_goal * credit + pen
 
-    x0 = np.zeros(PS + 1 + n_ar + (1 if nb else 0))
+    x0 = np.zeros(PS + 1 + n_ar + (1 if has_a2 else 0) + (1 if nb else 0))
     if nb:
-        x0[-1] = 1.0
+        x0[-1] = 1.0                                         # q's logit starts at 0 ⇒ q = 0.5
     res = _optimize(nll, x0, sh_i, tm_i, df_i, dmask, R["Xctx"], R["count"], R["offset"],
-                    g_team, g_cidx, fm, e_prev, e_next, 1.0 / np.maximum(e_gap, 1e-9), acol)
+                    g_team, g_cidx, fm, e_prev, e_next, 1.0 / np.maximum(e_gap, 1e-9), acol,
+                    g2_team, g2_c1, g2_c2)
     th = res.x
+    a2_q = float(_sigmoid(th[QI])) if has_a2 else None
     sh, cr, df = th[1:1 + NU], th[1 + NU:1 + 2 * NU], th[1 + 2 * NU:1 + 3 * NU]
     b, psi0 = th[1 + 3 * NU:PS], float(th[PS])
     ar_vec = th[PS + 1:PS + 1 + n_ar]
@@ -918,6 +954,15 @@ def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson"):
     cinfo = np.zeros(NU)                                     # per-goal creator Fisher info (weight 1)
     for t in range(4):
         np.add.at(cinfo, g_team[:, t], pi[:, t + 1] * (1 - pi[:, t + 1]))
+    if has_a2:                                               # A2 Fisher, responsibility-weighted by the
+        lg2 = cr[g2_team].astype(np.float64)                 # mixture (noise share carries no info)
+        lg2[np.arange(4)[None, :] == g2_c1[:, None]] = -1e30
+        pi2 = np.exp(lg2 - lg2.max(1, keepdims=True)); pi2 /= pi2.sum(1, keepdims=True)
+        plc = pi2[np.arange(len(g2_c2)), g2_c2]
+        resp = a2_q * plc / (a2_q * plc + (1.0 - a2_q) / 3.0 + 1e-12)
+        for t in range(4):
+            valid = (g2_c1 != t).astype(np.float64)
+            np.add.at(cinfo, g2_team[:, t], resp * pi2[:, t] * (1 - pi2[:, t]) * valid)
     ci = np.arange(1 + NU, 1 + 2 * NU)
     cdiag = sparse.csr_matrix((cinfo, (ci, ci)), shape=(PS, PS))
     H = XtWX + _rate_penalty(NU, k, fm, e_prev, e_next, e_gap) + shots_per_goal * cdiag
@@ -935,7 +980,7 @@ def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson"):
            "count_model": count_model, "r": r, "converged": bool(res.success),
            "grad_norm": float(np.max(np.abs(res.jac))), "ctx_names": R.get("ctx_names"),
            "arena_vec": ar_vec, "arena_venue": R.get("arena_venue"),
-           "arena_season": R.get("arena_season")}
+           "arena_season": R.get("arena_season"), "a2_q": a2_q, "n_a2": int(len(g2_c2))}
     if not states:                                           # static aliases (units == players)
         out["se_shoot"], out["se_create"], out["se_def"] = se_sh, se_cr, se_df
     return out
@@ -1467,6 +1512,10 @@ def fit_all(seasons, count_model="poisson", spg_scale=1.0):
         anchor = gm & (Q["creator"] >= 0)                    # F4: off-ice-assister goals are latent
         gt, gc = Q["team_idx"][anchor], cidx_all[anchor]
         sord = {s: i for i, s in enumerate(R["seasons"])}
+        # A2 stage: goals with an on-ice A1 (a column to mask) AND an on-ice A2
+        anchor2 = (gm & (Q["creator"] >= 0) & (Q["creator"] <= 3)
+                   & (Q["creator2"] >= 0) & (Q["creator2"] != Q["creator"]))
+        gt2, g1c, gc2 = Q["team_idx"][anchor2], Q["creator"][anchor2], Q["creator2"][anchor2]
         if dual:                                             # anchor teammates → (player, season) units
             qs = np.array([sord[s] for s in Q["season"][anchor]], dtype=np.int64)
             gtu = R["unit_lut"][gt, qs[:, None]]
@@ -1474,16 +1523,22 @@ def fit_all(seasons, count_model="poisson", spg_scale=1.0):
             if int((~ok).sum()):
                 print(f"  [{key}] {int((~ok).sum())} anchor goals dropped (teammate w/o rate exposure)")
             gt, gc = gtu[ok], gc[ok]
+            qs2 = np.array([sord[s] for s in Q["season"][anchor2]], dtype=np.int64)
+            gtu2 = R["unit_lut"][gt2, qs2[:, None]]
+            ok2 = (gtu2 >= 0).all(1)
+            gt2, g1c, gc2 = gtu2[ok2], g1c[ok2], gc2[ok2]
         print(f"  [{key}] rate rows {len(R['count']):,}  shots {R['count'].sum():.0f}  goals {ngoal}  "
-              f"spg {spg[key]:.1f}  anchored {len(gc)} ({100 * nun / max(ngoal, 1):.0f}% unassisted)")
-        rate = fit_rate_create(R, gt, gc, spg[key], count_model=count_model)
+              f"spg {spg[key]:.1f}  anchored {len(gc)} ({100 * nun / max(ngoal, 1):.0f}% unassisted, "
+              f"{len(gc2)} with A2)")
+        rate = fit_rate_create(R, gt, gc, spg[key], count_model=count_model, a2=(gt2, g1c, gc2))
         rate["R"] = R
         rates[key] = rate
         last_season = np.maximum(last_season, R["last_season"])
         rdesc = f" r={rate['r']:.2f}" if rate.get("r") else ""
         nu = f" units={R['n_units']:,}" if dual and "n_units" in R else ""
+        qd = f" a2_q={rate['a2_q']:.3f}" if rate.get("a2_q") is not None else ""
         print(f"    rate fit ({count_model}): converged={rate['converged']} |grad|={rate['grad_norm']:.1e}"
-              f"{rdesc} create_0={rate['psi0']:+.3f}{nu}")
+              f"{rdesc} create_0={rate['psi0']:+.3f}{nu}{qd}")
         cm = _coef_map(R["ctx_names"], rate["beta"])
         for blk in ("shoot", "create", "def"):
             print(f"    [{key}] {blk}-curve   {_curve_report(cm, blk)}")
@@ -1619,6 +1674,7 @@ def _save(seasons, players, rates, qual, conv, vals, ppcs, spg, agepos, last_sea
                     "sum_y": conv["sum_y"], "recon_season": conv.get("recon_season"),
                     "ctx": {n: float(v) for n, v in zip(conv.get("ctx_names", []), conv.get("beta", []))}},
            "strengths": {k: {"rate_intercept": float(rates[k]["intercept"]), "psi0": float(rates[k]["psi0"]),
+                             "a2_q": rates[k].get("a2_q"), "n_a2": rates[k].get("n_a2"),
                              "ppc": ppcs.get(k)} for k in rates},
            "players": [], "goalies": [{"id": int(conv["goalies"][j]), "gsave": float(conv["gsave"][j]),
                                        "gsave_se": float(conv["se_gsave"][j])}

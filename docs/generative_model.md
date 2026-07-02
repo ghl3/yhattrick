@@ -202,6 +202,7 @@ conversion stage carries none — location bias flows through the recorded xG it
 | `fin_j` | conversion | finishing above xG on own shots (logit offset; fit natively) |
 | `gsave_g` | conversion | goalie saves above expected (logit offset, `<0` good; per goalie `g`) |
 | `a`, `b`, `b_season` | conversion | logit-conversion slope / intercept / per-season offsets (global, unpenalized; score eqns give Σp=Σgoals overall AND per season) |
+| `q` | rate | P(a recorded secondary assist reflects creation) — the A2 anchor's mixture share (fitted; ~0 ⇒ A2s ignored as noise) |
 | `arena_{v,s}` | rate & quality | per-(venue, season) scorer-bias offset (nuisance; ridge + season RW, no reference venue) |
 | `mu_rate`, `mu_qual` | global | replacement-level log shot-rate / logit shot-quality |
 | `beta_rate`, `beta_qual` | global | context coefficients (on `x`) — these INCLUDE the aging-curve and position-offset coefficients (§3) |
@@ -376,8 +377,15 @@ EV `pi` uses that season's create states). Stage 3 uses neither, so it is indepe
   **inverse-probability weight, not a free knob** (`--spg-scale` exists to *check* sensitivity, A3).
   Without it the dense counts identify `create` only as a possession/volume effect; with it `create`
   is pulled toward the players actually credited with setups. Goals whose assister is not an on-ice
-  teammate are excluded from the anchor. The count NLL and the anchor share `create`/`create_0` and
-  are optimized **together** in this one stage.
+  teammate are excluded from the anchor. **Secondary assists** join as an exploded-logit second
+  ranking stage: with A1's column masked, the recorded A2 is scored as
+  `P(A2=c₂) = q·softmax(create_{T\c₁})[c₂] + (1−q)/3` — a MIXTURE whose share
+  `q = P(A2 reflects creation)` is a fitted parameter (a bare weight on the A2 term would be a
+  pseudo-likelihood temperature, not MLE-fittable; the mixture is). A2s add ~1.8× labeled events at
+  a fit-determined discount; measured priors: A1/60 repeats year-over-year at 0.73 vs A2/60 at 0.55.
+  A2 deliberately does NOT enter Stage 2 (a shot's xG is set by the LAST pass — adding `qcreate` for
+  the A2 would double-count the causal path). The count NLL and both anchor stages share
+  `create`/`create_0` and are optimized **together** in this one stage.
 - **Stage 2 — quality (`fit_quality_creator`)** — a single POOLED fit (EV+MA) of `qshoot,
   qcreate_{F,D}, qdef, beta_qual` plus a per-strength intercept (`mu_qual` via a `pp` context column),
   with `create`/`create_0` **taken as fixed values from the per-strength Stage-1 fits** (per row by
@@ -495,13 +503,25 @@ pooled-mean read, the last drift state without aging) and the naive last-season-
 row-level Poisson deviance (deployment identical across candidates) + TOI-weighted player
 own-shots/60 correlation/MAE. First run, 2021–24 → 2025 (677 eligible players ≥200 EV min):
 
-| candidate | row-dev/1k | Σμ/ΣN | rate corr | MAE/60 |
-|---|---|---|---|---|
-| league-avg (floor) | 128.58 | 1.146 | 0.638 | 2.877 |
-| pooled-mean (static read) | **126.66** | 0.998 | 0.837 | **1.180** |
-| last-state (drift, no aging) | 126.86 | 1.002 | 0.837 | 1.186 |
-| projection (drift + aging) | 126.87 | 1.012 | 0.838 | 1.192 |
-| naive last-season raw rate | — | — | **0.864** | 1.087 |
+Own shots (rate corr/MAE) and teammate shots while on ice (tm — the create-side observable);
+current model (A2 mixture + arena states):
+
+| candidate | row-dev/1k | Σμ/ΣN | rate corr | MAE/60 | tm corr | tm MAE |
+|---|---|---|---|---|---|---|
+| league-avg (floor) | 128.45 | 1.116 | 0.639 | 2.749 | 0.440 | 4.801 |
+| pooled-mean (static read) | **126.75** | 0.992 | 0.837 | 1.182 | **0.657** | 3.408 |
+| last-state (drift, no aging) | 126.93 | 0.997 | 0.838 | **1.173** | 0.630 | 3.565 |
+| projection (drift + aging) | 126.94 | 1.006 | 0.838 | 1.174 | 0.629 | 3.600 |
+| naive last-season raw rate | — | — | **0.864** | 1.087 | 0.612 | 2.803 |
+
+The A2 mixture's fitted share saturated at **q̂ = 1.00** — recorded secondary assists are fully
+concordant with the create ordering (more creation signal than the 0.75 repeatability prior
+suggested; repeatability includes deployment noise, concordance doesn't). A2 vs the no-A2 arm:
+tm-corr +0.008 (pooled read) / +0.003–0.004 (last/proj), own-shot metrics unchanged — modest,
+consistent, free. Note the **model beats the naive bar on teammate rates** (0.657 vs 0.612): the
+first metric where lineup-aware decomposition wins outright — naive raw rates can't know the
+target season's linemates. (naive tm MAE is smaller because raw on-ice rates carry persistent
+team effects the deployment-free read deliberately strips; corr is the like-for-like column.)
 
 Honest reading:
 - **The model's skill content is large and well-calibrated**: floor → skill reads moves corr

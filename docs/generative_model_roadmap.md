@@ -36,7 +36,12 @@ doc §7. Still open from this item: **RW_SD grid tuning** (rerun the harness und
 `RW_SD_*` constants and keep the held-out minimizer) and extending scoring beyond the rate stage
 (on-ice xGF, goals). Rookie handling is honest-but-blunt (unseen players sit at the prior mean).
 
-### 2. Secondary assists in the credit anchor (Plackett-Luce partial ranking)
+### 2. Secondary assists in the credit anchor — ✅ IMPLEMENTED (July 2026)
+Landed as designed below (mixture-q, fitted). Results: **q̂ saturated at 1.00** (recorded A2s fully
+concordant with the create ordering); held-out create-side tm-corr +0.008 (pooled) / +0.004
+(last/proj) vs the no-A2 arm, own-shot metrics unchanged; the model now **beats the naive bar on
+teammate rates** (0.657 vs 0.612). Harness also extended with the create-side (teammate-shots)
+scoring track. Original design (kept for reference):
 `quality_creator_rows` reads `assist1PlayerId` and discards `assist2PlayerId` from the same pbp
 JSON. Design: treat (A1, A2) as a PARTIAL RANKING of the on-ice teammates by creation involvement —
 an exploded-logit second stage reusing the same `create` parameters:
