@@ -24,16 +24,17 @@ shiftcharts for 2016–2020 are downloaded (unprocessed).
 
 ## Tier 1 — do next (each unlocks or de-risks others)
 
-### 1. Held-out-season predictive harness
-Fit 2021–2024 pooled, project 2025 (`effective_params(..., target=2025)` → `player_values`), score
-against observed 2025 per-player rates (own shots/60, on-ice xGF/xGA, goals), TOI-weighted. Compare
-four predictors: (a) this model's projection, (b) static pooled fit (set `RW_SD_* → tiny` to glue the
-states), (c) single-season 2024 fit, (d) naive previous-season raw rates. Deliverable: a small script
-+ a results table in the doc.
-**Why first:** converts "looks sane" into "measurably better"; empirically tunes `RW_SD_*` (grid over
-the constants, pick the held-out minimizer — supersedes hand-set defaults *and* the EB idea); and
-gives the site a defensible "projections beat baselines by X%" claim.
-**Where:** new module or script beside the model; everything needed is already exposed.
+### 1. Held-out-season predictive harness — ✅ IMPLEMENTED (July 2026)
+Landed as `yhattrick/models/generative_holdout.py` (built on the `fit_all()` refactor of `run()`):
+fits seasons ≤ `--train-through`, scores the projection on the target season's REAL stint rows
+against three same-fit reads — league-avg (floor), pooled-mean (the static-pooled read),
+last-state (drift, no aging) — plus the naive last-season-raw-rates bar. Metrics: row-level Poisson
+deviance (deployment-identical across candidates) and TOI-weighted player own-shots/60 corr/MAE.
+Run: `uv run --group experimental python -m yhattrick.models.generative_holdout
+[--train-through 2024]` → tables + `data/models/holdout_<target>.json`. Results live in the model
+doc §7. Still open from this item: **RW_SD grid tuning** (rerun the harness under different
+`RW_SD_*` constants and keep the held-out minimizer) and extending scoring beyond the rate stage
+(on-ice xGF, goals). Rookie handling is honest-but-blunt (unseen players sit at the prior mean).
 
 ### 2. Secondary assists in the credit anchor (Plackett-Luce partial ranking)
 `quality_creator_rows` reads `assist1PlayerId` and discards `assist2PlayerId` from the same pbp

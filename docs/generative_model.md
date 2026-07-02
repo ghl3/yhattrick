@@ -487,6 +487,38 @@ Pooled 2021–2025 fit (NB counts, 1,481 players, 4,739 EV player-season states,
   large top-2-vs-field scale cliff (McDavid/Kucherov ~5.3 xG/60 vs ~2.1 next) via the `exp(create)−1`
   nonlinearity at the high PP shot baseline; PP-goal PPC runs ~2.5% hot.
 
+### Held-out validation (the predictive harness)
+
+`generative_holdout.py` fits the model on seasons ≤ T and scores the T+1 projection on that
+season's REAL stint rows against simpler reads of the same fit (league-avg floor, the static
+pooled-mean read, the last drift state without aging) and the naive last-season-raw-rates bar —
+row-level Poisson deviance (deployment identical across candidates) + TOI-weighted player
+own-shots/60 correlation/MAE. First run, 2021–24 → 2025 (677 eligible players ≥200 EV min):
+
+| candidate | row-dev/1k | Σμ/ΣN | rate corr | MAE/60 |
+|---|---|---|---|---|
+| league-avg (floor) | 128.58 | 1.146 | 0.638 | 2.877 |
+| pooled-mean (static read) | **126.66** | 0.998 | 0.837 | **1.180** |
+| last-state (drift, no aging) | 126.86 | 1.002 | 0.837 | 1.186 |
+| projection (drift + aging) | 126.87 | 1.012 | 0.838 | 1.192 |
+| naive last-season raw rate | — | — | **0.864** | 1.087 |
+
+Honest reading:
+- **The model's skill content is large and well-calibrated**: floor → skill reads moves corr
+  0.64→0.84, halves MAE, and Σμ/ΣN sits at 1.00 (the projection runs ~1% hot — the aging deltas
+  slightly overshoot in TOI-weighted aggregate).
+- **Drift and aging are a wash for one-season-ahead own-shot rates**: the three model reads sit
+  within ~0.2% of each other. Their value is in unbiased current-skill reads, trajectories, and
+  long windows — not in beating a static read at this one-step horizon, on this one metric.
+- **The naive bar stands**: last season's raw rate is still the best single predictor of next
+  season's raw rate for high-TOI regulars (unshrunk, and it bakes in residual role effects that
+  the decomposition spreads across linemates). The model's purpose is decomposition, attribution,
+  and simulation — not raw-rate nowcasting — but this row is the bar improvements (secondary
+  assists, arena effects, RW tuning) should now be measured against.
+Follow-ups: RW_SD grid (one training fit per value; the training side caches to
+`holdout_fit_<T>.npz` and `--rescore` re-scores in minutes) and extending scoring beyond the rate
+stage (on-ice xGF, goals) where the joint structure should differentiate.
+
 ---
 
 ## 8. Resolved problem — per-player `qcreate`; open threads

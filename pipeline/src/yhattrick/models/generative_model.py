@@ -1436,8 +1436,11 @@ def _curve_json(cm, blk, off_name=None):
                       for pos, d in (("F", 0.0), ("D", 1.0))}}
 
 
-def run(seasons, count_model="poisson", spg_scale=1.0):
-    names = roster_names(seasons)
+def fit_all(seasons, count_model="poisson", spg_scale=1.0):
+    """Fit every stage on `seasons` and return the raw fit objects — the shared engine behind run()
+    (which adds leaderboards, values, PPC, projection, JSON) and the held-out predictive harness
+    (generative_holdout, which needs the fits without the reporting tail). Returns a dict with
+    players/idx/agepos/Q/rates/spg/qual/conv/last_season."""
     print(f"[generative_model:shooter-resolved] seasons {seasons} — count {count_model} — EV + PP/PK …")
     players, idx = player_index(seasons)
     if not players:
@@ -1521,6 +1524,15 @@ def run(seasons, count_model="poisson", spg_scale=1.0):
         if conv.get("recon_season"):
             rc = "  ".join(f"{s}:{v[0]:.0f}/{v[1]:.0f}" for s, v in sorted(conv["recon_season"].items()))
             print(f"    per-season Σp/Σy (F6): {rc}")
+    return {"players": players, "idx": idx, "agepos": agepos, "Q": Q, "rates": rates, "spg": spg,
+            "qual": qual, "conv": conv, "last_season": last_season}
+
+
+def run(seasons, count_model="poisson", spg_scale=1.0):
+    names = roster_names(seasons)
+    M = fit_all(seasons, count_model=count_model, spg_scale=spg_scale)
+    players, agepos, Q = M["players"], M["agepos"], M["Q"]
+    rates, spg, qual, conv, last_season = M["rates"], M["spg"], M["qual"], M["conv"], M["last_season"]
 
     # effective per-player params (last state + position offset + curve) → values
     eff_rates, eff_qual, eff_conv = effective_params(rates, qual, conv, players, agepos, last_season)
