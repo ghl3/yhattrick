@@ -125,6 +125,30 @@ defects, all in the model / its honest evaluation — no post-processing:
   per-player assist-style offset in the MA anchor (decouples "last passer" from "chance
   creator"), with its own validation round.
 
+### 5d. The Hyman case (2026-07) — three TODOs from one player page
+Zach Hyman 2025-26: 31 goals (= 31.3 xG, zero shooting luck) yet WAR −0.07 at the 1st percentile
+and GA/60 −0.50. Investigating the clash surfaced three distinct issues:
+
+- **TODO(1) Value-environment alignment — IN PROGRESS.** The value formulas evaluate players in
+  the REFERENCE environment (teammates at effective create = 0), but the league-average teammate's
+  effective create ≈ +0.17, so absolute card units run ~2× low (model F-mean scoring 0.30 vs
+  actual ~0.66 goals/60). Fix in `player_values`: multiply by the model's own average-environment
+  factor, computed from the fit's last-season rows (TOI-weighted mean of exp(Σcreate + Σdef +
+  non-own ctx)); export as `value_env`; cards read it; audit asserts league model scoring ≈
+  actual per-60. Percentiles, WAR, and κ unchanged — this is a units fix.
+- **TODO(2) WAR percentile among season regulars — IN PROGRESS.** The WAR percentile pool
+  includes ~370 part-timers whose WAR ≈ 0 by TOI alone, so a full-timer at −0.07 reads "1st
+  percentile in hockey". Gate the WAR percentile on latest-season EV TOI (≥200 min); card copy
+  says "among regulars".
+- **TODO(3) Unpriced-strength offense.** 14 of Hyman's 31 goals (45%!) came in strengths the
+  model excludes: 6 shorthanded (the MA bucket models only the PP side's attack), 3 empty-net,
+  3 at 6v5, 2 other. Two stages: (a) transparency now — export per-player unpriced-strength
+  goals so the card can say what WAR doesn't price; (b) model extension — add SH-attack (4v5)
+  and extra-attacker (6v5/5v6) rows priced with EV skills + fitted global environment offsets
+  (no new per-player params — SH samples are too sparse; ~27 shots was a league-leading season).
+  Empty-net shots need care in Stages 2–3 (no goalie ⇒ exclude from quality/conversion; price
+  EN conversion empirically). Validate via the holdout harness before shipping; extends #17.
+
 ## Tier 2 — valuable, after Tier 1
 
 ### 6. Stage-2 goal-selection reweighting
