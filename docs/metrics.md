@@ -165,8 +165,10 @@ whose totals are ≈0 by ice time alone would read as a skill ranking it isn't.
 
 **What WAR doesn't price (yet):** goals scored shorthanded, into empty nets, with the goalie
 pulled, at 5v3, or in 3v3 OT — the model prices 5v5 and the 5v4 power play. Players with such
-goals get an explicit note on the WAR card (e.g. Hyman 2025-26: 14 of his 31 goals — six of them
-shorthanded). Pricing these situations is roadmap 5d-TODO(3). Confidence intervals (± = 1.96·SE) are shown
+goals get an explicit note on the WAR card (e.g. Hyman 2025-26: 8 of his 31 goals, mostly
+empty-netters; Ovechkin's window count is 47). Pricing these situations is roadmap 5d-TODO(3).
+Caution when reading the raw data: the shot `strength` label is HOME-vs-AWAY oriented — always
+re-orient to the shooter with `is_home` before classifying situations. Confidence intervals (± = 1.96·SE) are shown
 where the model computes them (Finishing always; Playmaking via its creation-volume SE).
 
 ## The trajectory chart

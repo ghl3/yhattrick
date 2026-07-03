@@ -57,14 +57,17 @@ MA_GATE = 2400.0            # seconds (40 min) — PP/PK card eligibility
 GOALS_PER_WIN = 6.0         # goals → wins conversion (v1 constant)
 REPL_BAND = (8.0, 12.0)     # GA/60 percentile band defining the replacement archetype
 EPS = 1e-9
-PRICED = ("5v5", "5v4")     # attack strengths the model prices; goals elsewhere are surfaced as
-                            # `unpriced_goals` (SH offense, empty-net, extra-attacker, 5v3, OT…)
+PRICED = ((5, 5), (5, 4))   # SHOOTER-relative (own, opp) skater counts the model prices; goals
+                            # elsewhere are surfaced as `unpriced_goals` (SH offense, empty-net,
+                            # extra-attacker, 5v3, OT…). NOTE the parquet `strength` column is
+                            # HOME-vs-AWAY oriented — always re-orient by is_home.
 
 
 def unpriced_goals(seasons, idx, last):
-    """Per-player goals in strengths the model does NOT price (transparency for the card: e.g.
-    Hyman 2025-26 scored 14 of 31 goals shorthanded / empty-net / at 6v5 — real goals, invisible
-    to WAR until roadmap 5d-TODO(3) lands). Returns (latest, window, latest per-strength detail)."""
+    """Per-player goals in situations the model does NOT price (transparency for the card — real
+    goals, invisible to WAR until roadmap 5d-TODO(3) lands). Strength is re-oriented to the
+    SHOOTER's side from is_home + situation skater counts (the raw `strength` label is
+    home-vs-away). Returns (latest, window, latest per-situation detail)."""
     n = len(idx)
     up_last = np.zeros(n, dtype=np.int64)
     up_window = np.zeros(n, dtype=np.int64)
@@ -73,9 +76,14 @@ def unpriced_goals(seasons, idx, last):
         f = C.PROCESSED / "shots_onice" / f"{int(s)}.parquet"
         if not f.exists():
             continue
-        df = pd.read_parquet(f, columns=["shooter_id", "strength", "goal"])
-        g = df[(df.goal == 1) & (~df.strength.isin(PRICED))]
-        for sid, stl in zip(g.shooter_id, g.strength):
+        df = pd.read_parquet(f, columns=["shooter_id", "goal", "is_home",
+                                         "sit_home_n", "sit_away_n"])
+        g = df[df.goal == 1]
+        own = np.where(g.is_home, g.sit_home_n, g.sit_away_n).astype(int)
+        opp = np.where(g.is_home, g.sit_away_n, g.sit_home_n).astype(int)
+        for sid, o, q in zip(g.shooter_id, own, opp):
+            if (o, q) in PRICED:
+                continue
             i = idx.get(int(sid))
             if i is None:
                 continue
@@ -83,7 +91,8 @@ def unpriced_goals(seasons, idx, last):
             if int(s) == last:
                 up_last[i] += 1
                 d = detail.setdefault(i, {})
-                d[str(stl)] = d.get(str(stl), 0) + 1
+                lbl = f"{o}v{q}"
+                d[lbl] = d.get(lbl, 0) + 1
     return up_last, up_window, detail
 
 

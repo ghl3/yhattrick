@@ -140,14 +140,24 @@ and GA/60 −0.50. Investigating the clash surfaced three distinct issues:
   includes ~370 part-timers whose WAR ≈ 0 by TOI alone, so a full-timer at −0.07 reads "1st
   percentile in hockey". Gate the WAR percentile on latest-season EV TOI (≥200 min); card copy
   says "among regulars".
-- **TODO(3) Unpriced-strength offense.** 14 of Hyman's 31 goals (45%!) came in strengths the
-  model excludes: 6 shorthanded (the MA bucket models only the PP side's attack), 3 empty-net,
-  3 at 6v5, 2 other. Two stages: (a) transparency now — export per-player unpriced-strength
-  goals so the card can say what WAR doesn't price; (b) model extension — add SH-attack (4v5)
-  and extra-attacker (6v5/5v6) rows priced with EV skills + fitted global environment offsets
-  (no new per-player params — SH samples are too sparse; ~27 shots was a league-leading season).
-  Empty-net shots need care in Stages 2–3 (no goalie ⇒ exclude from quality/conversion; price
-  EN conversion empirically). Validate via the holdout harness before shipping; extends #17.
+- **TODO(3) Unpriced-strength offense.** 8 of Hyman's 31 goals (26%) came in situations the
+  model excludes — 4 empty-net, 2 at 6v5, one 5v3, one 3v3 OT (league-wide the unpriced share of
+  goals is 15.5% after orientation correction (true SHG ≈ 200/season — matches the real league), see TODO(4)). Two stages: (a) transparency —
+  SHIPPED: per-player `unpriced_goals` exported to cards + noted on the WAR card; (b) model
+  extension — add SH-attack (4v5) and extra-attacker (6v5/5v6) rows priced with EV skills +
+  fitted global environment offsets (no new per-player params — SH samples are sparse). This
+  requires an ATTACKER mask in the rate design (a 4-skater attack has 3 teammates — the row
+  builder and fit assume 5/4 today), so it is a load-bearing change: synthetic tests + holdout
+  validation before shipping. Empty-net shots need care in Stages 2–3 (no goalie ⇒ exclude from
+  quality/conversion; price EN conversion empirically). Extends #17.
+- **TODO(4) Shot `strength` labels are HOME-oriented — re-orient and clean the MA quality pool.**
+  Found 2026-07-03: `shots_onice.strength` is "{home}v{away}", NOT shooter-relative (Draisaitl's
+  away-PP goals read "4v5"). The stint-side rate buckets are unaffected (side chosen by actual
+  skater counts), but the QUALITY/CONVERSION shot pools classify by label: the symmetric
+  {5v4, 4v5} set means genuine shorthanded shots (high-danger rushes) sit inside the MA quality
+  pool with the `pp` context flag. Fix at next refit: classify shots by shooter-relative
+  strength (is_home + sit counts) — true-SH shots move out of the MA pool (→ TODO(3)'s SH
+  bucket or exclusion); re-run holdout + audit to measure the effect on mu_qual/qshoot.
 
 ## Tier 2 — valuable, after Tier 1
 
