@@ -108,30 +108,23 @@ own card until the penalties stage joins the generative model); defender shot-qu
 enters as a multiplicative factor (an approximation documented in the exporter); WAR ships without
 confidence intervals until the parametric bootstrap lands.
 
-**Scale note — our WAR runs hotter than public WAR models (audited 2026-07).** Top seasons here
-land around 9–12 wins where Evolving-Hockey-style models top out near 5–6; the league sum is
-≈ 1,390 WAR vs the ~700 public models normalize to. An explicit audit (per-team joint
-counterfactuals vs summed player marginals, 2025 season) decomposed the gap:
+**Scale note (re-audited 2026-07 after the fixes).** The engine's expected goals reconcile to
+the goals the model was fit on within **+0.8%, with no correction factors anywhere** — the audit
+asserts this instead of enforcing it. League totals: Σ individual WAR ≈ 1,290; replacing whole
+teams jointly prices at ≈ 1,160 (summed marginals count each lineup synergy in every member's
+swap — ×1.11, a documented property of the multiplicative model, not an error). Top seasons land
+around 7–9 wins. This still runs above public models' ~700-WAR normalization for one honest
+reason: our replacement level is deeper and our skill spread wider — and the spread is the part
+the held-out harness validates directly (rate-skill corr 0.84, per-block calibration slopes at
+their drift ceilings; model doc §7). Compare WAR **within this site**, not across models.
 
-- **+13% level inflation — a known approximation, fix planned.** The closed-form WAR engine
-  converts shots at each shooter's *mean* shot quality; over a skewed xG distribution that
-  overstates goals (model ΣE[GF] 7,714 vs 6,811 actual in the fitted shot set). A per-bucket
-  reconciliation factor (Σp = Σy, as the conversion stage already does) removes it.
-- **×1.16 from summing marginals.** Replacing a whole team with replacements (joint) is worth
-  ~16% less than the sum of its players' individual swaps — the multiplicative lineup synergy is
-  counted in every member's marginal. Real but modest; not the main driver.
-- **The rest is a genuinely deeper replacement level / wider skill spread** than public RAPM-style
-  models (replacement ≈ −0.48 GA/60 for F, −0.33 for D below position average). The rate-skill
-  spread behind it is validated out-of-sample (holdout corr 0.84, calibrated totals).
-
-**Known distortion — PP credit inside long-lived units.** Within a five-man unit that plays together
-for years, the count data only pins the unit's *total* creation; individual shares are identified
-mostly by the assist anchor. Assist-light net-front players on elite PP1s become residual sinks
-(fitted `pp_create` strongly negative), and the swap then claims replacing them would *raise* the
-unit's shot volume — e.g. Hyman's PP WAR is not credible, and star PP reads absorb the mirror-image
-inflation. Treat PP WAR components on long-fixed units with caution until the roadmap fix
-(Shapley-style / identification-aware unit attribution) lands. Team-level accounting is sound:
-joint team GAR correlates 0.85 with actual goal differential and 0.79 with standings points.
+**The PP credit distortion is fixed in the model (2026-07).** Within long-lived five-man units,
+shot counts pin only the unit's total creation and assists split it — but PP assists reflect
+role, not creation, so assist-light net-front players used to absorb large negative residuals
+(and stars the mirror inflation). The PP/PK bucket's assist-anchor weight and priors are now
+selected by out-of-sample calibration (creation honesty 0.31 → 0.78, PK-defense 0.74, held-out
+PP prediction improved throughout — the full sweep is in the model doc §7). WAR, PP GA/60, and
+Playmaking all read the corrected parameters at face value.
 
 Rankings, the replacement zero, and EV reads are unaffected. Compare WAR **within this site**, not
 against other models' numbers.
