@@ -327,27 +327,40 @@ export interface PlayerDetail {
 
 // ── generative player card (Cards v2; pipeline models/generative_cards.py) ─────────────────────
 // Values are CURRENT SKILL: last drift state + position offset + aging curve at his latest-season
-// age, in the reference environment. GA/60 is vs a baseline team (league-average player at his
-// position — TOI-weighted zero within group). WAR is his ACTUAL season: stint-by-stint expected
-// goals with him vs a replacement player in his slot, ÷ goals-per-win. See docs/metrics.md.
+// age, in the average environment. All GA/60-family values are vs the REPLACEMENT archetype at
+// his position (same zero as WAR): ga60 = created60 + prevented60. WAR is his ACTUAL season:
+// stint-by-stint expected goals with him vs a replacement player in his slot, ÷ goals-per-win.
+// See docs/metrics.md.
 export interface GenAttr { v: number | null; se?: number | null; pct: number | null }
 export interface GenTrajPoint {
   season: number; age: number | null;
   scoring: number | null; playmaking: number | null; defense: number | null; ga60: number | null;
   // league-reference underlay: a position-average player AT HIS AGE that season
   lg_scoring?: number | null; lg_playmaking?: number | null; lg_defense?: number | null;
+  lg_ga60?: number | null;
 }
 export interface GenBlock {
   pos: "F" | "D";
   age: number | null;
   last_season: number;
   attrs: {
-    war: GenAttr; ga60: GenAttr; pp_ga60: GenAttr; pk_ga60: GenAttr;
+    war: GenAttr; ga60: GenAttr; created60: GenAttr; prevented60: GenAttr;
+    pp_ga60: GenAttr; pk_ga60: GenAttr;
     scoring: GenAttr; shooting: GenAttr; finishing: GenAttr; playmaking: GenAttr; defense: GenAttr;
+  };
+  // the player's own modeled per-60 values BEFORE the replacement baseline is subtracted, plus
+  // the exact factors of each skill value (drill-down equations rebuild the cards from these)
+  components?: {
+    pp_scoring: number | null; pp_playmaking: number | null; pk_defense: number | null;
+    shots60?: number | null; goals_per_shot?: number | null;
+    pm_shots60?: number | null; pm_xg_per_shot?: number | null;
+    def_allowed60?: number | null;
   };
   war: {
     latest: number | null; total: number | null; ev: number | null; pp: number | null; pk: number | null;
     by_season: Record<string, number | null>;
+    // latest-season goals above replacement by component (drives the WAR drill-down equation)
+    goals?: { ev_atk: number | null; ev_def: number | null; pp: number | null; pk: number | null };
   };
   trajectory: GenTrajPoint[];
   projection: (Omit<GenTrajPoint, "age"> & { season: number | null }) | null;
@@ -358,6 +371,12 @@ export interface GenMeta {
   kappa: number; goals_per_win: number; latest_season: number;
   seasons: number[]; rw_sd: Record<string, number> | null;
   replacement: Record<string, Record<string, number>>;
+  // per-60 modeled production of the replacement archetypes (per position) — the card zero point
+  replacement_values?: Record<"F" | "D", { sc: number; pm: number; df: number;
+                                           pp_sc: number; pp_pm: number; pk_df: number }>;
+  repl_band_pct?: [number, number];
+  lg_goals_per_shot?: number;   // league conversion at the average 5v5 shot (Finishing equation)
+  lg_def_xga60?: number;        // typical 5-defender share of on-ice xGA/60 (Defense equation)
   age_curves: Record<string, { coef: Record<string, number>; d_offset: number;
                                curve: Record<"F" | "D", Record<string, number>> }>;
 }

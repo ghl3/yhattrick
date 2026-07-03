@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
@@ -34,14 +34,14 @@ const pctFmt = (v: number) => (v * 100).toFixed(1); // fraction 0–1 -> "54.2"
 
 // 5-on-5 unless the name says otherwise, so no "EV" prefix is needed
 const ONICE: { key: OniceKey; name: string; explain: string; fmt: (v: number) => string; unit: string }[] = [
-  { key: "ev_xgf60", name: "Expected Goals For", explain: "His team's expected goals per 60 at 5-on-5 while he's on the ice — a team rate, not isolated to him.", fmt: num2, unit: "xG/60" },
-  { key: "ev_xga60", name: "Expected Goals Against", explain: "His team's expected goals allowed per 60 at 5-on-5 while he's on the ice — a team rate, not isolated. Lower is better.", fmt: num2, unit: "xG/60" },
-  { key: "ev_xgshare", name: "Expected Goals Share", explain: "His team's share of the expected goals (chance quality) at 5-on-5 while he's on the ice — xGF ÷ (xGF + xGA). Above 50% means out-chancing opponents.", fmt: pctFmt, unit: "%" },
-  { key: "ev_cf60", name: "Shot Attempts For", explain: "His team's shot attempts (Corsi) per 60 at 5-on-5 while he's on the ice — a team rate.", fmt: num1, unit: "attempts/60" },
-  { key: "ev_ca60", name: "Shot Attempts Against", explain: "Opponent shot attempts per 60 at 5-on-5 while he's on the ice — a team rate. Lower is better.", fmt: num1, unit: "attempts/60" },
-  { key: "ev_cfshare", name: "Shot Attempt Share", explain: "His team's share of all shot attempts at 5-on-5 while he's on the ice — Corsi for ÷ (for + against). Above 50% means controlling play.", fmt: pctFmt, unit: "%" },
-  { key: "pp_xgf60", name: "Power-Play Expected Goals For", explain: "His team's expected goals per 60 on the power play while he's on the ice — a team rate.", fmt: num2, unit: "xG/60" },
-  { key: "pk_xga60", name: "Penalty-Kill Expected Goals Against", explain: "His team's expected goals allowed per 60 on the penalty kill while he's on the ice — a team rate. Lower is better.", fmt: num2, unit: "xG/60" },
+  { key: "ev_xgf60", name: "Expected Goals For", explain: "His team's expected goals per 60 at 5-on-5 while he's on the ice. A team rate, not isolated to him.", fmt: num2, unit: "xG/60" },
+  { key: "ev_xga60", name: "Expected Goals Against", explain: "His team's expected goals allowed per 60 at 5-on-5 while he's on the ice. A team rate, not isolated; lower is better.", fmt: num2, unit: "xG/60" },
+  { key: "ev_xgshare", name: "Expected Goals Share", explain: "His team's share of the expected goals (chance quality) at 5-on-5 while he's on the ice: xGF ÷ (xGF + xGA). Above 50% means out-chancing opponents.", fmt: pctFmt, unit: "%" },
+  { key: "ev_cf60", name: "Shot Attempts For", explain: "His team's shot attempts (Corsi) per 60 at 5-on-5 while he's on the ice. A team rate.", fmt: num1, unit: "attempts/60" },
+  { key: "ev_ca60", name: "Shot Attempts Against", explain: "Opponent shot attempts per 60 at 5-on-5 while he's on the ice. A team rate; lower is better.", fmt: num1, unit: "attempts/60" },
+  { key: "ev_cfshare", name: "Shot Attempt Share", explain: "His team's share of all shot attempts at 5-on-5 while he's on the ice: Corsi for ÷ (for + against). Above 50% means controlling play.", fmt: pctFmt, unit: "%" },
+  { key: "pp_xgf60", name: "Power-Play Expected Goals For", explain: "His team's expected goals per 60 on the power play while he's on the ice. A team rate.", fmt: num2, unit: "xG/60" },
+  { key: "pk_xga60", name: "Penalty-Kill Expected Goals Against", explain: "His team's expected goals allowed per 60 on the penalty kill while he's on the ice. A team rate; lower is better.", fmt: num2, unit: "xG/60" },
 ];
 
 const INDIV: { key: IndividualKey; name: string; explain: string; fmt: (v: number) => string; unit: string; signed?: boolean; ci?: boolean }[] = [
@@ -51,11 +51,11 @@ const INDIV: { key: IndividualKey; name: string; explain: string; fmt: (v: numbe
   { key: "fin_per100", name: "Finishing", explain: "Goals he scores above expected on his own shots, per 100 shots.", fmt: num2, unit: "goals/100 shots", signed: true, ci: true },
   { key: "g60", name: "Goal Rate", explain: "His goals per 60 (all situations).", fmt: num2, unit: "goals/60" },
   { key: "a60", name: "Assist Rate", explain: "His assists per 60 (all situations).", fmt: num2, unit: "assists/60" },
-  { key: "a1_60", name: "Primary Assist Rate", explain: "First assists per 60 — the pass that directly set up the goal. More repeatable than total assists.", fmt: num2, unit: "assists/60" },
+  { key: "a1_60", name: "Primary Assist Rate", explain: "First assists per 60, the pass that directly set up the goal.", fmt: num2, unit: "assists/60" },
   { key: "pen_drawn60", name: "Penalty Draw Rate", explain: "Penalties he drew per 60.", fmt: num2, unit: "drawn/60" },
   { key: "pen_taken60", name: "Penalty Take Rate", explain: "Penalties he took per 60.", fmt: num2, unit: "taken/60" },
-  { key: "fo_win", name: "Faceoff Win %", explain: "Share of his faceoffs won. Shown only for players who take enough draws.", fmt: pctFmt, unit: "%" },
-  { key: "ozs", name: "Off. Zone Start %", explain: "Share of his 5-on-5 shifts that began with an offensive-zone faceoff (vs defensive). Deployment context — higher means more sheltered usage — not a rating of skill.", fmt: pctFmt, unit: "%" },
+  { key: "fo_win", name: "Faceoff Win %", explain: "Share of his faceoffs won.", fmt: pctFmt, unit: "%" },
+  { key: "ozs", name: "Off. Zone Start %", explain: "Share of 5-on-5 shifts starting with an offensive-zone faceoff. Deployment context, not a skill rating.", fmt: pctFmt, unit: "%" },
 ];
 
 // Player-stats section = metrics counted straight from raw events (the xG/finishing ones are modeled
@@ -84,51 +84,146 @@ const COLS: Col[] = [
   { key: "fin_per100", label: "Fin", title: "Finishing: goals above expected per 100 shots", get: (r) => r.fin_per100 ?? null, fmt: (v) => v.toFixed(2), graph: true },
 ];
 
-// shared box: a colored bar with the metric NAME and its percentile, then the value + a description.
-function BoxShell({ name, pctile, groupLabel, explain, value, footer, rankNote }: {
+// shared box: a colored bar with the metric NAME and its percentile, then the value + a
+// description. When `detail` is given, clicking the card flips it over and enlarges it to a
+// front-and-center detail view (FLIP animation: the panel starts transformed onto the card's
+// rect with the card face showing, then rotates 180° while travelling to screen center).
+function BoxShell({ name, pctile, groupLabel, explain, value, footer, rankNote, detail }: {
   name: string; pctile: number | null; groupLabel: string; explain: string;
-  value: React.ReactNode; footer?: React.ReactNode; rankNote?: string;
+  value: React.ReactNode; footer?: React.ReactNode; rankNote?: string; detail?: React.ReactNode;
 }) {
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const innerRef = useRef<HTMLDivElement | null>(null);
+  // closed -> measure (overlay mounted hidden, compute card->center transform) -> open -> closing
+  const [phase, setPhase] = useState<"closed" | "measure" | "open" | "closing">("closed");
+  const [fromT, setFromT] = useState<string | null>(null);
+
+  useLayoutEffect(() => {
+    if (phase === "measure" && boxRef.current && innerRef.current) {
+      const a = boxRef.current.getBoundingClientRect();
+      const b = innerRef.current.getBoundingClientRect();
+      setFromT(`translate(${a.left - b.left}px, ${a.top - b.top}px) ` +
+               `scale(${a.width / b.width}, ${a.height / b.height})`);
+      requestAnimationFrame(() => requestAnimationFrame(() => setPhase("open")));
+    }
+  }, [phase]);
+  useEffect(() => {
+    if (phase === "closed") return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setPhase("closing"); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [phase]);
+
+  // clicking opens the detail — unless the user is selecting text on the card
+  const openDetail = () => {
+    const sel = window.getSelection();
+    if (sel && sel.type === "Range" && sel.toString().length > 0) return;
+    setPhase("measure");
+  };
+
   const has = pctile != null;
-  return (
-    <div className="metric-box">
-      <div className="mb-bar" style={{ background: has ? pctColor(pctile) : "var(--accent-softer)" }}>
-        <span className="mb-head">{name}</span>
-        <span className="mb-rank">
-          {has ? <><span className="mb-pctile">{Math.round(pctile!)}%</span><span className="mb-vs">among {groupLabel}</span></>
-               : <span className="mb-vs">{rankNote ?? "not enough volume"}</span>}
-        </span>
-      </div>
-      <div className="mb-body">
-        <div className="mb-val">{value}{footer}</div>
-        <div className="mb-blurb">{explain}</div>
-      </div>
+  const barBg = has ? pctColor(pctile) : "var(--accent-softer)";
+  const bar = (withClose: boolean) => (
+    <div className="mb-bar" style={{ background: barBg }}>
+      <span className="mb-head">{name}</span>
+      <span className="mb-rank">
+        {has ? <><span className="mb-pctile">{Math.round(pctile!)}%</span><span className="mb-vs">among {groupLabel}</span></>
+             : <span className="mb-vs">{rankNote ?? "not enough volume"}</span>}
+        {withClose && <button className="flip-close" aria-label="Close" onClick={() => setPhase("closing")}>×</button>}
+      </span>
     </div>
+  );
+
+  return (
+    <>
+      <div ref={boxRef} className={`metric-box${detail ? " has-detail" : ""}`}
+        style={phase !== "closed" ? { visibility: "hidden" } : undefined}
+        role={detail ? "button" : undefined} tabIndex={detail ? 0 : undefined}
+        title={detail ? "Click for the full definition" : undefined}
+        onClick={detail ? openDetail : undefined}
+        onKeyDown={detail ? (e) => { if (e.key === "Enter" || e.key === " ") setPhase("measure"); } : undefined}>
+        {bar(false)}
+        <div className="mb-body">
+          <div className="mb-val">{value}{footer}</div>
+          <div className="mb-blurb">{explain}</div>
+        </div>
+      </div>
+      {phase !== "closed" && detail && (
+        <div className={`flip-overlay${phase === "open" ? " on" : ""}`} onClick={() => setPhase("closing")}>
+          <div ref={innerRef} className="flip-inner" onClick={(e) => e.stopPropagation()}
+            style={{
+              transform: phase === "open" ? "rotateY(180deg)" : fromT ?? undefined,
+              visibility: fromT ? "visible" : "hidden",
+            }}
+            onTransitionEnd={(e) => {
+              if (phase === "closing" && e.propertyName === "transform") { setPhase("closed"); setFromT(null); }
+            }}>
+            <div className="flip-front">
+              {bar(false)}
+              <div className="mb-body">
+                <div className="mb-val">{value}{footer}</div>
+                <div className="mb-blurb">{explain}</div>
+              </div>
+            </div>
+            <div className="flip-back">
+              {bar(true)}
+              <div className="flip-back-body">
+                <div className="mb-val">{value}{footer}</div>
+                <div className="modal-body">{detail}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
+// format a card value: normalize "−0.00" to "0.00"; prepend + on non-negative when signed
+const fmtVal = (v: number, fmt: (n: number) => string, sgn?: boolean) => {
+  let s = fmt(v);
+  if (/^-0(\.0+)?$/.test(s)) s = s.slice(1);
+  return sgn && !s.startsWith("-") ? `+${s}` : s;
+};
+
 // descriptive / attributed-share box: a value with a unit, optionally signed, optionally with a 95% CI
-function OniceBox({ name, explain, v, pctile, group, fmt, se, signed: sgn, unit }: {
+function OniceBox({ name, explain, v, pctile, group, fmt, se, signed: sgn, unit, detail }: {
   name: string; explain: string; v: number | null; pctile: number | null; group: string;
-  fmt: (v: number) => string; se?: number; signed?: boolean; unit?: string;
+  fmt: (v: number) => string; se?: number; signed?: boolean; unit?: string; detail?: React.ReactNode;
 }) {
   return (
-    <BoxShell name={name} pctile={v != null ? pctile : null} groupLabel={group === "D" ? "defensemen" : "forwards"} explain={explain}
+    <BoxShell name={name} pctile={v != null ? pctile : null} groupLabel={group === "D" ? "defensemen" : "forwards"} explain={explain} detail={detail}
       value={v != null
-        ? <>{sgn && v >= 0 ? "+" : ""}{fmt(v)}{se != null && <span className="mb-ci"> ± {(1.96 * se).toFixed(2)}</span>}{unit && <span className="mb-unit">{unit}</span>}</>
+        ? <>{fmtVal(v, fmt, sgn)}{se != null && <span className="mb-ci"> ± {(1.96 * se).toFixed(2)}</span>}{unit && <span className="mb-unit">{unit}</span>}</>
         : <span className="muted">—</span>} />
   );
 }
 
 // player-value box: a goals number (per-60 share, per-game, or season total) + unit, colored by
 // percentile. `signed` (default true) prepends + on differential metrics (net, penalties).
-function ValueBox({ name, explain, v, pctile, group, fmt, footer, unit, signed: sgn = true, rankNote }: {
+function ValueBox({ name, explain, v, pctile, group, fmt, footer, unit, signed: sgn = true, rankNote, detail }: {
   name: string; explain: string; v: number | null; pctile: number | null; group: string;
   fmt: (v: number) => string; footer?: React.ReactNode; unit?: string; signed?: boolean; rankNote?: string;
+  detail?: React.ReactNode;
 }) {
   return (
-    <BoxShell name={name} pctile={v != null ? pctile : null} groupLabel={group === "D" ? "defensemen" : "forwards"} explain={explain} rankNote={rankNote}
-      value={v != null ? <>{sgn && v >= 0 ? "+" : ""}{fmt(v)}{unit && <span className="mb-unit">{unit}</span>}</> : <span className="muted">—</span>} footer={footer} />
+    <BoxShell name={name} pctile={v != null ? pctile : null} groupLabel={group === "D" ? "defensemen" : "forwards"} explain={explain} rankNote={rankNote} detail={detail}
+      value={v != null ? <>{fmtVal(v, fmt, sgn)}{unit && <span className="mb-unit">{unit}</span>}</> : <span className="muted">—</span>} footer={footer} />
+  );
+}
+
+// little equation table for the drill-downs: labeled rows, a sum rule, a result line
+function Eq({ rows }: { rows: { label: React.ReactNode; val: string; kind?: "sum" | "res" }[] }) {
+  return (
+    <table className="eq">
+      <tbody>
+        {rows.map((r, i) => (
+          <tr key={i} className={r.kind ? `eq-${r.kind}` : ""}>
+            <td>{r.label}</td><td className="num">{r.val}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -316,7 +411,7 @@ function GameLog({ games }: { games: GameLogRow[] }) {
   return (
     <div className="panel">
       <h2>Game log</h2>
-      <p className="section-sub">Every game, most recent first — regular season and playoffs.</p>
+      <p className="section-sub">Every game, most recent first, regular season and playoffs.</p>
       <div className="gamelog-wrap">
         <table className="players gamelog">
           <thead>
@@ -351,49 +446,288 @@ function GameLog({ games }: { games: GameLogRow[] }) {
 }
 
 // ── generative Player Card (Cards v2): current skill inferred by the shot-generation model ──────
+const sg2 = (v: number | null | undefined) => (v == null ? "—" : signed(v, num2));
+const sg1 = (v: number | null | undefined) => (v == null ? "—" : signed(v, num1));
+
 function GenCards({ p }: { p: PlayerDetail }) {
   const g = p.gen!;
   const A = g.attrs;
+  const meta = p.gen_meta;
+  const rv = meta?.replacement_values?.[g.pos];
+  const kap = meta?.kappa ?? 1;
+  const gpw = meta?.goals_per_win ?? 6;
+  const posN = p.group === "D" ? "defenseman" : "forward";
   const seasonLbl = seasonLabel(g.last_season);
-  const projLbl = g.projection?.season != null ? seasonLabel(g.projection.season) : null;
+
+  // drill-down bodies: the full definition, with this player's numbers plugged in
+  const replNote = (
+    <p className="modal-note">
+      Replacement level = the 8–12th-percentile regular at his position, measured separately for
+      5-on-5, PP, and PK: the player a team can call up or claim for free. All value cards use it
+      as their zero.
+    </p>
+  );
+  const wg = g.war.goals;
+  const wgSum = wg ? (wg.ev_atk ?? 0) + (wg.ev_def ?? 0) + (wg.pp ?? 0) + (wg.pk ?? 0) : null;
+  const warDetail = (
+    <>
+      <p>
+        For every shift he played in {seasonLbl}, the model computes his team&apos;s expected goals
+        for and against with him on the ice, then again with a replacement-level {posN} in his slot:
+        same linemates, opponents, zone starts, and goalies. Those differences, summed and
+        converted to wins:
+      </p>
+      {wg && (
+        <Eq rows={[
+          { label: "even-strength offense", val: `${sg1(wg.ev_atk)} goals` },
+          { label: "even-strength defense", val: sg1(wg.ev_def) },
+          { label: "power play", val: sg1(wg.pp) },
+          { label: "penalty kill", val: sg1(wg.pk) },
+          { label: "goals above replacement", val: sg1(wgSum), kind: "sum" },
+          { label: "÷ goals per win", val: gpw.toFixed(1) },
+          { label: "WAR", val: sg2(A.war.v), kind: "res" },
+        ]} />
+      )}
+      {g.unpriced_goals?.latest ? (
+        <p>
+          {`WAR doesn't price ${g.unpriced_goals.latest} of his goals this season (${
+            Object.entries(g.unpriced_goals.detail ?? {}).map(([k, n]) => `${n}× ${k}`).join(", ")
+          }): shorthanded, empty-net, and extra-attacker situations.`}
+        </p>
+      ) : null}
+      <p className="modal-note">
+        Percentile is among this season&apos;s regulars (200+ even-strength minutes). Over the full{" "}
+        {meta?.seasons?.length ?? 5}-season window: {g.war.total != null ? num2(g.war.total) : "—"} WAR
+        (EV {sg2(g.war.ev)}, PP {sg2(g.war.pp)}, PK {sg2(g.war.pk)}).
+      </p>
+      {replNote}
+    </>
+  );
+  const evRows = (which: "all" | "created" | "prevented", resLabel: string, res: number | null) => {
+    if (!rv || A.scoring.v == null || A.playmaking.v == null || A.defense.v == null) return null;
+    const rows = [];
+    if (which !== "prevented") {
+      rows.push({ label: `scoring: his ${num2(A.scoring.v)} − replacement ${num2(rv.sc)}`,
+                  val: sg2(A.scoring.v - rv.sc) });
+      rows.push({ label: `playmaking: (${num2(A.playmaking.v)} − ${num2(rv.pm)}) × κ`,
+                  val: sg2(kap * (A.playmaking.v - rv.pm)) });
+    }
+    if (which !== "created") {
+      rows.push({ label: `defense: (${num2(A.defense.v)} − ${num2(rv.df)}) × κ`,
+                  val: sg2(kap * (A.defense.v - rv.df)) });
+    }
+    rows.push({ label: resLabel, val: sg2(res), kind: "res" as const });
+    return rows;
+  };
+  const kapNote = (
+    <p className="modal-note">
+      Playmaking and defense are valued in expected goals; κ = {kap.toFixed(2)} converts them to
+      goals at the league rate. Rates are skill-now at 5-on-5 in an average environment; WAR is
+      the season-total counterpart over his actual usage.
+    </p>
+  );
+  const addedRows = evRows("all", "Goals Added /60", A.ga60.v);
+  const addedDetail = addedRows && (
+    <>
+      <p>His modeled 5-on-5 production per 60 minus a replacement {posN}&apos;s, component by component:</p>
+      <Eq rows={addedRows} />
+      {kapNote}{replNote}
+    </>
+  );
+  const createdRows = evRows("created", "Goals Created /60", A.created60?.v ?? null);
+  const createdDetail = createdRows && (
+    <>
+      <p>The offense half of Goals Added: his own scoring plus the chances he creates, each minus
+        the replacement level:</p>
+      <Eq rows={createdRows} />
+      {kapNote}{replNote}
+    </>
+  );
+  const preventedRows = evRows("prevented", "Goals Prevented /60", A.prevented60?.v ?? null);
+  const preventedDetail = preventedRows && (
+    <>
+      <p>The defense half of Goals Added: opponent chance value he erases (shots suppressed plus
+        danger suppressed), minus the replacement level:</p>
+      <Eq rows={preventedRows} />
+      {kapNote}{replNote}
+    </>
+  );
+  const c = g.components;
+  const ppDetail = c && rv && c.pp_scoring != null && c.pp_playmaking != null ? (
+    <>
+      <p>His modeled power-play production per 60 minus a replacement PP regular&apos;s. The
+        replacement here is the 8–12th-percentile player among those who actually play PP minutes,
+        not the league-average PP player:</p>
+      <Eq rows={[
+        { label: `scoring: his ${num2(c.pp_scoring)} − replacement ${num2(rv.pp_sc)}`,
+          val: sg2(c.pp_scoring - rv.pp_sc) },
+        { label: `playmaking: (${num2(c.pp_playmaking)} − ${num2(rv.pp_pm)}) × κ`,
+          val: sg2(kap * (c.pp_playmaking - rv.pp_pm)) },
+        { label: "PP Goals Created /60", val: sg2(A.pp_ga60.v), kind: "res" },
+      ]} />
+      {kapNote}
+    </>
+  ) : null;
+  const pkDetail = c && rv && c.pk_defense != null ? (
+    <>
+      <p>Opponent chance value he erases on the penalty kill, minus what a replacement PK regular
+        (8–12th percentile among players with real PK minutes) erases:</p>
+      <Eq rows={[
+        { label: `PK defense: (his ${num2(c.pk_defense)} − replacement ${num2(rv.pk_df)}) × κ`,
+          val: sg2(A.pk_ga60.v), kind: "res" },
+      ]} />
+      {kapNote}
+    </>
+  ) : null;
+  const typShots = c?.shots60 != null && A.shooting.v != null && A.shooting.v > -100
+    ? c.shots60 / (1 + A.shooting.v / 100) : null;
+  const scoringDetail = (
+    <>
+      {c?.shots60 != null && c?.goals_per_shot != null && A.scoring.v != null && (
+        <Eq rows={[
+          { label: "inferred shot volume /60", val: num1(c.shots60) },
+          { label: "× goals per shot, his shot mix", val: num3(c.goals_per_shot) },
+          { label: "Scoring, goals /60 at 5-on-5", val: num2(A.scoring.v), kind: "res" },
+        ]} />
+      )}
+      <p>
+        The goal rate you&apos;d expect from him at 5-on-5 with league-average linemates and
+        opponents. Volume is his shooting skill ({sg1(A.shooting.v)}% vs a typical {posN} his age);
+        goals per shot comes from his shot locations and finishing ({sg2(A.finishing.v)} per 100
+        shots). An absolute rate, not a difference from a baseline player.
+      </p>
+    </>
+  );
+  const shootingDetail = (
+    <>
+      {c?.shots60 != null && typShots != null && A.shooting.v != null && (
+        <Eq rows={[
+          { label: "his inferred shots /60", val: num1(c.shots60) },
+          { label: `÷ a typical ${posN} his age`, val: num1(typShots) },
+          { label: "Shooting, % shot volume", val: `${sg1(A.shooting.v)}%`, kind: "res" },
+        ]} />
+      )}
+      <p>
+        His unblocked-shot rate vs a typical {posN} his age, after the model removes linemates,
+        competition, score state, and arena.
+      </p>
+    </>
+  );
+  const lgp = meta?.lg_goals_per_shot;
+  const finishingDetail = (
+    <>
+      {lgp != null && A.finishing.v != null && (
+        <Eq rows={[
+          { label: "his goals per 100 average shots", val: num2(lgp * 100 + A.finishing.v) },
+          { label: "− league conversion per 100", val: num2(lgp * 100) },
+          { label: "Finishing, goals /100 shots", val: sg2(A.finishing.v), kind: "res" },
+        ]} />
+      )}
+      <p>
+        Whether his shots beat goalies more often than their locations predict, vs a
+        typical {posN} his age. {A.finishing.se != null &&
+          `The ±${(1.96 * A.finishing.se).toFixed(2)} range is a 95% interval. `}Finishing is a
+        small, slow-to-reveal skill, and estimates are shrunk toward typical when shots are few.
+      </p>
+    </>
+  );
+  const playmakingDetail = (
+    <>
+      {c?.pm_shots60 != null && c?.pm_xg_per_shot != null && A.playmaking.v != null && (
+        <Eq rows={[
+          { label: "extra teammate shots /60 with him on ice", val: sg2(c.pm_shots60) },
+          { label: "× chance quality, xG per shot", val: num3(c.pm_xg_per_shot) },
+          { label: "Playmaking, xG /60", val: num2(A.playmaking.v), kind: "res" },
+        ]} />
+      )}
+      <p>
+        The extra chances his teammates get because he&apos;s on the ice, on an average team. The
+        creation volume is his own (split from linemates by the model); the chance quality is
+        priced at his position&apos;s average rate.
+      </p>
+      <p className="modal-note">
+        Sharpest for players whose linemates vary; long-lived fixed units leave more of the split
+        to assist patterns.
+      </p>
+    </>
+  );
+  const defenseDetail = (
+    <>
+      {c?.def_allowed60 != null && A.defense.v != null && (
+        <Eq rows={[
+          { label: "on-ice xGA /60 share, typical defenders", val: num2(c.def_allowed60 + A.defense.v) },
+          { label: "− with him defending", val: num2(c.def_allowed60) },
+          { label: "Defense, xG erased /60", val: sg2(A.defense.v), kind: "res" },
+        ]} />
+      )}
+      <p>
+        Opponent chance value he erases per 60 at 5-on-5, vs an average {posN}: shots suppressed
+        plus danger suppressed, in expected goals. Positive means an above-average defender.
+      </p>
+      <p className="modal-note">
+        Goals Prevented /60 is this same skill priced in goals (× κ) and re-zeroed at replacement
+        level.
+      </p>
+    </>
+  );
+  const penD = p.individual.pen_drawn60?.v ?? null;
+  const penT = p.individual.pen_taken60?.v ?? null;
+  const penV = p.value.rates.pen_net60?.v ?? null;
+  const penNet = penD != null && penT != null ? penD - penT : null;
+  const penDetail = (
+    <>
+      {penNet != null && penV != null && Math.abs(penNet) >= 0.05 && (
+        <Eq rows={[
+          { label: "penalties drawn /60", val: num2(penD!) },
+          { label: "− penalties taken /60", val: num2(penT!) },
+          { label: "× goals per penalty, league PP conversion", val: num2(penV / penNet) },
+          { label: "Penalties, goals /60", val: sg2(penV), kind: "res" },
+        ]} />
+      )}
+      <p>
+        Penalties drawn minus taken, per 60, priced at the league&apos;s power-play conversion rate.
+        Counted from raw events by the production model; not part of WAR yet.
+      </p>
+    </>
+  );
+
   return (
     <div className="panel">
       <h2>Player Card</h2>
       <p className="section-sub">
-        Skills inferred from every shot and shift by our generative model — isolated from linemates,
-        competition, arena, and age. Values are his skill now ({seasonLbl}); rates are per 60.
+        Skills inferred from every shot and shift by our generative model, isolated from linemates,
+        competition, arena, and age. Values are his skill now ({seasonLbl}); value cards are vs a
+        replacement-level player. Click any card for the full definition with his numbers.
       </p>
       <div className="metric-grid">
-        <ValueBox name={`WAR ${seasonLbl}`} group={p.group} v={A.war.v} pctile={A.war.pct} fmt={num2} unit="wins"
-          rankNote={g.unpriced_goals?.latest ? `+${g.unpriced_goals.latest} goals WAR doesn't price (SH/EN/6v5)` : undefined}
-          explain="Wins above replacement: expected goals with him vs a replacement-level player in his slot, added up over his actual shifts, linemates, and opposition this season — at 5v5 and on the power play / penalty kill. Percentile is among that season's regulars (200+ EV minutes). Goals in other situations (shorthanded, empty-net, extra-attacker) aren't priced yet and are noted when a player has them." />
-        <ValueBox name="Goals Added /60" group={p.group} v={A.ga60.v} pctile={A.ga60.pct} fmt={num2} unit="goals/60"
-          explain="Net goals per 60 vs a league-average player at his position on a baseline team, at 5-on-5 — scoring, playmaking, and defense priced on one goals scale." />
-        <ValueBox name="PP Goals Added /60" group={p.group} v={A.pp_ga60.v} pctile={A.pp_ga60.pct} fmt={num2} unit="goals/60"
-          explain="Power-play goals added per 60 vs a position-average player — his own scoring plus the chances he creates for teammates." />
-        <ValueBox name="PK Goals Added /60" group={p.group} v={A.pk_ga60.v} pctile={A.pk_ga60.pct} fmt={num2} unit="goals/60"
-          explain="Penalty-kill goals saved per 60 vs a position-average player — the opponent chance value he erases." />
+        <ValueBox name="WAR" group={p.group} v={A.war.v} pctile={A.war.pct} fmt={num2} unit="wins" detail={warDetail}
+          explain="Estimated wins added above a replacement player playing his games this season, offense and defense combined." />
+        <ValueBox name="Goals Added /60" group={p.group} v={A.ga60.v} pctile={A.ga60.pct} fmt={num2} unit="goals/60" detail={addedDetail}
+          explain="Net goals added per 60 above a replacement player at 5-on-5, offense plus defense on one scale." />
+        <ValueBox name="Goals Created /60" group={p.group} v={A.created60?.v ?? null} pctile={A.created60?.pct ?? null} fmt={num2} unit="goals/60" detail={createdDetail}
+          explain="Offense per 60 above a replacement player at 5-on-5: his own scoring plus chances created for teammates." />
+        <ValueBox name="Goals Prevented /60" group={p.group} v={A.prevented60?.v ?? null} pctile={A.prevented60?.pct ?? null} fmt={num2} unit="goals/60" detail={preventedDetail}
+          explain="Opponent goals prevented per 60 above a replacement player, at 5-on-5." />
       </div>
       <div className="metric-grid" style={{ marginTop: 10 }}>
-        <OniceBox name="Scoring" group={p.group} v={A.scoring.v} pctile={A.scoring.pct} fmt={num2} unit="goals/60" signed={false}
-          explain="Goals from his own shots per 60 at 5-on-5: shot volume × shot danger × finishing." />
-        <OniceBox name="Shooting" group={p.group} v={A.shooting.v} pctile={A.shooting.pct} fmt={num1} unit="% shot volume" signed
-          explain="How much more (or less) he shoots than a typical player at his position and age." />
+        <OniceBox name="Scoring" group={p.group} v={A.scoring.v} pctile={A.scoring.pct} fmt={num2} unit="goals/60" signed={false} detail={scoringDetail}
+          explain="Inferred goal rate from his own shots per 60 at 5-on-5, as if on an average team." />
+        <OniceBox name="Shooting" group={p.group} v={A.shooting.v} pctile={A.shooting.pct} fmt={num1} unit="% shot volume" signed detail={shootingDetail}
+          explain="Shot volume vs a typical player at his position and age." />
         <OniceBox name="Finishing" group={p.group} v={A.finishing.v} pctile={A.finishing.pct} fmt={num2} unit="goals/100 shots"
-          se={A.finishing.se ?? undefined} signed
-          explain="Goals above what his shot locations predict, for his position and age. The wide error bars are honest — finishing is a small, hard-to-see skill." />
+          se={A.finishing.se ?? undefined} signed detail={finishingDetail}
+          explain="Goals above what his shot locations predict, per 100 shots." />
         <OniceBox name="Playmaking" group={p.group} v={A.playmaking.v} pctile={A.playmaking.pct} fmt={num2} unit="xG/60"
-          se={A.playmaking.se ?? undefined} signed={false}
-          explain="Extra chances his teammates get with him on the ice, per 60, valued in expected goals. The creation volume is his; chance quality is priced at his position's rate." />
-        <OniceBox name="Defense" group={p.group} v={A.defense.v} pctile={A.defense.pct} fmt={num2} unit="xG/60" signed
-          explain="Opponent chance value he erases per 60 at 5-on-5 vs an average defender — shots suppressed plus danger suppressed." />
-        <ValueBox name={projLbl ? `Projected GA/60 ${projLbl}` : "Projected GA/60"} group={p.group}
-          v={g.projection?.ga60 ?? null} pctile={null} fmt={num2} unit="goals/60" rankNote="projection"
-          explain="His skill projected one season ahead: latest state carried along the league aging curve for his position. Uncertainty widens with any projection." />
-        <ValueBox name="WAR (5-season window)" group={p.group} v={g.war.total} pctile={null} fmt={num2} unit="wins" rankNote="window total"
-          explain="Wins above replacement summed over every season in the data window — his actual shifts, linemates, and opposition throughout." />
-        <ValueBox name="Penalties" group={p.group} v={p.value.rates.pen_net60?.v ?? null} pctile={p.value.rates.pen_net60?.pct ?? null} fmt={num2} unit="goals/60"
-          explain="Net goals from penalties he draws minus takes (from the production model — not yet inside WAR)." />
+          se={A.playmaking.se ?? undefined} signed={false} detail={playmakingDetail}
+          explain="Inferred rate of extra chances he creates for teammates, in expected goals per 60 at 5-on-5, as if on an average team." />
+        <OniceBox name="Defense" group={p.group} v={A.defense.v} pctile={A.defense.pct} fmt={num2} unit="xG/60" signed detail={defenseDetail}
+          explain="Opponent chance value erased per 60 at 5-on-5, vs an average defender at his position." />
+        <ValueBox name="PP Goals Created /60" group={p.group} v={A.pp_ga60.v} pctile={A.pp_ga60.pct} fmt={num2} unit="goals/60" detail={ppDetail}
+          explain="Power-play offense per 60 above a replacement PP regular." />
+        <ValueBox name="PK Goals Prevented /60" group={p.group} v={A.pk_ga60.v} pctile={A.pk_ga60.pct} fmt={num2} unit="goals/60" detail={pkDetail}
+          explain="Penalty-kill goals prevented per 60 above a replacement PK regular." />
+        <ValueBox name="Penalties" group={p.group} v={p.value.rates.pen_net60?.v ?? null} pctile={p.value.rates.pen_net60?.pct ?? null} fmt={num2} unit="goals/60" detail={penDetail}
+          explain="Net goals from penalties drawn minus taken, per 60. Not yet in WAR." />
       </div>
     </div>
   );
@@ -413,8 +747,7 @@ function TrajectoryChart({ p }: { p: PlayerDetail }) {
   const [attr, setAttr] = useState<TrajKey>("ga60");
   const data = useMemo(() => {
     const per = new Map(p.per_season.map((r) => [r.season, r]));
-    const lg = (tp: Record<string, unknown>) =>
-      attr === "ga60" ? 0 : ((tp[`lg_${attr}`] as number | null) ?? null);
+    const lg = (tp: Record<string, unknown>) => (tp[`lg_${attr}`] as number | null) ?? null;
     const pts = g.trajectory.map((tp) => ({
       season: seasonLabel(tp.season),
       age: tp.age,
@@ -499,7 +832,7 @@ function SkaterView({ p }: { p: PlayerDetail }) {
 
       <div className="panel">
         <h2>Player stats</h2>
-        <p className="section-sub">Counted straight from his game events — per 60 minutes, all situations.</p>
+        <p className="section-sub">Counted straight from his game events, per 60 minutes, all situations.</p>
         <div className="metric-grid">
           {INDIV.filter((m) => STAT_KEYS.includes(m.key)).map((m) => {
             const d = p.individual[m.key];
@@ -520,10 +853,10 @@ function SkaterView({ p }: { p: PlayerDetail }) {
       </div>
 
       <div className="panel">
-        <h2>{p.gen ? "Skill trajectory & seasons" : "By season — click a stat to chart it"}</h2>
+        <h2>{p.gen ? "Skill trajectory & seasons" : "By season: click a stat to chart it"}</h2>
         {p.gen && (
           <p className="section-sub">
-            Where his skills have been and where they&apos;re heading — or click any stat in the table to
+            Where his skills have been and where they&apos;re heading, or click any stat in the table to
             chart it season by season.
           </p>
         )}
@@ -590,7 +923,7 @@ function SkaterView({ p }: { p: PlayerDetail }) {
         <div className="viz-row">
           {p.heat && (
             <div className="viz-cell">
-              <p className="section-sub">Where he shoots from, both ends folded to one — toggle shot volume, goals, shooting %, and average shot quality (xG). Attacking net at right.</p>
+              <p className="section-sub">Where he shoots from, both ends folded to one. Toggle shot volume, goals, shooting %, and average shot quality (xG); attacking net at right.</p>
               <ShotMap heat={p.heat} />
             </div>
           )}
@@ -739,7 +1072,7 @@ function GoalieView({ p }: { p: GoalieDetail }) {
 
       <div className="panel">
         <h2>Save performance</h2>
-        <p className="section-sub">How he stops the puck vs. the expected-goal value of the shots he faced — percentiles are among goalies. ± is a 95% range.</p>
+        <p className="section-sub">How he stops the puck vs. the expected-goal value of the shots he faced. Percentiles are among goalies; ± is a 95% range.</p>
         <div className="metric-grid">
           {GMETRICS.map((m) => (
             <GoalieBox key={m.key} name={m.name} explain={m.explain} m={p.metric[m.key]} fmt={m.fmt} unit={m.unit} signed={m.signed} ci={m.ci} />
@@ -764,7 +1097,7 @@ function GoalieView({ p }: { p: GoalieDetail }) {
       </div>
 
       <div className="panel">
-        <h2>By season — click a stat to chart it</h2>
+        <h2>By season: click a stat to chart it</h2>
         <div className="chart-wrap">
           <ResponsiveContainer width="100%" height={220}>
             <LineChart data={chartData} margin={{ top: 8, right: 16, bottom: 4, left: -8 }}>
@@ -805,7 +1138,7 @@ function GoalieView({ p }: { p: GoalieDetail }) {
           <h2>Shots faced</h2>
           <div className="viz-row">
             <div className="viz-cell">
-              <p className="section-sub">Where shots came from against him, both ends folded to one — toggle shot volume, goals allowed, goal % (chance a shot from there beat him), and average shot quality. Net at right.</p>
+              <p className="section-sub">Where shots came from against him, both ends folded to one. Toggle shot volume, goals allowed, goal % (chance a shot from there beat him), and average shot quality; net at right.</p>
               <ShotMap heat={p.heat} variant="goalie" />
             </div>
           </div>

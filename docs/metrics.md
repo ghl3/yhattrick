@@ -22,8 +22,9 @@ shown separately and never blended in.
 Two aggregates answer the two different questions people ask:
 
 - **Goals Added /60 (GA/60)** — *how good is he, on equal footing?* His net goal impact per 60
-  vs a league-average player at his position, on a baseline team. Deployment-free; powers the
-  percentiles.
+  above a **replacement-level player** at his position (the same zero WAR uses), split on the card
+  into **Goals Created /60** (offense) + **Goals Prevented /60** (defense). Deployment-free;
+  powers the percentiles.
 - **WAR** — *how much did he actually add this season?* Expected goals with him vs a
   replacement-level player in his slot, accumulated over his **real shifts, linemates, and
   opposition**, converted to wins. Deployment-in; the counting stat.
@@ -64,17 +65,22 @@ Defense      = 5 · [exp(mu_rate)·sigmoid(mu_qual) − exp(mu_rate + def)·sigm
                                                                        [xG erased/60]
 ```
 
-**Goals Added /60** evaluates those equations for the player and differences against his
-position's TOI-weighted average (the "baseline team" — so a league-average F or D is exactly 0),
-pricing xG into goals with κ = the league goals-per-xG from the conversion fit (≈ 1 by
-calibration, applied explicitly):
+**Goals Added /60** evaluates those equations for the player and differences against the
+**replacement archetype's values** at his position (so a freely-available F or D is exactly 0 —
+the same zero point as WAR; ~90% of regulars read positive), pricing xG into goals with κ = the
+league goals-per-xG from the conversion fit (≈ 1 by calibration, applied explicitly):
 
 ```
-GA/60 = [Scoring − Scorinḡ_pos] + κ·[Playmaking − Playmakinḡ_pos] + κ·[Defense − Defensē_pos]
+Goals Created /60   = [Scoring − Scoring_repl] + κ·[Playmaking − Playmaking_repl]
+Goals Prevented /60 = κ·[Defense − Defense_repl]
+Goals Added /60     = Created + Prevented
 ```
 
-PP GA/60 and PK GA/60 are the same construction on the power-play/penalty-kill bucket (PP = own
-scoring + creation above position average; PK = chance value erased above position average).
+PP Goals Created /60 and PK Goals Prevented /60 are the same construction on the power-play /
+penalty-kill bucket, differenced against the **PP/PK replacement archetypes** (the 8–12th
+percentile band among players with real PP/PK minutes — see the WAR section). TOI-weighted
+position means are still computed internally, but only to *rank* players when selecting the
+archetype band (percentile ranks are invariant to the baseline shift).
 
 ## WAR — wins above replacement, over his actual season
 
@@ -136,9 +142,9 @@ Headline row — the complete value summary:
 | Card | What it is | Unit | Zero means |
 |---|---|---|---|
 | **WAR** (latest season) | wins added vs replacement over his actual season | wins | replacement level |
-| **Goals Added /60** | net skill vs a position-average player, baseline team, 5v5 | goals/60 | league-average at position |
-| **PP Goals Added /60** | power-play version | goals/60 | position-average PP player |
-| **PK Goals Added /60** | penalty-kill version | goals/60 | position-average PK player |
+| **Goals Added /60** | net skill above a replacement player, 5v5 (= Created + Prevented) | goals/60 | replacement level |
+| **Goals Created /60** | the offense half: own scoring + chances created | goals/60 | replacement level |
+| **Goals Prevented /60** | the defense half: opponent chance value erased | goals/60 | replacement level |
 
 Attribute rows — the qualities beneath the value:
 
@@ -148,10 +154,13 @@ Attribute rows — the qualities beneath the value:
 | **Shooting** | `(e^shoot − 1) × 100` | % shot volume | vs position/age-typical volume |
 | **Finishing** | `fin` mapped to probability | goals/100 shots | **always shown with ± CI** — honest about a small skill |
 | **Playmaking** | Playmaking formula | xG/60 | creation volume is his; setup danger priced at his position; ± CI |
-| **Defense** | Defense formula | xG erased/60 | volume + danger suppression combined |
-| **Projected GA/60** | next season: last state + aging curve | goals/60 | labeled projection; uncertainty widens |
-| **WAR (window)** | GAR summed over all fitted seasons | wins | the career-window counting stat |
+| **Defense** | Defense formula | xG erased/60 | volume + danger suppression combined; vs position average |
+| **PP Goals Created /60** | PP scoring + creation above the PP replacement archetype | goals/60 | replacement PP regular |
+| **PK Goals Prevented /60** | PK chance value erased above the PK replacement archetype | goals/60 | replacement PK regular |
 | **Penalties** | production model (drawn − taken) × V | goals/60 | not yet inside WAR |
+
+(The one-season projection still feeds the trajectory chart's dashed segment; it is no longer a
+card. Window WAR lives in the WAR card's drill-down.)
 
 All rate copy reads **per 60**, and card units are **real-world rates**: the value formulas are
 evaluated in the league-average environment (`value_env` — the TOI-weighted mean of teammate,
@@ -200,9 +209,10 @@ aging curve are the planned upgrade path.)
 - Skills are **shrunk estimates** (empirical-Bayes priors): small samples pull toward the
   position average — that's the honest read, and it's why low-TOI cards grey out rather than
   showing noise as skill.
-- GA/60 is a **vs-average** comparison and WAR a **vs-replacement** total — they answer different
-  questions and won't rank identically (a durable average player can out-WAR a brilliant
-  part-timer).
+- GA/60 is a **vs-replacement rate** (skill on equal footing) and WAR a **vs-replacement total**
+  (skill × actual ice time) — they won't rank identically (a durable decent player can out-WAR a
+  brilliant part-timer). Skill attribute cards (Shooting, Finishing, Defense) reference position/
+  age norms instead — the baseline each card uses is stated on the card.
 - A roster's WAR does not sum exactly to team wins — replacement level and goals-per-win are
   league-calibrated constants, not team accounting identities.
 - The model validates out-of-sample (held-out-season harness, model doc §7): skill reads carry

@@ -16,22 +16,22 @@ const pctVol = (v: number) => `${v >= 0 ? "+" : ""}${Math.round(v)}%`;
 const svFmt = (v: number) => v.toFixed(3).replace(/^0/, ""); // .915
 
 // metric columns per view: generative player-card metrics vs raw on-ice / individual rates.
-// Cards + Skills mirror the player-page card layout (docs/metrics.md); zero = position average
-// (WAR: zero = replacement level).
+// Cards + Skills mirror the player-page card layout (docs/metrics.md); value cards are vs a
+// REPLACEMENT-level player at the position (skill cards vs position/age norms).
 type MetricCol = { key: keyof PlayerRow; label: string; title: string; fmt: (v: number) => string };
 const VIEWS: Record<View, MetricCol[]> = {
   cards: [
-    { key: "war", label: "WAR", title: "Wins above replacement, latest season — his actual stints, linemates, and opposition; 0 = replacement level", fmt: num2 },
-    { key: "ga60", label: "GA/60", title: "Goals Added per 60 vs a league-average player at his position, on a baseline team (5v5)", fmt: num2s },
-    { key: "pp_ga60", label: "PP GA/60", title: "Power-play Goals Added per 60 vs a position-average PP player", fmt: num2s },
-    { key: "pk_ga60", label: "PK GA/60", title: "Penalty-kill Goals Added per 60 (chance value erased above position average)", fmt: num2s },
-    { key: "pen_net60", label: "Pen", title: "Net penalty goals per 60 (drawn − taken, priced in goals) — production model, not yet inside WAR", fmt: num2 },
+    { key: "war", label: "WAR", title: "Wins above replacement over his actual season (stints, linemates, opposition); 0 = replacement level", fmt: num2 },
+    { key: "ga60", label: "GA/60", title: "Goals Added per 60 above a replacement-level player at his position (5v5)", fmt: num2s },
+    { key: "pp_ga60", label: "PP GC/60", title: "Power-play goals created per 60 above a replacement PP regular", fmt: num2s },
+    { key: "pk_ga60", label: "PK GP/60", title: "Penalty-kill goals prevented per 60 above a replacement PK regular", fmt: num2s },
+    { key: "pen_net60", label: "Pen", title: "Net penalty goals per 60 (drawn − taken, priced in goals); production model, not yet inside WAR", fmt: num2 },
   ],
   skills: [
-    { key: "gen_scoring", label: "Scoring", title: "Goals from his own shots per 60 at 5v5: shot volume × shot danger × finishing", fmt: num2 },
+    { key: "gen_scoring", label: "Scoring", title: "Inferred goal rate from his own shots per 60 at 5v5, as if on an average team", fmt: num2 },
     { key: "gen_shooting", label: "Shooting", title: "Shot volume vs a position/age-typical player (% more or fewer shots)", fmt: pctVol },
     { key: "gen_finishing", label: "Finishing", title: "Goals per 100 shots above what his shot locations predict, for his position and age", fmt: num2s },
-    { key: "gen_playmaking", label: "Playmaking", title: "Extra chances teammates get with him on the ice, per 60, in expected goals", fmt: num2 },
+    { key: "gen_playmaking", label: "Playmaking", title: "Inferred rate of extra chances he creates for teammates per 60 (expected goals), as if on an average team", fmt: num2 },
     { key: "gen_defense", label: "Defense", title: "Opponent chance value erased per 60 (volume + danger suppression)", fmt: num2 },
   ],
   onice: [

@@ -60,7 +60,7 @@ const rosterColumns = (team: string): ColumnDef<PlayerRow>[] => {
     },
     {
       header: "GA/60", id: "ga60", accessorFn: (p) => p.ga60 ?? null,
-      meta: { title: "Goals Added per 60 vs a league-average player at his position (5v5, baseline team)" },
+      meta: { title: "Goals Added per 60 above a replacement-level player at his position (5v5)" },
       cell: (c) => {
         const p = c.row.original;
         return p.ga60 == null ? <span className="metric-cell muted">—</span> : (

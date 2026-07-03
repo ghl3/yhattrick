@@ -361,3 +361,25 @@ table.xg-metrics td.win { font-weight: 700; color: var(--accent-deep); }
 .xg-imp-bar span { display: block; height: 100%; background: var(--accent-deep); border-radius: 4px; }
 .xg-imp-val { text-align: right; font-family: var(--mono); color: var(--muted); }
 @media (max-width: 560px) { .xg-imp-row { grid-template-columns: 130px 1fr 40px; } }
+
+/* ── card drill-down (click a card: it flips over and enlarges to a detail view) ── */
+.metric-box.has-detail { cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s; }
+.metric-box.has-detail:hover { border-color: var(--accent); box-shadow: 0 3px 12px rgba(47, 108, 176, 0.14); transform: translateY(-1px); }
+.flip-overlay { position: fixed; inset: 0; z-index: 50; background: rgba(15, 35, 55, 0); transition: background 0.4s; display: flex; align-items: center; justify-content: center; padding: 20px; perspective: 1600px; }
+.flip-overlay.on { background: rgba(15, 35, 55, 0.45); }
+.flip-inner { position: relative; width: min(560px, 92vw); transform-style: preserve-3d; transform-origin: center; transition: transform 0.55s cubic-bezier(0.35, 0.1, 0.25, 1); }
+.flip-front, .flip-back { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--panel); box-shadow: 0 12px 40px rgba(10, 30, 50, 0.3); backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+.flip-front { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.flip-back { transform: rotateY(180deg); max-height: 84vh; overflow-y: auto; }
+.flip-back-body { padding: 10px 16px 16px; }
+.flip-back-body > .mb-val { font-size: 22px; }
+.flip-close { border: 0; background: none; font-size: 20px; line-height: 1; color: inherit; opacity: 0.65; cursor: pointer; padding: 0 0 0 10px; }
+.flip-close:hover { opacity: 1; }
+.modal-body { font-size: 12.5px; line-height: 1.55; color: var(--text); }
+.modal-body p { margin: 8px 0 0; }
+.modal-body .modal-note { color: var(--muted); font-size: 11.5px; }
+table.eq { width: 100%; margin: 10px 0 2px; border-collapse: collapse; font-size: 12.5px; }
+table.eq td { padding: 4px 6px; border-bottom: 1px solid var(--accent-soft); }
+table.eq td.num { text-align: right; font-family: var(--mono); white-space: nowrap; }
+table.eq tr.eq-sum td { border-top: 2px solid var(--border); font-weight: 600; }
+table.eq tr.eq-res td { font-weight: 700; color: var(--accent-deep); border-bottom: 0; }

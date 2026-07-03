@@ -8,15 +8,19 @@ plain-JSON — JAX stays in this experimental group).
 WHAT IT COMPUTES (per player)
   current-skill attribute values — the fit's effective values (last drift state + position offset
     + aging curve at his latest-season age), re-expressed in card units;
-  GA/60 (baseline team) — evaluate the model's closed-form production equations at the player's
-    effective params and subtract the TOI-weighted position mean, so a league-average player at
-    his position is exactly 0:
-        GA/60 = [sc − sc̄_pos] + κ·[pm − p̄m_pos] + κ·[df − d̄f_pos]
+  GA/60 (vs replacement) — evaluate the model's closed-form production equations at the player's
+    effective params and subtract the REPLACEMENT archetype's values (same zero point as WAR), so
+    a freely-available player at his position is exactly 0 and regulars read positive:
+        created/60   = [sc − sc_repl] + κ·[pm − pm_repl]
+        prevented/60 = κ·[df − df_repl]
+        GA/60        = created + prevented
     with sc/pm/df from the player_values formulas (docs/generative_model.md §2) and κ = league
-    goals-per-xG from the conversion fit (≈1 by Σp=Σgoals; applied explicitly). PP/PK analogues
-    from the MA bucket.
+    goals-per-xG from the conversion fit (≈1 by Σp=Σgoals; applied explicitly). PP (created) and
+    PK (prevented) analogues from the MA bucket vs the PP/PK archetypes. TOI-weighted position
+    means are still computed, but only to RANK players for the archetype band (ranks are
+    baseline-invariant).
   trajectory — per-season values: that season's drift states + that season's age through the same
-    formulas (baseline held at the current position means so seasons are comparable);
+    formulas (baseline held at the current replacement level so seasons are comparable);
   projection — the fit's projected params → values → GA/60 (same baselines);
   WAR — Σ over his REAL stints of [E(GF−GA | actual lineup, with him) − E(… | him → replacement)],
     over EV + PP/PK, ÷ GOALS_PER_WIN. The rate model's exponential-additive form makes each swap
@@ -443,6 +447,32 @@ def build(fit_path=None):
             for g, mv in m.items():
                 repl_meta[ctx_key].setdefault(g, {})[blk] = mv
 
+    # replacement VALUE levels (per-60, position-mapped): the archetypes' own modeled production.
+    # Displayed card values are differenced against THESE — the same zero point WAR uses — so a
+    # freely-available player reads 0 and regulars read positive. The position-mean versions above
+    # exist only to rank players for the band (ranks are invariant to the baseline shift).
+    zero = np.zeros(n)
+    ti_r = {"isD": t["isD"], "qshoot_eff": repl_params["qs"], "qdef_eff": repl_params["qd"]}
+    r_sc, r_pm, r_df = values_at(fit, ti_r, "ev", repl_params["sh"], repl_params["cr"],
+                                 repl_params["df"], repl_params["fin"], n_def=5)
+    ti_pp = {"isD": t["isD"], "qshoot_eff": repl_params["pp_qs"], "qdef_eff": repl_params["qd"]}
+    r_ppsc, r_pppm, _ = values_at(fit, ti_pp, "ma", repl_params["pp_sh"], repl_params["pp_cr"],
+                                  zero, repl_params["pp_fin"], n_def=4)
+    ti_pk = {"isD": t["isD"], "qshoot_eff": zero, "qdef_eff": repl_params["pk_qd"]}
+    _, _, r_pkdf = values_at(fit, ti_pk, "ma", zero, zero, repl_params["pk_df"], zero, n_def=4)
+    rv = {}
+    for g, gm in (("F", t["isD"] < 0.5), ("D", t["isD"] > 0.5)):
+        i0 = int(np.argmax(gm))
+        rv[g] = {"sc": float(r_sc[i0]), "pm": float(r_pm[i0]), "df": float(r_df[i0]),
+                 "pp_sc": float(r_ppsc[i0]), "pp_pm": float(r_pppm[i0]),
+                 "pk_df": float(r_pkdf[i0])}
+    rbase = {g: {"sc": v["sc"], "pm": v["pm"], "df": v["df"]} for g, v in rv.items()}
+    created60 = (sc - r_sc) + kap * (pm - r_pm)
+    prevented60 = kap * (dfv - r_df)
+    ga60 = created60 + prevented60                  # rebind: every displayed GA/60 is vs replacement
+    pp_ga60 = (pp_sc - r_ppsc) + kap * (pp_pm - r_pppm)
+    pk_ga60 = kap * (pk_df - r_pkdf)
+
     # WAR
     rows = war_rows(seasons, idx)
     gsave_map = {int(g["id"]): g["gsave"] for g in fit["goalies"]}
@@ -485,11 +515,30 @@ def build(fit_path=None):
         else:                                               # attacker slots = PP, defender = PK
             gar["pp"] += ga
             gar["pk"] += gd
-        gar_season.setdefault(int(s), np.zeros(n))
-        gar_season[int(s)] += ga + gd
+        gs_ = gar_season.setdefault(int(s), {c: np.zeros(n)
+                                             for c in ("ev_atk", "ev_def", "pp", "pk")})
+        ca, cd = ("ev_atk", "ev_def") if key == "ev" else ("pp", "pk")
+        gs_[ca] += ga
+        gs_[cd] += gd
+
+    def _season_goals(s):
+        gs_ = gar_season.get(s)
+        return sum(gs_.values()) if gs_ else np.zeros(n)
 
     war_total = (gar["ev"] + gar["pp"] + gar["pk"]) / GOALS_PER_WIN
-    war_latest = gar_season.get(last, np.zeros(n)) / GOALS_PER_WIN
+    war_latest = _season_goals(last) / GOALS_PER_WIN
+
+    # card drill-down equation factors — each skill value split into the product/difference the
+    # card modal displays (all exact: the value equals the displayed operation on the factors)
+    env_ev = float((fit.get("value_env") or {}).get("ev") or 1.0)
+    mu_ev_r = fit["strengths"]["ev"]["rate_intercept"]
+    sc_shots60 = env_ev * np.exp(mu_ev_r + t["ev_shoot"])      # Scoring = shots60 × ḡ_mix
+    sc_gps = sc / np.maximum(sc_shots60, EPS)
+    qc_pos_arr = np.where(t["isD"] > 0, fit["qcreate"]["D"], fit["qcreate"]["F"])
+    pm_q = _sigmoid(fit["mu_qual"]["ev"] + qc_pos_arr)          # Playmaking = extra shots × quality
+    pm_extra = pm / np.maximum(pm_q, EPS)
+    df_typ60 = env_ev * 5.0 * np.exp(mu_ev_r) * _sigmoid(fit["mu_qual"]["ev"])
+    df_allowed60 = df_typ60 - dfv                               # Defense = typical − with him
 
     # attribute display transforms
     mq_ev, a_ev, b_ev = fit["mu_qual"]["ev"], fit["conv"]["a"]["ev"], fit["conv"]["b"]["ev"]
@@ -513,6 +562,8 @@ def build(fit_path=None):
     war_el = ev_el & (toi_ev_last >= 12000.0)               # WAR is a counting stat: rank it among
     pcts = {"war": pct_within(war_latest, war_el, t["isD"]),  # that season's REGULARS (≥200 EV min)
             "ga60": pct_within(ga60, ev_el, t["isD"]),
+            "created60": pct_within(created60, ev_el, t["isD"]),
+            "prevented60": pct_within(prevented60, ev_el, t["isD"]),
             "pp_ga60": pct_within(pp_ga60, pp_el, t["isD"]),
             "pk_ga60": pct_within(pk_ga60, pk_el, t["isD"]),
             "scoring": pct_within(sc, ev_el, t["isD"]),
@@ -556,29 +607,35 @@ def build(fit_path=None):
             s_sc, s_pm, s_df = values_at(fit, ti, "ev", np.array([st["shoot"]]),
                                          np.array([st["create"]]), np.array([st["def"]]),
                                          np.array([fe]), n_def=5)
-            g60 = float(ga60_of({"isD": np.array([t["isD"][i]])}, base, s_sc, s_pm, s_df, kap)[0])
+            g60 = float(ga60_of({"isD": np.array([t["isD"][i]])}, rbase, s_sc, s_pm, s_df, kap)[0])
             age_s = t["age"][i] - (t["last_season"][i] - s) if np.isfinite(t["age"][i]) else None
             lsc, lpm, ldf = league_at_age(zs, t["isD"][i])
+            lg60 = float(ga60_of({"isD": np.array([t["isD"][i]])}, rbase, np.array([lsc]),
+                                 np.array([lpm]), np.array([ldf]), kap)[0])
             tr_out.append({"season": s, "age": _num(age_s, 1), "scoring": _num(s_sc[0]),
                            "playmaking": _num(s_pm[0]), "defense": _num(s_df[0]),
                            "ga60": _num(g60),
                            "lg_scoring": _num(lsc), "lg_playmaking": _num(lpm),
-                           "lg_defense": _num(ldf)})
+                           "lg_defense": _num(ldf), "lg_ga60": _num(lg60)})
         proj = None
         pj = projJ.get(int(t["id"][i]))
         if pj:
-            pj_ga = ga60_of({"isD": np.array([t["isD"][i]])}, base,
+            pj_ga = ga60_of({"isD": np.array([t["isD"][i]])}, rbase,
                             np.array([pj["ev_scoring"]]), np.array([pj["ev_playmaking"]]),
                             np.array([pj["ev_defense"]]), kap)[0]
             zt = (t["z_last"][i] + (proj_season - t["last_season"][i]) / AGE_SCALE
                   if np.isfinite(t["age"][i]) and proj_season else 0.0)
             plsc, plpm, pldf = league_at_age(zt, t["isD"][i])
+            plg60 = float(ga60_of({"isD": np.array([t["isD"][i]])}, rbase, np.array([plsc]),
+                                  np.array([plpm]), np.array([pldf]), kap)[0])
             proj = {"season": proj_season, "scoring": _num(pj["ev_scoring"]),
                     "playmaking": _num(pj["ev_playmaking"]), "defense": _num(pj["ev_defense"]),
                     "ga60": _num(pj_ga), "lg_scoring": _num(plsc), "lg_playmaking": _num(plpm),
-                    "lg_defense": _num(pldf)}
+                    "lg_defense": _num(pldf), "lg_ga60": _num(plg60)}
         A = {"war": {"v": _num(war_latest[i], 2), "pct": _num(pcts["war"][i], 0)},
              "ga60": {"v": _num(ga60[i]), "pct": _num(pcts["ga60"][i], 0)},
+             "created60": {"v": _num(created60[i]), "pct": _num(pcts["created60"][i], 0)},
+             "prevented60": {"v": _num(prevented60[i]), "pct": _num(pcts["prevented60"][i], 0)},
              "pp_ga60": {"v": _num(pp_ga60[i]), "pct": _num(pcts["pp_ga60"][i], 0)},
              "pk_ga60": {"v": _num(pk_ga60[i]), "pct": _num(pcts["pk_ga60"][i], 0)},
              "scoring": {"v": _num(sc[i]), "pct": _num(pcts["scoring"][i], 0)},
@@ -587,15 +644,30 @@ def build(fit_path=None):
                            "pct": _num(pcts["finishing"][i], 0)},
              "playmaking": {"v": _num(pm[i]), "se": _num(pm_se[i]), "pct": _num(pcts["playmaking"][i], 0)},
              "defense": {"v": _num(dfv[i]), "pct": _num(pcts["defense"][i], 0)}}
+        gs_last = gar_season.get(last)
         players_out[int(t["id"][i])] = {
             "pos": "D" if t["isD"][i] > 0 else "F", "age": _num(t["age"][i], 1),
             "last_season": int(t["last_season"][i]),
             "attrs": A,
+            # components: the player's own modeled per-60 values (before the replacement baseline
+            # is subtracted) — the card drill-downs rebuild the deltas from these + meta
+            "components": {"pp_scoring": _num(pp_sc[i]), "pp_playmaking": _num(pp_pm[i]),
+                           "pk_defense": _num(pk_df[i]),
+                           "shots60": _num(sc_shots60[i], 1),
+                           "goals_per_shot": _num(sc_gps[i], 4),
+                           "pm_shots60": _num(pm_extra[i], 2),
+                           "pm_xg_per_shot": _num(pm_q[i], 4),
+                           "def_allowed60": _num(df_allowed60[i])},
             "war": {"latest": _num(war_latest[i], 2), "total": _num(war_total[i], 2),
-                    "by_season": {s: _num(g[i] / GOALS_PER_WIN, 2) for s, g in gar_season.items()},
+                    "by_season": {s: _num(sum(g.values())[i] / GOALS_PER_WIN, 2)
+                                  for s, g in gar_season.items()},
                     "ev": _num(gar["ev"][i] / GOALS_PER_WIN, 2),
                     "pp": _num(gar["pp"][i] / GOALS_PER_WIN, 2),
-                    "pk": _num(gar["pk"][i] / GOALS_PER_WIN, 2)},
+                    "pk": _num(gar["pk"][i] / GOALS_PER_WIN, 2),
+                    # latest-season goals above replacement by component (WAR drill-down equation)
+                    **({"goals": {c: _num(gs_last[c][i], 1)
+                                  for c in ("ev_atk", "ev_def", "pp", "pk")}}
+                       if gs_last else {})},
             "trajectory": tr_out, "projection": proj,
             **({"unpriced_goals": {"latest": int(up_last[i]), "window": int(up_window[i]),
                                    "detail": up_detail.get(i, {})}}
@@ -603,7 +675,15 @@ def build(fit_path=None):
 
     out = {"meta": {"fit": fit["_path"], "seasons": seasons, "generated": str(date.today()),
                     "kappa": round(kap, 4), "goals_per_win": GOALS_PER_WIN,
+                    # league conversion at the average 5v5 shot (Finishing drill-down equation)
+                    "lg_goals_per_shot": round(float(p0), 4),
+                    # typical 5-defender share of on-ice xGA/60 (Defense drill-down equation)
+                    "lg_def_xga60": round(float(df_typ60), 3),
                     "replacement": repl_meta, "repl_band_pct": list(REPL_BAND),
+                    # per-60 modeled production of the replacement archetypes — the zero point of
+                    # every card value (the drill-downs difference against these)
+                    "replacement_values": {g: {k: round(v, 4) for k, v in b.items()}
+                                           for g, b in rv.items()},
                     "baselines": {g: {k: round(v, 4) for k, v in b.items()}
                                   for g, b in base.items()},
                     "age_curves": fit["age_curves"], "rw_sd": fit.get("rw_sd"),
