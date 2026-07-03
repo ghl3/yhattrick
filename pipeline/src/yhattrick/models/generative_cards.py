@@ -540,14 +540,26 @@ def build(fit_path=None):
     df_typ60 = env_ev * 5.0 * np.exp(mu_ev_r) * _sigmoid(fit["mu_qual"]["ev"])
     df_allowed60 = df_typ60 - dfv                               # Defense = typical − with him
 
-    # attribute display transforms
+    # attribute display transforms. Displayed skill INCLUDES the player's age and position — the
+    # age curves shape shrinkage, context, and projection, never a display normalizer. The ±
+    # comparisons are against the TOI-weighted POSITION AVERAGE among regulars (no age matching).
     mq_ev, a_ev, b_ev = fit["mu_qual"]["ev"], fit["conv"]["a"]["ev"], fit["conv"]["b"]["ev"]
     qbar = float(np.clip(_sigmoid(mq_ev), EPS, 1 - EPS))     # league-average 5v5 shot quality
     lb = a_ev * float(_logit(np.array([qbar]))[0]) + b_ev
-    p0 = _sigmoid(lb)
-    fin100 = (_sigmoid(lb + t["fin"]) - p0) * 100.0          # goals per 100 shots above baseline
-    fin100_se = p0 * (1 - p0) * t["fin_se"] * 100.0
-    shooting_pct_vol = (np.exp(t["ev_shoot"]) - 1.0) * 100.0  # % shots vs positional baseline
+
+    def _posmean(arr):
+        pv = np.zeros(n)
+        for gm in (t["isD"] < 0.5, t["isD"] > 0.5):
+            pv[gm] = _wmean(arr, t["toi_ev"], ev_el & gm)
+        return pv
+
+    p_his = _sigmoid(lb + t["fin_eff"])                      # his conversion at the average shot
+    p_pos = _posmean(p_his)
+    fin100 = (p_his - p_pos) * 100.0                         # goals/100 above the position average
+    fin100_se = p_his * (1 - p_his) * t["fin_se"] * 100.0
+    shooting_pct_vol = (sc_shots60 / np.maximum(_posmean(sc_shots60), EPS) - 1.0) * 100.0
+    df_posmean = _posmean(dfv)
+    defense_disp = dfv - df_posmean                          # xG erased above the position average
     pm_se = pm * 0.0
     ok = np.abs(np.exp(t["ev_create"]) - 1.0) > 1e-6
     pm_se[ok] = np.abs(pm[ok] * np.exp(t["ev_create"][ok])
@@ -570,7 +582,7 @@ def build(fit_path=None):
             "shooting": pct_within(shooting_pct_vol, ev_el, t["isD"]),
             "finishing": pct_within(fin100, ev_el, t["isD"]),
             "playmaking": pct_within(pm, ev_el, t["isD"]),
-            "defense": pct_within(dfv, ev_el, t["isD"])}
+            "defense": pct_within(defense_disp, ev_el, t["isD"])}
 
     def _num(x, nd=3):
         return None if x is None or (isinstance(x, float) and not np.isfinite(x)) else round(float(x), nd)
@@ -613,10 +625,11 @@ def build(fit_path=None):
             lg60 = float(ga60_of({"isD": np.array([t["isD"][i]])}, rbase, np.array([lsc]),
                                  np.array([lpm]), np.array([ldf]), kap)[0])
             tr_out.append({"season": s, "age": _num(age_s, 1), "scoring": _num(s_sc[0]),
-                           "playmaking": _num(s_pm[0]), "defense": _num(s_df[0]),
+                           "playmaking": _num(s_pm[0]),
+                           "defense": _num(s_df[0] - df_posmean[i]),
                            "ga60": _num(g60),
                            "lg_scoring": _num(lsc), "lg_playmaking": _num(lpm),
-                           "lg_defense": _num(ldf), "lg_ga60": _num(lg60)})
+                           "lg_defense": _num(ldf - df_posmean[i]), "lg_ga60": _num(lg60)})
         proj = None
         pj = projJ.get(int(t["id"][i]))
         if pj:
@@ -629,9 +642,10 @@ def build(fit_path=None):
             plg60 = float(ga60_of({"isD": np.array([t["isD"][i]])}, rbase, np.array([plsc]),
                                   np.array([plpm]), np.array([pldf]), kap)[0])
             proj = {"season": proj_season, "scoring": _num(pj["ev_scoring"]),
-                    "playmaking": _num(pj["ev_playmaking"]), "defense": _num(pj["ev_defense"]),
+                    "playmaking": _num(pj["ev_playmaking"]),
+                    "defense": _num(pj["ev_defense"] - df_posmean[i]),
                     "ga60": _num(pj_ga), "lg_scoring": _num(plsc), "lg_playmaking": _num(plpm),
-                    "lg_defense": _num(pldf), "lg_ga60": _num(plg60)}
+                    "lg_defense": _num(pldf - df_posmean[i]), "lg_ga60": _num(plg60)}
         A = {"war": {"v": _num(war_latest[i], 2), "pct": _num(pcts["war"][i], 0)},
              "ga60": {"v": _num(ga60[i]), "pct": _num(pcts["ga60"][i], 0)},
              "created60": {"v": _num(created60[i]), "pct": _num(pcts["created60"][i], 0)},
@@ -643,7 +657,7 @@ def build(fit_path=None):
              "finishing": {"v": _num(fin100[i], 2), "se": _num(fin100_se[i], 2),
                            "pct": _num(pcts["finishing"][i], 0)},
              "playmaking": {"v": _num(pm[i]), "se": _num(pm_se[i]), "pct": _num(pcts["playmaking"][i], 0)},
-             "defense": {"v": _num(dfv[i]), "pct": _num(pcts["defense"][i], 0)}}
+             "defense": {"v": _num(defense_disp[i]), "pct": _num(pcts["defense"][i], 0)}}
         gs_last = gar_season.get(last)
         players_out[int(t["id"][i])] = {
             "pos": "D" if t["isD"][i] > 0 else "F", "age": _num(t["age"][i], 1),
@@ -657,7 +671,8 @@ def build(fit_path=None):
                            "goals_per_shot": _num(sc_gps[i], 4),
                            "pm_shots60": _num(pm_extra[i], 2),
                            "pm_xg_per_shot": _num(pm_q[i], 4),
-                           "def_allowed60": _num(df_allowed60[i])},
+                           "def_allowed60": _num(df_allowed60[i]),
+                           "def_erased60": _num(dfv[i])},
             "war": {"latest": _num(war_latest[i], 2), "total": _num(war_total[i], 2),
                     "by_season": {s: _num(sum(g.values())[i] / GOALS_PER_WIN, 2)
                                   for s, g in gar_season.items()},
@@ -675,8 +690,9 @@ def build(fit_path=None):
 
     out = {"meta": {"fit": fit["_path"], "seasons": seasons, "generated": str(date.today()),
                     "kappa": round(kap, 4), "goals_per_win": GOALS_PER_WIN,
-                    # league conversion at the average 5v5 shot (Finishing drill-down equation)
-                    "lg_goals_per_shot": round(float(p0), 4),
+                    # position-average conversion per 100 at the average 5v5 shot (Finishing eq.)
+                    "fin_avg_p100": {g: round(float(p_pos[int(np.argmax(gm))]) * 100.0, 2)
+                                     for g, gm in (("F", t["isD"] < 0.5), ("D", t["isD"] > 0.5))},
                     # typical 5-defender share of on-ice xGA/60 (Defense drill-down equation)
                     "lg_def_xga60": round(float(df_typ60), 3),
                     "replacement": repl_meta, "repl_band_pct": list(REPL_BAND),

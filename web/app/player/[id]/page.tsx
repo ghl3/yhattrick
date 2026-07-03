@@ -503,8 +503,10 @@ function GenCards({ p }: { p: PlayerDetail }) {
       {replNote}
     </>
   );
+  const c = g.components;
+  const rawDef = c?.def_erased60 ?? null;   // xG erased before the position-average re-centering
   const evRows = (which: "all" | "created" | "prevented", resLabel: string, res: number | null) => {
-    if (!rv || A.scoring.v == null || A.playmaking.v == null || A.defense.v == null) return null;
+    if (!rv || A.scoring.v == null || A.playmaking.v == null || rawDef == null) return null;
     const rows = [];
     if (which !== "prevented") {
       rows.push({ label: `scoring: his ${num2(A.scoring.v)} − replacement ${num2(rv.sc)}`,
@@ -513,8 +515,8 @@ function GenCards({ p }: { p: PlayerDetail }) {
                   val: sg2(kap * (A.playmaking.v - rv.pm)) });
     }
     if (which !== "created") {
-      rows.push({ label: `defense: (${num2(A.defense.v)} − ${num2(rv.df)}) × κ`,
-                  val: sg2(kap * (A.defense.v - rv.df)) });
+      rows.push({ label: `defense: (his ${num2(rawDef)} erased − replacement ${num2(rv.df)}) × κ`,
+                  val: sg2(kap * (rawDef - rv.df)) });
     }
     rows.push({ label: resLabel, val: sg2(res), kind: "res" as const });
     return rows;
@@ -552,7 +554,6 @@ function GenCards({ p }: { p: PlayerDetail }) {
       {kapNote}{replNote}
     </>
   );
-  const c = g.components;
   const ppDetail = c && rv && c.pp_scoring != null && c.pp_playmaking != null ? (
     <>
       <p>His modeled power-play production per 60 minus a replacement PP regular&apos;s. The
@@ -592,7 +593,7 @@ function GenCards({ p }: { p: PlayerDetail }) {
       )}
       <p>
         The goal rate you&apos;d expect from him at 5-on-5 with league-average linemates and
-        opponents. Volume is his shooting skill ({sg1(A.shooting.v)}% vs a typical {posN} his age);
+        opponents. Volume is his shooting skill ({sg1(A.shooting.v)}% vs an average {posN});
         goals per shot comes from his shot locations and finishing ({sg2(A.finishing.v)} per 100
         shots). An absolute rate, not a difference from a baseline player.
       </p>
@@ -603,31 +604,37 @@ function GenCards({ p }: { p: PlayerDetail }) {
       {c?.shots60 != null && typShots != null && A.shooting.v != null && (
         <Eq rows={[
           { label: "his inferred shots /60", val: num1(c.shots60) },
-          { label: `÷ a typical ${posN} his age`, val: num1(typShots) },
+          { label: `÷ an average ${posN}`, val: num1(typShots) },
           { label: "Shooting, % shot volume", val: `${sg1(A.shooting.v)}%`, kind: "res" },
         ]} />
       )}
       <p>
-        His unblocked-shot rate vs a typical {posN} his age, after the model removes linemates,
+        His unblocked-shot rate vs the average {posN}, after the model removes linemates,
         competition, score state, and arena.
+      </p>
+      <p className="modal-note">
+        His age is part of his skill, not the baseline: comparisons are never age-adjusted.
       </p>
     </>
   );
-  const lgp = meta?.lg_goals_per_shot;
+  const finAvg = meta?.fin_avg_p100?.[g.pos];
   const finishingDetail = (
     <>
-      {lgp != null && A.finishing.v != null && (
+      {finAvg != null && A.finishing.v != null && (
         <Eq rows={[
-          { label: "his goals per 100 average shots", val: num2(lgp * 100 + A.finishing.v) },
-          { label: "− league conversion per 100", val: num2(lgp * 100) },
+          { label: "his goals per 100 average-location shots", val: num2(finAvg + A.finishing.v) },
+          { label: `− an average ${posN}`, val: num2(finAvg) },
           { label: "Finishing, goals /100 shots", val: sg2(A.finishing.v), kind: "res" },
         ]} />
       )}
       <p>
-        Whether his shots beat goalies more often than their locations predict, vs a
-        typical {posN} his age. {A.finishing.se != null &&
+        Whether his shots beat goalies more often than an average {posN}&apos;s from the same
+        locations. {A.finishing.se != null &&
           `The ±${(1.96 * A.finishing.se).toFixed(2)} range is a 95% interval. `}Finishing is a
         small, slow-to-reveal skill, and estimates are shrunk toward typical when shots are few.
+      </p>
+      <p className="modal-note">
+        His age is part of his skill, not the baseline: comparisons are never age-adjusted.
       </p>
     </>
   );
@@ -653,20 +660,22 @@ function GenCards({ p }: { p: PlayerDetail }) {
   );
   const defenseDetail = (
     <>
-      {c?.def_allowed60 != null && A.defense.v != null && (
+      {c?.def_allowed60 != null && rawDef != null && A.defense.v != null && (
         <Eq rows={[
-          { label: "on-ice xGA /60 share, typical defenders", val: num2(c.def_allowed60 + A.defense.v) },
+          { label: "on-ice xGA /60 share, neutral defenders", val: num2(c.def_allowed60 + rawDef) },
           { label: "− with him defending", val: num2(c.def_allowed60) },
-          { label: "Defense, xG erased /60", val: sg2(A.defense.v), kind: "res" },
+          { label: "xG he erases /60", val: sg2(rawDef), kind: "sum" },
+          { label: `− what an average ${posN} erases`, val: sg2(rawDef - A.defense.v) },
+          { label: "Defense, vs position average", val: sg2(A.defense.v), kind: "res" },
         ]} />
       )}
       <p>
-        Opponent chance value he erases per 60 at 5-on-5, vs an average {posN}: shots suppressed
-        plus danger suppressed, in expected goals. Positive means an above-average defender.
+        Opponent chance value he erases per 60 at 5-on-5, above the average {posN}: shots
+        suppressed plus danger suppressed, in expected goals.
       </p>
       <p className="modal-note">
-        Goals Prevented /60 is this same skill priced in goals (× κ) and re-zeroed at replacement
-        level.
+        Goals Prevented /60 prices the erased chances in goals (× κ) and re-zeroes at replacement
+        level. His age is part of his skill, not the baseline: comparisons are never age-adjusted.
       </p>
     </>
   );
@@ -696,8 +705,8 @@ function GenCards({ p }: { p: PlayerDetail }) {
       <h2>Player Card</h2>
       <p className="section-sub">
         Skills inferred from every shot and shift by our generative model, isolated from linemates,
-        competition, arena, and age. Values are his skill now ({seasonLbl}); value cards are vs a
-        replacement-level player. Click any card for the full definition with his numbers.
+        competition, and arena. Values are his skill now ({seasonLbl}), age included; value cards
+        are vs a replacement-level player. Click any card for the full definition with his numbers.
       </p>
       <div className="metric-grid">
         <ValueBox name="WAR" group={p.group} v={A.war.v} pctile={A.war.pct} fmt={num2} unit="wins" detail={warDetail}
@@ -713,15 +722,15 @@ function GenCards({ p }: { p: PlayerDetail }) {
         <OniceBox name="Scoring" group={p.group} v={A.scoring.v} pctile={A.scoring.pct} fmt={num2} unit="goals/60" signed={false} detail={scoringDetail}
           explain="Inferred goal rate from his own shots per 60 at 5-on-5, as if on an average team." />
         <OniceBox name="Shooting" group={p.group} v={A.shooting.v} pctile={A.shooting.pct} fmt={num1} unit="% shot volume" signed detail={shootingDetail}
-          explain="Shot volume vs a typical player at his position and age." />
+          explain="Shot volume vs an average player at his position." />
         <OniceBox name="Finishing" group={p.group} v={A.finishing.v} pctile={A.finishing.pct} fmt={num2} unit="goals/100 shots"
           se={A.finishing.se ?? undefined} signed detail={finishingDetail}
-          explain="Goals above what his shot locations predict, per 100 shots." />
+          explain="Goals per 100 shots above an average player at his position, from the same shot locations." />
         <OniceBox name="Playmaking" group={p.group} v={A.playmaking.v} pctile={A.playmaking.pct} fmt={num2} unit="xG/60"
           se={A.playmaking.se ?? undefined} signed={false} detail={playmakingDetail}
           explain="Inferred rate of extra chances he creates for teammates, in expected goals per 60 at 5-on-5, as if on an average team." />
         <OniceBox name="Defense" group={p.group} v={A.defense.v} pctile={A.defense.pct} fmt={num2} unit="xG/60" signed detail={defenseDetail}
-          explain="Opponent chance value erased per 60 at 5-on-5, vs an average defender at his position." />
+          explain="Opponent chance value erased per 60 at 5-on-5, above an average player at his position." />
         <ValueBox name="PP Goals Created /60" group={p.group} v={A.pp_ga60.v} pctile={A.pp_ga60.pct} fmt={num2} unit="goals/60" detail={ppDetail}
           explain="Power-play offense per 60 above a replacement PP regular." />
         <ValueBox name="PK Goals Prevented /60" group={p.group} v={A.pk_ga60.v} pctile={A.pk_ga60.pct} fmt={num2} unit="goals/60" detail={pkDetail}

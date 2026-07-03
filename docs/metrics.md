@@ -14,10 +14,13 @@ creates for teammates, who suppresses, how dangerous the shots are, who converts
 one latent skill per player for each of those verbs. Cards are those **broad latent qualities**;
 observed events (assists, blocks) are evidence that grounds them, never cards themselves.
 
-Every skill is isolated from **linemates, competition, arena scorekeeping, and age** (the model
+Every skill is isolated from **linemates, competition, and arena scorekeeping** (the model
 carries explicit terms for each), and is a **current-skill** read: the player's latest-season
-drift state + his position's baseline + the league aging curve at his age today. Projections are
-shown separately and never blended in.
+drift state + his position's baseline + the league aging curve at his age today. **Displayed
+skills always include the player's age** — the aging curves exist for shrinkage, context, and
+projection, never to normalize a displayed metric. Where a card shows a ± comparison, the baseline
+is the TOI-weighted position average (or the replacement archetype for value cards), with no age
+matching. Projections are shown separately and never blended in.
 
 Two aggregates answer the two different questions people ask:
 
@@ -151,10 +154,10 @@ Attribute rows — the qualities beneath the value:
 | Card | Source | Unit | Notes |
 |---|---|---|---|
 | **Scoring** | `shots60 · p_goal` | goals/60 | volume × danger × finishing |
-| **Shooting** | `(e^shoot − 1) × 100` | % shot volume | vs position/age-typical volume |
-| **Finishing** | `fin` mapped to probability | goals/100 shots | **always shown with ± CI** — honest about a small skill |
+| **Shooting** | shot volume ÷ position average − 1 | % shot volume | vs the average player at his position, no age matching |
+| **Finishing** | conversion (age included) − position average, at the league-average shot | goals/100 shots | **always shown with ± CI** — honest about a small skill |
 | **Playmaking** | Playmaking formula | xG/60 | creation volume is his; setup danger priced at his position; ± CI |
-| **Defense** | Defense formula | xG erased/60 | volume + danger suppression combined; vs position average |
+| **Defense** | Defense formula − position average | xG erased/60 | volume + danger suppression; vs the average player at his position |
 | **PP Goals Created /60** | PP scoring + creation above the PP replacement archetype | goals/60 | replacement PP regular |
 | **PK Goals Prevented /60** | PK chance value erased above the PK replacement archetype | goals/60 | replacement PK regular |
 | **Penalties** | production model (drawn − taken) × V | goals/60 | not yet inside WAR |

@@ -29,10 +29,10 @@ const VIEWS: Record<View, MetricCol[]> = {
   ],
   skills: [
     { key: "gen_scoring", label: "Scoring", title: "Inferred goal rate from his own shots per 60 at 5v5, as if on an average team", fmt: num2 },
-    { key: "gen_shooting", label: "Shooting", title: "Shot volume vs a position/age-typical player (% more or fewer shots)", fmt: pctVol },
-    { key: "gen_finishing", label: "Finishing", title: "Goals per 100 shots above what his shot locations predict, for his position and age", fmt: num2s },
+    { key: "gen_shooting", label: "Shooting", title: "Shot volume vs an average player at his position (% more or fewer shots; no age adjustment)", fmt: pctVol },
+    { key: "gen_finishing", label: "Finishing", title: "Goals per 100 shots above an average player at his position, from the same shot locations", fmt: num2s },
     { key: "gen_playmaking", label: "Playmaking", title: "Inferred rate of extra chances he creates for teammates per 60 (expected goals), as if on an average team", fmt: num2 },
-    { key: "gen_defense", label: "Defense", title: "Opponent chance value erased per 60 (volume + danger suppression)", fmt: num2 },
+    { key: "gen_defense", label: "Defense", title: "Opponent chance value erased per 60 above an average player at his position (volume + danger)", fmt: num2 },
   ],
   onice: [
     { key: "ev_xgf60", label: "xGF/60", title: "5v5 on-ice expected goals for / 60", fmt: num2 },

@@ -536,7 +536,7 @@ def main() -> None:
         gen_meta = {k: gm.get(k) for k in ("kappa", "goals_per_win", "latest_season",
                                            "age_curves", "rw_sd", "seasons", "replacement",
                                            "replacement_values", "repl_band_pct",
-                                           "lg_goals_per_shot", "lg_def_xga60")}
+                                           "fin_avg_p100", "lg_def_xga60")}
         print(f"[export] gen_cards: {len(gen_players)} players (fit: {gm.get('fit', '?')})")
     else:
         print("[export] no gen_cards.json — details ship without the gen block "

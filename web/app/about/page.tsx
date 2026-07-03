@@ -31,7 +31,7 @@ export default function About() {
             <strong>Player cards.</strong>{" "}
             For each skater, the skills a generative model infers from every shot and shift —
             scoring, shooting, finishing, playmaking, defense — isolated from linemates,
-            competition, arena scorekeeping, and age, plus two aggregates: <strong>Goals Added
+            competition, and arena scorekeeping, plus two aggregates: <strong>Goals Added
             per 60</strong> (skill vs a replacement-level player on equal footing) and{" "}
             <strong>WAR</strong> (wins added over his actual season vs a replacement player). Each
             card shows units and a within-position percentile.
@@ -78,9 +78,10 @@ export default function About() {
           produces shots and goals — who shoots, who creates for teammates, who suppresses, how
           dangerous the shots are, who converts them — and fits one latent skill per player for each
           of those verbs, jointly across five seasons. Every skill is isolated from linemates,
-          competition, arena scorekeeping, and age (the model carries explicit terms for each), and
-          each player gets a per-season skill trajectory with a shared aging curve and a next-season
-          projection. Assists (primary and secondary) anchor playmaking; the model validates against
+          competition, and arena scorekeeping (the model carries explicit terms for each), and each
+          player gets a per-season skill trajectory with a shared aging curve and a next-season
+          projection. Displayed skills always include the player&apos;s age — the aging curve is for
+          understanding and projection, never a normalizer. Assists (primary and secondary) anchor playmaking; the model validates against
           held-out seasons before we publish it.
         </p>
         <p>

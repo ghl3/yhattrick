@@ -354,7 +354,7 @@ export interface GenBlock {
     pp_scoring: number | null; pp_playmaking: number | null; pk_defense: number | null;
     shots60?: number | null; goals_per_shot?: number | null;
     pm_shots60?: number | null; pm_xg_per_shot?: number | null;
-    def_allowed60?: number | null;
+    def_allowed60?: number | null; def_erased60?: number | null;
   };
   war: {
     latest: number | null; total: number | null; ev: number | null; pp: number | null; pk: number | null;
@@ -375,7 +375,7 @@ export interface GenMeta {
   replacement_values?: Record<"F" | "D", { sc: number; pm: number; df: number;
                                            pp_sc: number; pp_pm: number; pk_df: number }>;
   repl_band_pct?: [number, number];
-  lg_goals_per_shot?: number;   // league conversion at the average 5v5 shot (Finishing equation)
+  fin_avg_p100?: Record<"F" | "D", number>; // position-avg conversion /100 (Finishing equation)
   lg_def_xga60?: number;        // typical 5-defender share of on-ice xGA/60 (Defense equation)
   age_curves: Record<string, { coef: Record<string, number>; d_offset: number;
                                curve: Record<"F" | "D", Record<string, number>> }>;
