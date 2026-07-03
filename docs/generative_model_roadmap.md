@@ -150,14 +150,14 @@ and GA/60 −0.50. Investigating the clash surfaced three distinct issues:
   builder and fit assume 5/4 today), so it is a load-bearing change: synthetic tests + holdout
   validation before shipping. Empty-net shots need care in Stages 2–3 (no goalie ⇒ exclude from
   quality/conversion; price EN conversion empirically). Extends #17.
-- **TODO(4) Shot `strength` labels are HOME-oriented — re-orient and clean the MA quality pool.**
-  Found 2026-07-03: `shots_onice.strength` is "{home}v{away}", NOT shooter-relative (Draisaitl's
-  away-PP goals read "4v5"). The stint-side rate buckets are unaffected (side chosen by actual
-  skater counts), but the QUALITY/CONVERSION shot pools classify by label: the symmetric
-  {5v4, 4v5} set means genuine shorthanded shots (high-danger rushes) sit inside the MA quality
-  pool with the `pp` context flag. Fix at next refit: classify shots by shooter-relative
-  strength (is_home + sit counts) — true-SH shots move out of the MA pool (→ TODO(3)'s SH
-  bucket or exclusion); re-run holdout + audit to measure the effect on mu_qual/qshoot.
+- **TODO(4) Shot `strength` labels are HOME-oriented — consumer hazard (model pools VERIFIED
+  clean).** Found 2026-07-03: `shots_onice.strength` is "{home}v{away}", NOT shooter-relative
+  (Draisaitl's away-PP goals read "4v5"). Verified: the model's quality/conversion pools are
+  UNAFFECTED — `quality_creator_rows` requires the shooter's actual side to have 5 skaters (pool
+  count 76,296 ≈ true-PP 75,763), and the rate buckets pick sides from skater counts. The hazard
+  is downstream consumers classifying by raw label (the first unpriced-goals pass did exactly
+  this). Documented in metrics.md + the data-sources memory; consider renaming the column or
+  adding a shooter-relative `sit` column at the next stints regeneration.
 
 ## Tier 2 — valuable, after Tier 1
 
