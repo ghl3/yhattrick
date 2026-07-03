@@ -365,7 +365,8 @@ function GenCards({ p }: { p: PlayerDetail }) {
       </p>
       <div className="metric-grid">
         <ValueBox name={`WAR ${seasonLbl}`} group={p.group} v={A.war.v} pctile={A.war.pct} fmt={num2} unit="wins"
-          explain="Wins above replacement: expected goals with him vs a replacement-level player in his slot, added up over his actual shifts, linemates, and opposition this season." />
+          rankNote={g.unpriced_goals?.latest ? `+${g.unpriced_goals.latest} goals WAR doesn't price (SH/EN/6v5)` : undefined}
+          explain="Wins above replacement: expected goals with him vs a replacement-level player in his slot, added up over his actual shifts, linemates, and opposition this season — at 5v5 and on the power play / penalty kill. Percentile is among that season's regulars (200+ EV minutes). Goals in other situations (shorthanded, empty-net, extra-attacker) aren't priced yet and are noted when a player has them." />
         <ValueBox name="Goals Added /60" group={p.group} v={A.ga60.v} pctile={A.ga60.pct} fmt={num2} unit="goals/60"
           explain="Net goals per 60 vs a league-average player at his position on a baseline team, at 5-on-5 — scoring, playmaking, and defense priced on one goals scale." />
         <ValueBox name="PP Goals Added /60" group={p.group} v={A.pp_ga60.v} pctile={A.pp_ga60.pct} fmt={num2} unit="goals/60"

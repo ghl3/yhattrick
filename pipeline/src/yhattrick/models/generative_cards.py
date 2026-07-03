@@ -46,6 +46,7 @@ import json
 from datetime import date
 
 import numpy as np
+import pandas as pd
 
 from .. import config as C
 from .generative_model import (_load_stints, _sigmoid, _zone, creator_mix, marginal_goal_prob,
@@ -56,6 +57,34 @@ MA_GATE = 2400.0            # seconds (40 min) — PP/PK card eligibility
 GOALS_PER_WIN = 6.0         # goals → wins conversion (v1 constant)
 REPL_BAND = (8.0, 12.0)     # GA/60 percentile band defining the replacement archetype
 EPS = 1e-9
+PRICED = ("5v5", "5v4")     # attack strengths the model prices; goals elsewhere are surfaced as
+                            # `unpriced_goals` (SH offense, empty-net, extra-attacker, 5v3, OT…)
+
+
+def unpriced_goals(seasons, idx, last):
+    """Per-player goals in strengths the model does NOT price (transparency for the card: e.g.
+    Hyman 2025-26 scored 14 of 31 goals shorthanded / empty-net / at 6v5 — real goals, invisible
+    to WAR until roadmap 5d-TODO(3) lands). Returns (latest, window, latest per-strength detail)."""
+    n = len(idx)
+    up_last = np.zeros(n, dtype=np.int64)
+    up_window = np.zeros(n, dtype=np.int64)
+    detail = {}
+    for s in seasons:
+        f = C.PROCESSED / "shots_onice" / f"{int(s)}.parquet"
+        if not f.exists():
+            continue
+        df = pd.read_parquet(f, columns=["shooter_id", "strength", "goal"])
+        g = df[(df.goal == 1) & (~df.strength.isin(PRICED))]
+        for sid, stl in zip(g.shooter_id, g.strength):
+            i = idx.get(int(sid))
+            if i is None:
+                continue
+            up_window[i] += 1
+            if int(s) == last:
+                up_last[i] += 1
+                d = detail.setdefault(i, {})
+                d[str(stl)] = d.get(str(stl), 0) + 1
+    return up_last, up_window, detail
 
 
 def _logit(p):
@@ -150,14 +179,15 @@ def values_at(fit, t, key, sh, cr, df, fin_eff, n_def):
     goals-per-shot is the creator-class + Beta marginal (mirrors player_values in the model)."""
     mu = fit["strengths"][key]["rate_intercept"]
     mq = fit["mu_qual"]["ev" if key == "ev" else "ma"]
+    env = float((fit.get("value_env") or {}).get(key) or 1.0)   # average-environment factor
     qc_pos = np.where(t["isD"] > 0, fit["qcreate"]["D"], fit["qcreate"]["F"])
     shots = np.exp(mu + sh)
     g0, gF, gD = gbar_classes(fit, key, t["qshoot_eff"], fin_eff)
     w0, wf, wd = creator_mix(fit["strengths"][key]["psi0"], t["isD"], key)
-    sc = shots * (w0 * g0 + wf * gF + wd * gD)
-    pm = 4.0 * np.exp(mu) * (np.exp(cr) - 1.0) * _sigmoid(mq + qc_pos)
+    sc = env * shots * (w0 * g0 + wf * gF + wd * gD)
+    pm = env * 4.0 * np.exp(mu) * (np.exp(cr) - 1.0) * _sigmoid(mq + qc_pos)
     base = np.exp(mu) * _sigmoid(mq)
-    dfv = n_def * (base - np.exp(mu + df) * _sigmoid(mq + t["qdef_eff"]))
+    dfv = env * n_def * (base - np.exp(mu + df) * _sigmoid(mq + t["qdef_eff"]))
     return sc, pm, dfv
 
 
@@ -409,6 +439,8 @@ def build(fit_path=None):
     gsave_map = {int(g["id"]): g["gsave"] for g in fit["goalies"]}
     gar = {"ev": np.zeros(n), "pp": np.zeros(n), "pk": np.zeros(n)}
     gar_season = {}
+    last = int(max(seasons))
+    toi_ev_last = np.zeros(n)                               # latest-season 5v5 seconds (WAR pct gate)
     for (s, key) in sorted(rows):
         r = rows[(s, key)]
         rctx = fit["strengths"][key]["rate_ctx"]
@@ -435,6 +467,8 @@ def build(fit_path=None):
         gcl = gbar_classes(fit, key, t["qshoot_eff"], fin_s, season=s)
         repl["g0"], repl["gF"], repl["gD"] = gbar_classes(fit, key, r_qs, r_fin, season=s)
         repl["kq"] = _sigmoid(mq + r_qd) / max(_sigmoid(mq), EPS)
+        if key == "ev" and int(s) == last:
+            np.add.at(toi_ev_last, r["atk"], np.broadcast_to(r["dur"][:, None], r["atk"].shape))
         ga, gd, _ = war_bucket(r, n, sh, cr, df_, gcl, kq, r["gsave"], cx, repl,
                                fit["strengths"][key]["psi0"], t["isD"])
         if key == "ev":
@@ -446,7 +480,6 @@ def build(fit_path=None):
         gar_season[int(s)] += ga + gd
 
     war_total = (gar["ev"] + gar["pp"] + gar["pk"]) / GOALS_PER_WIN
-    last = int(max(seasons))
     war_latest = gar_season.get(last, np.zeros(n)) / GOALS_PER_WIN
 
     # attribute display transforms
@@ -468,7 +501,8 @@ def build(fit_path=None):
 
     pp_el = t["toi_pp"] >= MA_GATE
     pk_el = t["toi_pk"] >= MA_GATE
-    pcts = {"war": pct_within(war_latest, ev_el, t["isD"]),
+    war_el = ev_el & (toi_ev_last >= 12000.0)               # WAR is a counting stat: rank it among
+    pcts = {"war": pct_within(war_latest, war_el, t["isD"]),  # that season's REGULARS (≥200 EV min)
             "ga60": pct_within(ga60, ev_el, t["isD"]),
             "pp_ga60": pct_within(pp_ga60, pp_el, t["isD"]),
             "pk_ga60": pct_within(pk_ga60, pk_el, t["isD"]),
@@ -496,6 +530,8 @@ def build(fit_path=None):
                                   np.array([blk("ev_create")]), np.array([blk("ev_def")]),
                                   fe, n_def=5)
         return float(lsc[0]), float(lpm[0]), float(ldf[0])
+
+    up_last, up_window, up_detail = unpriced_goals(seasons, idx, last)
 
     players_out = {}
     for i in range(n):
@@ -551,7 +587,10 @@ def build(fit_path=None):
                     "ev": _num(gar["ev"][i] / GOALS_PER_WIN, 2),
                     "pp": _num(gar["pp"][i] / GOALS_PER_WIN, 2),
                     "pk": _num(gar["pk"][i] / GOALS_PER_WIN, 2)},
-            "trajectory": tr_out, "projection": proj}
+            "trajectory": tr_out, "projection": proj,
+            **({"unpriced_goals": {"latest": int(up_last[i]), "window": int(up_window[i]),
+                                   "detail": up_detail.get(i, {})}}
+               if up_window[i] > 0 else {})}
 
     out = {"meta": {"fit": fit["_path"], "seasons": seasons, "generated": str(date.today()),
                     "kappa": round(kap, 4), "goals_per_win": GOALS_PER_WIN,

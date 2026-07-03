@@ -21,12 +21,14 @@ import json
 from collections import defaultdict
 
 import numpy as np
+import pandas as pd
 
 from .. import config as C
 from . import generative_cards as GC
 from .generative_model import _load_stints, _sigmoid, _zone, EV_STRENGTHS, MA_STRENGTHS, AGE_SCALE
 
 E_TOL = 0.02                # league ΣE vs actual: |residual| beyond this is a model finding
+SCALE_TOL = 0.15            # card units vs reality: model F-mean scoring vs actual F goals/60
 
 
 def rows_with_teams(season, key, strengths, dual, idx, gteam):
@@ -138,6 +140,7 @@ def run_audit(season=None, fit_path=None):
     joint = defaultdict(float)
     net_model = defaultdict(float)
     E_tot = {}
+    f_hours = 0.0                                            # F slot-hours (value-scale check)
     for key, strengths, dual in (("ev", EV_STRENGTHS, True), ("ma", MA_STRENGTHS, False)):
         r = rows_with_teams(S, key, strengths, dual, idx, gteam)
         if r is None:
@@ -174,6 +177,7 @@ def run_audit(season=None, fit_path=None):
         E_tot[key] = float(E.sum())
         if key == "ev":
             np.add.at(toi25, r["atk"], r["dur"][:, None] + np.zeros((1, 5)))
+            f_hours = float(np.sum(r["dur"] * (t["isD"] < 0.5)[r["atk"]].sum(1)) / 3600.0)
         for tm, e in zip(r["ateam"], E):
             net_model[tm] += e
         for tm, e in zip(r["dteam"], E):
@@ -190,6 +194,21 @@ def run_audit(season=None, fit_path=None):
         for tm, v in zip(r["dteam"], E_def_repl - E):
             joint[tm] += v
         print(f"  [{key}] rows {len(E):,}  ΣE[GF] {E.sum():.0f}")
+
+    # value-scale check: card units must be real-world per-60 rates (the Hyman-case finding —
+    # the reference environment ran ≈2× low before value_env)
+    shots = pd.read_parquet(C.PROCESSED / "shots_onice" / f"{S}.parquet")
+    ev5 = shots[shots.strength == "5v5"]
+    isF_of = dict(zip(t["id"].tolist(), (t["isD"] < 0.5).tolist()))
+    gF = int(sum(1 for sid, gl in zip(ev5.shooter_id, ev5.goal) if gl == 1 and isF_of.get(int(sid), True)))
+    actual_f60 = gF / max(f_hours, 1e-9)                     # f_hours captured in the EV pass
+    gate = (t["toi_ev"] >= GC.EV_GATE) & (t["isD"] < 0.5)
+    model_f60 = float(np.average(sc[gate], weights=t["toi_ev"][gate]))
+    ratio = model_f60 / max(actual_f60, 1e-9)
+    print(f"\n── A0. card value scale ({S}): model F-mean scoring {model_f60:.3f} vs actual "
+          f"F goals/60 {actual_f60:.3f}  (×{ratio:.2f}; tolerance ±{SCALE_TOL:.0%})")
+    if abs(ratio - 1.0) > SCALE_TOL:
+        print("   [FINDING] card units are off real-world scale — check value_env")
 
     print(f"\n── A. league calibration ({S}) — no correction factors anywhere")
     tot_E = sum(E_tot.values())

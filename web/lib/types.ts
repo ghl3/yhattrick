@@ -351,6 +351,8 @@ export interface GenBlock {
   };
   trajectory: GenTrajPoint[];
   projection: (Omit<GenTrajPoint, "age"> & { season: number | null }) | null;
+  // goals in strengths the model doesn't price yet (shorthanded, empty-net, extra-attacker, 5v3…)
+  unpriced_goals?: { latest: number; window: number; detail?: Record<string, number> } | null;
 }
 export interface GenMeta {
   kappa: number; goals_per_win: number; latest_season: number;

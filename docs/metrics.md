@@ -153,9 +153,20 @@ Attribute rows — the qualities beneath the value:
 | **WAR (window)** | GAR summed over all fitted seasons | wins | the career-window counting stat |
 | **Penalties** | production model (drawn − taken) × V | goals/60 | not yet inside WAR |
 
-All rate copy reads **per 60**. Every card shows a **within-position percentile** (forwards vs
-forwards, defensemen vs defensemen) among players clearing the ice-time gates (5v5: 100 min;
-PP/PK: 40 min); below the gate the card greys out. Confidence intervals (± = 1.96·SE) are shown
+All rate copy reads **per 60**, and card units are **real-world rates**: the value formulas are
+evaluated in the league-average environment (`value_env` — the TOI-weighted mean of teammate,
+defender, and context effects over the fit's own latest-season rows), so a card's goals/60 is on
+the same scale as the rates you'd count from the games (the audit asserts this against actual
+league scoring). Every card shows a **within-position percentile** (forwards vs forwards,
+defensemen vs defensemen) among players clearing the ice-time gates (5v5: 100 min; PP/PK: 40 min);
+below the gate the card greys out. **WAR's percentile pool is that season's regulars** (≥200 EV
+minutes in the season) — WAR is a counting stat, and ranking a full-timer against part-timers
+whose totals are ≈0 by ice time alone would read as a skill ranking it isn't.
+
+**What WAR doesn't price (yet):** goals scored shorthanded, into empty nets, with the goalie
+pulled, at 5v3, or in 3v3 OT — the model prices 5v5 and the 5v4 power play. Players with such
+goals get an explicit note on the WAR card (e.g. Hyman 2025-26: 14 of his 31 goals — six of them
+shorthanded). Pricing these situations is roadmap 5d-TODO(3). Confidence intervals (± = 1.96·SE) are shown
 where the model computes them (Finishing always; Playmaking via its creation-volume SE).
 
 ## The trajectory chart

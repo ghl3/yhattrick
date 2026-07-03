@@ -643,3 +643,27 @@ def test_ma_anchor_weight_and_prior_shrink_fixed_unit_split():
     Rm, gtm, gcm, create_true, *_ = _synth_create(P=40, n=30000, seed=5)
     mixed = G.fit_rate_create(Rm, gtm, gcm, shots_per_goal=4)
     assert np.corrcoef(mixed["create"], create_true)[0, 1] > 0.8
+
+
+def test_value_environment_and_scaling():
+    """value_environment = TOI-weighted mean row lift beyond the shooter's own term; player_values
+    scales linearly in it (card units = real-world per-60 rates)."""
+    R, gt, gc, *_ = _synth_create(P=20, n=5000, seed=13)
+    fit = G.fit_rate_create(R, gt, gc, shots_per_goal=16)
+    fit["R"] = R
+    env = G.value_environment(fit)
+    eta = (fit["create"][R["team_idx"]].sum(1) + fit["def"][R["def_idx"]].sum(1)
+           + R["Xctx"] @ fit["beta"])
+    hand = float(np.sum(R["dur"] * np.exp(eta)) / R["dur"].sum())
+    assert abs(env - hand) < 1e-9
+
+    rate = {"intercept": np.log(8.0), "psi0": -1.3, "create": np.full(5, 0.3),
+            "shoot": np.zeros(5), "def": np.full(5, -0.1)}
+    qual = {"mu_qual": {"ev": -2.3}, "qshoot": np.zeros(5), "qcreate": np.zeros(5),
+            "qdef": np.zeros(5)}
+    conv = {"a": {"ev": 1.1}, "b": {"ev": 0.2}, "fin": np.zeros(5)}
+    v1 = G.player_values({"ev": dict(rate)}, qual, conv, list(range(5)))
+    v2 = G.player_values({"ev": dict(rate, value_env=2.0)}, qual, conv, list(range(5)))
+    for k in ("scoring", "playmaking", "defense", "own_shots"):
+        assert np.allclose(v2["ev"][k], 2.0 * v1["ev"][k])
+    assert np.allclose(v2["ev"]["creator_share"], v1["ev"]["creator_share"])   # shares don't scale

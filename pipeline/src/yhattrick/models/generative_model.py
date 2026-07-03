@@ -1552,6 +1552,7 @@ def effective_params(rates, qual, conv, players, agepos, last_season, target=Non
         cm = _coef_map(rate.get("ctx_names"), rate["beta"])
         rates_eff[key] = {
             "intercept": rate["intercept"], "psi0": rate["psi0"],
+            "value_env": rate.get("value_env"),
             "shoot": rate["shoot_last"] + _block_curve(cm, "shoot", z, isD),
             "create": rate["create_last"] + _block_curve(cm, "create", z, isD),
             "def": rate["def_last"] + _block_curve(cm, "def", z, isD),
@@ -1605,6 +1606,37 @@ def marginal_goal_prob(qbar, s, a, b, fin=0.0):
     lx = np.log(x / (1.0 - x))
     f = _sigmoid(a * lx + b + np.atleast_1d(np.asarray(fin, dtype=np.float64))[:, None])
     return np.sum(_GL_W[None, :] * f, axis=1)
+
+
+def value_environment(rate, season=None):
+    """TOI-weighted mean ENVIRONMENT multiplier over the fit's own rows: everything in a row's
+    log-rate beyond the intercept and the shooter's own effective shoot — teammates' create
+    states, defenders' def states, the create/def age-position columns, game context, and season
+    offsets. The value formulas multiply by this so card units are real-world per-60 rates: the
+    reference cell (teammates at zero) runs ≈2× low because the league-average teammate's
+    EFFECTIVE create is ≈ +0.17, not 0 (the 2026-07 Hyman-case audit). `season` restricts to that
+    season's rows (the current-skill environment); arena states are excluded (≈0 mean by ridge)."""
+    R = rate["R"]
+    own = {"shoot_D", "shoot_zF", "shoot_z2F", "shoot_zD", "shoot_z2D"}
+    beta = np.asarray(rate["beta"], dtype=np.float64).copy()
+    for j, nm in enumerate(R.get("ctx_names") or []):
+        if nm in own:
+            beta[j] = 0.0
+    cr, df = np.asarray(rate["create"]), np.asarray(rate["def"])
+    dm = R.get("def_mask")
+    if dm is None:
+        dm = np.ones_like(R["def_idx"], dtype=np.float64)
+    if "team_unit" in R:
+        eta = cr[R["team_unit"]].sum(1) + (df[R["def_unit"]] * dm).sum(1)
+    else:
+        eta = cr[R["team_idx"]].sum(1) + (df[R["def_idx"]] * dm).sum(1)
+    eta = eta + R["Xctx"] @ beta
+    w = np.asarray(R["dur"], dtype=np.float64)
+    if season is not None and "season_row" in R:
+        m = np.asarray(R["season_row"]) == season
+        if m.any():
+            eta, w = eta[m], w[m]
+    return float(np.sum(w * np.exp(eta)) / max(np.sum(w), 1e-9))
 
 
 def creator_mix(psi0, isD, key):
@@ -1663,12 +1695,13 @@ def player_values(rates, qual, conv, players, isD=None):
             p_own = _sigmoid(a * lq + b + fin)
             p_own0 = _sigmoid(a * lq + b)
         base = np.exp(ml) * _sigmoid(mq)
-        out[key] = {
-            "scoring": shots * p_own,                          # own shots, converted to goals
-            "finishing": shots * (p_own - p_own0),             # goals above xG-implied conversion
-            "own_xg": shots * _sigmoid(mq + qshoot), "own_shots": shots,
-            "playmaking": N_TM * np.exp(ml) * (np.exp(cr) - 1.0) * _sigmoid(mq + qcreate),
-            "defense": n_def * (base - np.exp(ml + defn) * _sigmoid(mq + qdef)),
+        env = float(rate.get("value_env") or 1.0)            # average-environment factor (see
+        out[key] = {                                         # value_environment; 1.0 = reference)
+            "scoring": env * shots * p_own,                    # own shots, converted to goals
+            "finishing": env * shots * (p_own - p_own0),       # goals above xG-implied conversion
+            "own_xg": env * shots * _sigmoid(mq + qshoot), "own_shots": env * shots,
+            "playmaking": env * N_TM * np.exp(ml) * (np.exp(cr) - 1.0) * _sigmoid(mq + qcreate),
+            "defense": env * n_def * (base - np.exp(ml + defn) * _sigmoid(mq + qdef)),
             "creator_share": np.exp(cr) / (np.exp(rate["psi0"]) + np.exp(cr) + (N_TM - 1)),
         }
     return out
@@ -1992,6 +2025,11 @@ def run(seasons, count_model="poisson", spg_scale=1.0, warm=True, reexport=False
     players, agepos, Q = M["players"], M["agepos"], M["Q"]
     rates, spg, qual, conv, last_season = M["rates"], M["spg"], M["qual"], M["conv"], M["last_season"]
 
+    # average-environment factor per bucket (card units = real-world per-60 rates)
+    for key in rates:
+        rates[key]["value_env"] = value_environment(rates[key], season=int(max(seasons)))
+    print("  value environment: " + "  ".join(f"{k} ×{rates[k]['value_env']:.2f}" for k in rates))
+
     # effective per-player params (last state + position offset + curve) → values
     eff_rates, eff_qual, eff_conv = effective_params(rates, qual, conv, players, agepos, last_season)
     vals = player_values(eff_rates, eff_qual, eff_conv, players, isD=agepos["isD"])
@@ -2061,6 +2099,7 @@ def _save(seasons, players, rates, qual, conv, vals, ppcs, spg, agepos, last_sea
         curves["gsave_age"] = {"z": ccm.get("g_z", 0.0), "z2": ccm.get("g_z2", 0.0)}
     out = {"model": "generative_model_ev_ma", "seasons": list(seasons),
            "count_model": ev.get("count_model"), "nb_r": ev.get("r"), "shots_per_goal": spg,
+           "value_env": {k: r.get("value_env") for k, r in rates.items()},
            "quality_intercept": float(qual["intercept"]), "mu_qual": qual["mu_qual"],
            "beta_s": qual["beta_s"],
            "qcreate": {"F": float(qc[0]), "D": float(qc[1]),
