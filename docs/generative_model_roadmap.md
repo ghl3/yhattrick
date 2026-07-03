@@ -140,16 +140,29 @@ and GA/60 −0.50. Investigating the clash surfaced three distinct issues:
   includes ~370 part-timers whose WAR ≈ 0 by TOI alone, so a full-timer at −0.07 reads "1st
   percentile in hockey". Gate the WAR percentile on latest-season EV TOI (≥200 min); card copy
   says "among regulars".
-- **TODO(3) Unpriced-strength offense.** 8 of Hyman's 31 goals (26%) came in situations the
-  model excludes — 4 empty-net, 2 at 6v5, one 5v3, one 3v3 OT (league-wide the unpriced share of
-  goals is 15.5% after orientation correction (true SHG ≈ 200/season — matches the real league), see TODO(4)). Two stages: (a) transparency —
-  SHIPPED: per-player `unpriced_goals` exported to cards + noted on the WAR card; (b) model
-  extension — add SH-attack (4v5) and extra-attacker (6v5/5v6) rows priced with EV skills +
-  fitted global environment offsets (no new per-player params — SH samples are sparse). This
-  requires an ATTACKER mask in the rate design (a 4-skater attack has 3 teammates — the row
-  builder and fit assume 5/4 today), so it is a load-bearing change: synthetic tests + holdout
-  validation before shipping. Empty-net shots need care in Stages 2–3 (no goalie ⇒ exclude from
-  quality/conversion; price EN conversion empirically). Extends #17.
+- **TODO(3) Situational pricing layer — design AGREED 2026-07-03, not started.** League-wide
+  15.5% of goals are unpriced (Hyman 2025-26: 8 of 31; true SHG ≈ 200/season). Transparency is
+  SHIPPED (per-player `unpriced_goals` on the WAR card). The extension design, per the case-study
+  evidence (docs/notes/2026-07-03): NOT a new skill bucket — a situational pricing layer that
+  REUSES trusted skills, because the tail can't identify per-player parameters (SH volume repeats
+  at only 0.33 y/y; 3v3 samples are tiny):
+  1. **Skills reused, none added**: SH attack / 4v4 / 3v3 / extra-attacker → the player's EV
+     shoot/create/def; 5v3 → his PP skills. Each situation class gets one fitted GLOBAL
+     environment offset (a handful of well-identified scalars).
+  2. **Conversion per situation**: real-goalie classes go through the existing quality/conversion
+     stages; EMPTY-NET shots stay out of Stages 2–3 (no goalie ⇒ xG semantics break) and convert
+     at an empirically measured league EN rate — the one deliberately "basic" piece, because an
+     ENG is deployment + opportunity, not a modelable skill.
+  3. **WAR gains a fourth component** (EV | PP | PK | Situational) via the same stint-swap
+     engine, with per-class ΣE-vs-actual audit lines (zero-correction-factor standard). GA/60
+     stays a 5v5 skill rate. Note: this prices EN value at EXPECTED value (league rate ×
+     deployment), not realized goals — consistent with the rest of WAR; the transparency note
+     stays so realized-vs-expected is always visible.
+  Phases by risk: (1) 5v3/4v3 attack → MA bucket context flag (defender mask already handles
+  short defenses — cheap); (2) the ATTACKER mask (3v3 has 2 teammates, extra-attacker has 5) —
+  load-bearing: row builders + rate fit + variable-size Plackett–Luce anchor masking; synthetic
+  fixtures then a holdout-validated refit; (3) WAR rows + audit + card component. ~1 focused day
+  + one warm-started refit. Extends #17.
 - **TODO(4) Shot `strength` labels are HOME-oriented — consumer hazard (model pools VERIFIED
   clean).** Found 2026-07-03: `shots_onice.strength` is "{home}v{away}", NOT shooter-relative
   (Draisaitl's away-PP goals read "4v5"). Verified: the model's quality/conversion pools are
