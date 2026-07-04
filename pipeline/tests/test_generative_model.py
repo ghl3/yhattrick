@@ -14,6 +14,7 @@ from yhattrick import config as C
 from yhattrick.models import generative_model as G
 from yhattrick.models import generative_data as D
 from yhattrick.models import generative_likelihood as L
+from yhattrick.models import generative_export as E
 
 
 # ── synthetic builders (shooter-resolved: 1 focal shooter + 4 teammates + 5 defenders per row) ────
@@ -102,7 +103,7 @@ def _synth_conversion(P=60, Gg=20, n=200000, seed=5):
     gsave = rng.normal(0, 0.20, Gg); gsave -= gsave.mean()
     shooter = rng.integers(0, P, n)
     goalie = rng.integers(0, Gg, n)
-    xg = np.clip(rng.beta(1.0, 12.0, n), G.EPS, 1 - G.EPS)
+    xg = np.clip(rng.beta(1.0, 12.0, n), L.EPS, 1 - L.EPS)
     lxg = np.log(xg / (1 - xg))
     eta = a_true * lxg + b_true + fin[shooter] + gsave[goalie]
     y = rng.binomial(1, 1.0 / (1.0 + np.exp(-eta))).astype(float)
@@ -214,7 +215,7 @@ def test_player_values_merge_signs():
     qual = {"mu_qual": {"ev": mq}, "qshoot": np.zeros(P),
             "qcreate": np.array([0.0, 0.5, 0.0]), "qdef": np.zeros(P)}
     conv = {"a": {"ev": 1.0}, "b": {"ev": 0.0}, "fin": np.zeros(P)}      # identity conversion
-    vals = G.player_values({"ev": rate}, qual, conv, [0, 1, 2])
+    vals = E.player_values({"ev": rate}, qual, conv, [0, 1, 2])
     v = vals["ev"]
     assert v["scoring"][0] == max(v["scoring"])          # player 0 (high shoot) tops scoring
     assert v["playmaking"][1] == max(v["playmaking"])    # player 1 (high create + qcreate) tops playmaking
@@ -229,7 +230,7 @@ def test_finishing_lifts_scoring():
             "def": np.zeros(P), "psi0": -0.5}
     qual = {"mu_qual": {"ev": mq}, "qshoot": np.zeros(P), "qcreate": np.zeros(P), "qdef": np.zeros(P)}
     conv = {"a": {"ev": 1.0}, "b": {"ev": 0.0}, "fin": np.array([0.5, 0.0])}
-    v = G.player_values({"ev": rate}, qual, conv, [0, 1])["ev"]
+    v = E.player_values({"ev": rate}, qual, conv, [0, 1])["ev"]
     assert v["scoring"][0] > v["scoring"][1]             # better finisher scores more on identical shots
     assert v["finishing"][0] > 0 and abs(v["finishing"][1]) < 1e-9
 
@@ -427,7 +428,7 @@ def test_conversion_season_offsets_reconcile():
     shooter = rng.integers(0, P, n)
     goalie = rng.integers(0, Gg, n)
     season = np.where(np.arange(n) < n // 2, 2021, 2022)
-    xg = np.clip(rng.beta(1.0, 12.0, n), G.EPS, 1 - G.EPS)
+    xg = np.clip(rng.beta(1.0, 12.0, n), L.EPS, 1 - L.EPS)
     lxg = np.log(xg / (1 - xg))
     eta = 1.1 * lxg - 0.15 + off_true * (season == 2022) + fin[shooter] + gsave[goalie]
     y = rng.binomial(1, 1.0 / (1.0 + np.exp(-eta))).astype(float)
@@ -665,8 +666,8 @@ def test_value_environment_and_scaling():
     qual = {"mu_qual": {"ev": -2.3}, "qshoot": np.zeros(5), "qcreate": np.zeros(5),
             "qdef": np.zeros(5)}
     conv = {"a": {"ev": 1.1}, "b": {"ev": 0.2}, "fin": np.zeros(5)}
-    v1 = G.player_values({"ev": dict(rate)}, qual, conv, list(range(5)))
-    v2 = G.player_values({"ev": dict(rate, value_env=2.0)}, qual, conv, list(range(5)))
+    v1 = E.player_values({"ev": dict(rate)}, qual, conv, list(range(5)))
+    v2 = E.player_values({"ev": dict(rate, value_env=2.0)}, qual, conv, list(range(5)))
     for k in ("scoring", "playmaking", "defense", "own_shots"):
         assert np.allclose(v2["ev"][k], 2.0 * v1["ev"][k])
     assert np.allclose(v2["ev"]["creator_share"], v1["ev"]["creator_share"])   # shares don't scale

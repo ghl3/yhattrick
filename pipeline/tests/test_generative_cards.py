@@ -168,7 +168,7 @@ def test_band_mean_context_matched():
 
 def test_marginal_goal_prob_matches_mc_and_limit():
     """Quadrature marginal ≡ Monte-Carlo Beta average; s→∞ degenerates to the point evaluation."""
-    from yhattrick.models.generative_model import marginal_goal_prob
+    from yhattrick.models.generative_likelihood import marginal_goal_prob
     rng = np.random.default_rng(0)
     a, b = 1.14, 0.27
     for qbar, s, fin in ((0.087, 14.2, 0.0), (0.05, 14.2, 0.2), (0.15, 8.0, -0.3)):
