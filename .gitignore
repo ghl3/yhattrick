@@ -27,6 +27,7 @@ web/dist/
 .scratch_*.png
 audit_join.py
 .claude/
+.vscode/
 *.log
 
 # local secrets (R2 credentials, etc.)
