@@ -29,8 +29,12 @@ experimental = ["jax>=0.4"]
 testpaths = ["tests"]
 addopts = "-q"
 
+# Code style: black at 100 cols (the codebase's natural width). Black discovers this file by walking
+# up from any file under pipeline/, so `make format`, the CLI, and the VS Code Black Formatter all use
+# the same settings. target-version pins the grammar to the minimum supported Python (3.11).
 [tool.black]
 line-length = 100
+target-version = ["py311"]
 
 [build-system]
 requires = ["hatchling"]
