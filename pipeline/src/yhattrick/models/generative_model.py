@@ -98,18 +98,15 @@ from __future__ import annotations
 import argparse
 import json
 from collections import defaultdict
-from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 from scipy import sparse
 from scipy.optimize import minimize
 from scipy.sparse.linalg import splu
-from scipy.special import betaincinv
 
 import jax
 import jax.numpy as jnp
-from jax.scipy.special import gammaln, logsumexp
 
 from .. import config as C
 from .player_onice_model import roster_names
@@ -117,57 +114,22 @@ from .player_onice_model import roster_names
 # fit and the WAR consumers (cards, audit) share ONE orientation implementation. The fit uses
 # load_stints + base_ctx; the WAR consumers import side_rows from generative_features directly.
 from .generative_features import RATE_CTX, base_ctx, load_stints as _load_stints
+# The likelihood itself — parameter layouts, the sparse design + prior-precision matrices, the three
+# objective factories, and the math primitives / prior constants — lives in generative_likelihood.
+# This module builds the design arrays from the fact tables and minimizes the objective it returns.
+from .generative_likelihood import (
+    PRIOR_SD_SHOOT, PRIOR_SD_CREATE, PRIOR_SD_QSHOOT, PRIOR_SD_QCREATE,
+    PRIOR_SD_FIN, PRIOR_SD_GSAVE, PRIOR_SD_FLOOR, MIN_SHOTS_FIN_EST, MIN_SHOTS_GSAVE_EST,
+    RW_SD_SHOOT, RW_SD_CREATE, RW_SD_DEF, AGE_PEAK, AGE_SCALE, DENSE_H_MAX, EPS,
+    SNIFF_MIN_TOI, SNIFF_MIN_TOI_MA, N_TM, N_DEF_EV, N_DEF_MA, MAX_DEF,
+    EV_STRENGTHS, MA_STRENGTHS, ALL_STRENGTHS, ARENA_SD, ARENA_RW_SD,
+    RateLayout, QualLayout, ConvLayout, RateHypers, QualHypers,
+    _sigmoid, _se_from_hessian, _build_X, _build_conv_X, _rate_penalty,
+    marginal_goal_prob, creator_mix,
+    make_rate_nll, make_quality_nll, make_conversion_nll,
+)
 
 jax.config.update("jax_enable_x64", True)   # float64: stable optimization + Hessian
-
-# Ridge = a Normal(0, prior_sd²) prior on each player effect; ridge precision = 1/prior_sd². The
-# create and qcreate loadings are PER-TEAMMATE effects (each loads on the 4 rows where the player is a
-# teammate), so they get a tighter prior than the shooter's own loading.
-PRIOR_SD_SHOOT = 0.30       # shoot_j / def_d on the log shot-rate scale
-PRIOR_SD_CREATE = 0.12      # create_p — per-teammate lift; tighter (noisier high-leverage effect,
-                            #   curbs high-minute pull on the shared teammate-shot volume)
-PRIOR_SD_QSHOOT = 0.20      # qshoot_j / qdef_d on the logit-xG scale
-PRIOR_SD_QCREATE = 0.25     # qcreate_c — danger the single (latent) creator adds
-# The conversion-stage prior SDs (fin, gsave) are NOT hand-set: a pre-calculation stage estimates the
-# per-player TALENT SD from the data each fit (empirical Bayes; see estimate_conversion_prior_sds) and
-# feeds it in as the ridge prior. These two constants are only the FALLBACK values used when too few
-# high-volume shooters/goalies clear the min-shots gate to estimate the talent SD reliably. Whether
-# estimated or fallback, from the fit's perspective they are FIXED prior hyperparameters — not
-# model-fitted parameters like fin_j/gsave_g themselves.
-PRIOR_SD_FIN = 0.20         # FALLBACK finishing prior SD (logit-conversion scale) if unestimable
-PRIOR_SD_GSAVE = 0.20       # FALLBACK goalie   prior SD (logit-conversion scale, <0 good) if unestimable
-PRIOR_SD_FLOOR = 0.02       # floor on the estimated prior SD (keeps the ridge finite if talent var ≈ 0)
-MIN_SHOTS_FIN_EST = 200     # min shots for a shooter to enter the finishing talent-SD estimate
-MIN_SHOTS_GSAVE_EST = 1000  # min shots faced for a goalie to enter the save talent-SD estimate
-# The goal-assist credit up-weight (Stage 1) is NOT a constant: it is the per-strength shots-per-goal
-# ratio, computed from the data each run (`spg` in run()). We observe a shot's creator only on the
-# ~1-in-16 Fenwick shots that ARE goals (via the primary assist), so weighting each observed
-# goal-creator by ≈ shots/goal makes it stand in for the shots whose creator we never see
-# (inverse-probability weighting). `--spg-scale` multiplies it for sensitivity checks (A3).
-# Random-walk drift prior SDs (per season, on each block's own scale): a player's per-season state
-# moves N(prev, rw_sd²·gap). Small = states glued across seasons (static model at 0); large = each
-# season fit independently. Hand-set; the EB analogue (estimate within-player drift variance from
-# the data) is a documented follow-up.
-RW_SD_SHOOT = 0.10          # own-shot volume drifts the most (role/deployment changes)
-RW_SD_CREATE = 0.05         # per-teammate creation lift — tighter, like its level prior
-RW_SD_DEF = 0.10
-AGE_PEAK = 27.0             # age basis B(a) = [z, z²], z = (a − AGE_PEAK)/AGE_SCALE; B(27) = 0 so the
-AGE_SCALE = 10.0            #   curve is a deviation from peak-age production (missing DOB ⇒ z = 0)
-DENSE_H_MAX = 8000          # params ≤ this: dense Hessian inverse; above: sparse splu column solves
-EPS = 1e-6
-SNIFF_MIN_TOI = 24000.0     # min on-ice seconds (5v5, ≈400 min) to appear in an EV leaderboard
-SNIFF_MIN_TOI_MA = 2400.0   # min man-advantage seconds (≈40 min, matching the production PP/PK gate)
-N_TM = 4                    # teammates the focal shooter has — the attacking side always has 5 skaters
-                            #   (at EV and on the PP), so this is 4 in every modeled bucket
-N_DEF_EV = 5                # defenders faced at even strength (5v5)
-N_DEF_MA = 4                # defenders faced on the man-advantage (the PK unit has 4)
-MAX_DEF = 5                 # padded defender width; PK rows fill 4 real slots + 1 masked (see def_mask)
-# Strength buckets (Spec-like): the strengths in each, and whether BOTH sides attack (dual, EV) or only
-# the more-skaters side (man-advantage, MA). {5v4,4v5} is ONE PP environment (home/away mirror image);
-# the `home` context column carries the asymmetry, so it is a single PP intercept — extensible later.
-EV_STRENGTHS = ("5v5",)
-MA_STRENGTHS = ("5v4", "4v5")
-ALL_STRENGTHS = EV_STRENGTHS + MA_STRENGTHS
 
 
 # ── data loaders (5v5) ──────────────────────────────────────────────────────────────────────────
@@ -210,12 +172,6 @@ def _game_venues(seasons):
 
 ARENA_MIN_GAMES = 20        # venues with fewer games in the fit window (outdoor/neutral sites)
                             #   get no offset — too few games to estimate one
-ARENA_SD = 0.05             # ridge SD on each (venue, season) state — biases are small, shrink to 0
-                            #   (a nuisance prior; also what identifies the block, so no reference
-                            #   venue is needed)
-ARENA_RW_SD = 0.03          # per-season random-walk SD between a venue's consecutive states —
-                            #   scorer crews persist but do change; stable bias ⇒ states glue into
-                            #   one pooled effect, a crew change ⇒ the data can move it
 
 
 def _arena_index(seasons, min_games=ARENA_MIN_GAMES):
@@ -626,216 +582,6 @@ def conversion_rows(seasons, idx, strengths, agepos=None):
     return out
 
 
-# ── parameter-vector layouts ───────────────────────────────────────────────────────────────────────
-# One source of truth for how each fit's flat θ is sliced into named blocks. The objective, the sparse
-# design used for the SE Hessian, the prior-precision matrix and the SE column-solve all index the same
-# offsets, so they live on the layout rather than being recomputed at each site (a class of drift bug).
-
-@dataclass(frozen=True)
-class RateLayout:
-    """Rate fit θ = [intercept | shoot(NU) | create(NU) | def(NU) | beta(k) | psi0 | arena(n_ar)
-    | q? | log r?]. `n_core` (= PS = 1+3·NU+k) is the SE-Hessian dimension; psi0, arena, q and r sit
-    past it and carry no per-player SE. `block_cols(b, units)` gives the θ columns of block b
-    (0 shoot, 1 create, 2 def) for a set of unit indices."""
-    NU: int
-    k: int
-    n_ar: int = 0
-    has_a2: bool = False
-    nb: bool = False
-
-    @property
-    def PS(self) -> int:            # index of psi0 = width of the SE core
-        return 1 + 3 * self.NU + self.k
-
-    @property
-    def n_core(self) -> int:
-        return self.PS
-
-    @property
-    def QI(self) -> int:            # index of the A2 mixture logit q (valid iff has_a2)
-        return self.PS + 1 + self.n_ar
-
-    @property
-    def n_theta(self) -> int:
-        return self.PS + 1 + self.n_ar + (1 if self.has_a2 else 0) + (1 if self.nb else 0)
-
-    @property
-    def shoot(self) -> slice:
-        return slice(1, 1 + self.NU)
-
-    @property
-    def create(self) -> slice:
-        return slice(1 + self.NU, 1 + 2 * self.NU)
-
-    @property
-    def defence(self) -> slice:
-        return slice(1 + 2 * self.NU, 1 + 3 * self.NU)
-
-    @property
-    def beta(self) -> slice:
-        return slice(1 + 3 * self.NU, self.PS)
-
-    @property
-    def psi0(self) -> int:
-        return self.PS
-
-    @property
-    def arena(self) -> slice:
-        return slice(self.PS + 1, self.PS + 1 + self.n_ar)
-
-    def block_offset(self, b: int) -> int:      # b: 0 shoot, 1 create, 2 def
-        return 1 + b * self.NU
-
-    def block_cols(self, b: int, units):
-        return self.block_offset(b) + np.asarray(units)
-
-
-@dataclass(frozen=True)
-class QualLayout:
-    """Quality fit θ = [mq | qshoot(P) | qcreate(2) | qdef(P) | beta(k) | arena(n_ar)]. qcreate is a
-    position-level pair [F, D]."""
-    P: int
-    k: int
-    n_ar: int = 0
-
-    @property
-    def n_theta(self) -> int:
-        return 3 + 2 * self.P + self.k + self.n_ar
-
-    @property
-    def mq(self) -> int:
-        return 0
-
-    @property
-    def qshoot(self) -> slice:
-        return slice(1, 1 + self.P)
-
-    @property
-    def qcreate(self) -> slice:
-        return slice(1 + self.P, 3 + self.P)
-
-    @property
-    def qdef(self) -> slice:
-        return slice(3 + self.P, 3 + 2 * self.P)
-
-    @property
-    def beta(self) -> slice:
-        return slice(3 + 2 * self.P, 3 + 2 * self.P + self.k)
-
-    @property
-    def arena(self) -> slice:
-        return slice(3 + 2 * self.P + self.k, 3 + 2 * self.P + self.k + self.n_ar)
-
-
-@dataclass(frozen=True)
-class ConvLayout:
-    """Conversion fit θ = [a(S) | b(S) | ctx(kc) | fin(P) | gsave(G)]. a/b are per-strength and
-    unpenalized; fin/gsave carry the empirical-Bayes ridge."""
-    S: int
-    kc: int
-    P: int
-    G: int
-
-    @property
-    def n_theta(self) -> int:
-        return 2 * self.S + self.kc + self.P + self.G
-
-    @property
-    def a(self) -> slice:
-        return slice(0, self.S)
-
-    @property
-    def b(self) -> slice:
-        return slice(self.S, 2 * self.S)
-
-    @property
-    def ctx(self) -> slice:
-        return slice(2 * self.S, 2 * self.S + self.kc)
-
-    @property
-    def fin_off(self) -> int:
-        return 2 * self.S + self.kc
-
-    @property
-    def fin(self) -> slice:
-        return slice(self.fin_off, self.fin_off + self.P)
-
-    @property
-    def gsave(self) -> slice:
-        return slice(self.fin_off + self.P, self.n_theta)
-
-
-# ── the crossed design as a sparse matrix (for the exact analytic Hessian) ─────────────────────────
-
-def _build_X(shooter, team, dfd, Xctx, lay, def_mask=None):
-    """Sparse design, columns [intercept | shoot(NU) | create(NU) | def(NU) | context(k)] laid out by
-    `lay` (a RateLayout). `def_mask` (n × width) zeroes padded/PK-absent defender slots so masked
-    entries contribute nothing."""
-    n, k = len(shooter), Xctx.shape[1]
-    ar = np.arange(n)
-    R, Cc, D = [], [], []
-
-    def add_ind(col, val=None):
-        R.append(ar); Cc.append(col); D.append(np.ones(n) if val is None else val)
-
-    add_ind(np.zeros(n, int))                           # intercept
-    add_ind(lay.block_offset(0) + shooter)              # shoot block
-    for j in range(team.shape[1]):
-        add_ind(lay.block_offset(1) + team[:, j])       # create (play) block
-    for j in range(dfd.shape[1]):                       # def block (masked: padded slots contribute 0)
-        add_ind(lay.block_offset(2) + dfd[:, j], None if def_mask is None else def_mask[:, j])
-    for c in range(k):                                  # context (values, not indicators)
-        R.append(ar); Cc.append(np.full(n, lay.beta.start + c)); D.append(Xctx[:, c])
-    return sparse.csr_matrix((np.concatenate(D), (np.concatenate(R), np.concatenate(Cc))),
-                             shape=(n, lay.n_core))
-
-
-def _build_conv_X(logit_xg, sidx, shooter, goalie, lay, Cctx=None):
-    """Sparse conversion design for the Hessian, columns
-    [slope_s (S) | intercept_s (S) | ctx(kc) | fin(P) | gsave(G)] laid out by `lay` (a ConvLayout) —
-    the slope/intercept are per-strength (`sidx` in 0..S-1), so a shot loads its own strength's slope
-    (value=logit_xg) and intercept (value=1); `Cctx` is the optional global context block (season
-    offsets, age curves)."""
-    n = len(shooter)
-    ar = np.arange(n)
-    rows = [ar, ar, ar, ar]
-    cols = [lay.a.start + sidx, lay.b.start + sidx, lay.fin_off + shooter, lay.fin_off + lay.P + goalie]
-    data = [logit_xg, np.ones(n), np.ones(n), np.ones(n)]
-    for c in range(lay.kc):
-        rows.append(ar); cols.append(np.full(n, lay.ctx.start + c)); data.append(Cctx[:, c])
-    return sparse.csr_matrix((np.concatenate(data), (np.concatenate(rows), np.concatenate(cols))),
-                             shape=(n, lay.n_theta))
-
-
-def _rate_penalty(lay, first_mask, e_prev, e_next, e_gap):
-    """Sparse prior-precision matrix for the rate fit's player blocks, laid out by `lay` (a
-    RateLayout). Per block: a level ridge on each player's FIRST state (`first_mask`) + the
-    random-walk precision between his consecutive states — for an edge with weight
-    w = 1/(rw_sd²·gap), add w to both diagonal entries and −w to the off-diagonals (the precision of
-    θ_next − θ_prev ~ N(0, rw_sd²·gap)). With no edges (static or single season) this is exactly the
-    old diagonal ridge."""
-    blocks = [(1.0 / PRIOR_SD_SHOOT ** 2, 1.0 / RW_SD_SHOOT ** 2),
-              (1.0 / PRIOR_SD_CREATE ** 2, 1.0 / RW_SD_CREATE ** 2),
-              (1.0 / PRIOR_SD_SHOOT ** 2, 1.0 / RW_SD_DEF ** 2)]
-    rows, cols, vals = [], [], []
-    au = np.arange(lay.NU)
-    for bi, (lev, wrw) in enumerate(blocks):
-        off = lay.block_offset(bi)
-        rows.append(off + au); cols.append(off + au); vals.append(lev * first_mask)
-        if len(e_prev):
-            w = wrw / e_gap
-            for a, b in ((e_prev, e_prev), (e_next, e_next)):
-                rows.append(off + a); cols.append(off + b); vals.append(w)
-            for a, b in ((e_prev, e_next), (e_next, e_prev)):
-                rows.append(off + a); cols.append(off + b); vals.append(-w)
-    return sparse.csr_matrix((np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
-                             shape=(lay.n_core, lay.n_core))
-
-
-def _se_from_hessian(H):
-    return np.sqrt(np.clip(np.diag(np.linalg.inv(H)), 0.0, None))
-
-
 # ── fits (JAX autodiff gradient + scipy L-BFGS-B; exact Hessian for SEs) ───────────────────────────
 
 def _optimize(nll, x0, *data):
@@ -1090,18 +836,19 @@ def _last_view(v, lu):
     return out
 
 
-def _rate_ses(H, M, lay, lu):
+def _rate_ses(H, M, lay, lu, dense_max=DENSE_H_MAX):
     """Per-player SEs at each player's LAST state for the three rate blocks (columns from `lay`, a
-    RateLayout). Dense inverse when the system is small enough; otherwise sparse splu column solves
-    for just the reported columns. `create` (block 1) uses the sandwich Var_jj = h'Mh with
-    h = H⁻¹e_j — the assist-credit's meat counts w² over the actual observed goals, so the up-weighted
-    anchor adds curvature but not w× real information (F1). shoot/def use the plain (H⁻¹)_jj."""
+    RateLayout). Dense inverse when the core Hessian has `dense_max` or fewer parameters; otherwise
+    sparse splu column solves for just the reported columns. `create` (block 1) uses the sandwich
+    Var_jj = h'Mh with h = H⁻¹e_j — the assist-credit's meat counts w² over the actual observed goals,
+    so the up-weighted anchor adds curvature but not w× real information (F1). shoot/def use the plain
+    (H⁻¹)_jj."""
     ncol = H.shape[0]
     P = len(lu)
     act = np.nonzero(lu >= 0)[0]
     cols = {b: lay.block_cols(b, lu[act]) for b in range(3)}
     se = [np.zeros(P) for _ in range(3)]
-    if ncol <= DENSE_H_MAX:
+    if ncol <= dense_max:
         Hinv = np.linalg.inv(H.toarray())
         dj = np.clip(np.diag(Hinv), 0.0, None)
         for b in (0, 2):
@@ -1124,7 +871,8 @@ def _rate_ses(H, M, lay, lu):
 
 
 def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson", a2=None,
-                    warm=None, reuse=False, create_prior_sd=None, def_prior_sd=None):
+                    warm=None, reuse=False, create_prior_sd=None, def_prior_sd=None,
+                    dense_max=DENSE_H_MAX):
     """UNIFIED CREATION over per-(player, season) STATES. One `create` parameter per unit that does
     double duty:
       (i) lifts teammates' shot rate in the Poisson/NB count layer, and
@@ -1199,42 +947,10 @@ def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson", a2
     lay = RateLayout(NU, k, n_ar, has_a2, nb)
     PS, QI = lay.PS, lay.QI                                  # psi0 index / A2-mixture-logit index
 
-    def split(th):
-        return th[lay.shoot], th[lay.create], th[lay.defence], th[lay.beta], th[lay.psi0]
-
-    def nll(th, sh_j, tm_j, df_j, dm, X, cnt, ofs, gt, gc, fmj, ep, en, iw, acl, g2t, g2a, g2b):
-        sh, cr, df, b, psi0 = split(th)
-        eta = th[0] + sh[sh_j] + jnp.sum(cr[tm_j], 1) + jnp.sum(df[df_j] * dm, 1) + X @ b
-        if n_ar:                                             # venue recording-bias offset (−1 = ref)
-            ar = th[PS + 1:PS + 1 + n_ar]
-            eta = eta + jnp.where(acl >= 0, ar[jnp.clip(acl, 0, None)], 0.0)
-        mu = jnp.exp(eta + ofs)
-        if not nb:
-            pois = jnp.sum(mu - cnt * jnp.log(mu))
-        else:
-            r = jnp.exp(th[-1])
-            pois = -jnp.sum(gammaln(cnt + r) - gammaln(r) - gammaln(cnt + 1)
-                            + r * jnp.log(r / (r + mu)) + cnt * jnp.log(mu / (r + mu)))
-        logit5 = jnp.concatenate([jnp.full((gt.shape[0], 1), psi0), cr[gt]], axis=1)   # [create_0, create(4)]
-        logpi = logit5 - logsumexp(logit5, axis=1)[:, None]
-        credit = -jnp.sum(jnp.take_along_axis(logpi, gc[:, None], 1)[:, 0])
-        if has_a2:                                           # A2 mixture stage (A1's column masked)
-            q = jax.nn.sigmoid(th[QI])
-            lg2 = jnp.where(jnp.arange(4)[None, :] == g2a[:, None], -1e30, cr[g2t])
-            logpi2 = lg2 - logsumexp(lg2, axis=1)[:, None]
-            pl2 = jnp.exp(jnp.take_along_axis(logpi2, g2b[:, None], 1)[:, 0])
-            credit = credit - jnp.sum(jnp.log(q * pl2 + (1.0 - q) / 3.0 + 1e-12))
-        pen = 0.5 * (lsh * jnp.sum(fmj * sh ** 2) + lcr * jnp.sum(fmj * cr ** 2)
-                     + ldf * jnp.sum(fmj * df ** 2))
-        if has_rw:                                           # RW: θ_next ~ N(θ_prev, rw_sd²·gap)
-            pen += 0.5 * (w_sh * jnp.sum(iw * (sh[en] - sh[ep]) ** 2)
-                          + w_cr * jnp.sum(iw * (cr[en] - cr[ep]) ** 2)
-                          + w_df * jnp.sum(iw * (df[en] - df[ep]) ** 2))
-        if n_ar:                                             # arena nuisance prior: ridge + season RW
-            pen += 0.5 * la_ar * jnp.sum(ar ** 2)
-            if has_ar_rw:
-                pen += 0.5 * lrw_ar * jnp.sum(a_iw * (ar[a_en] - ar[a_ep]) ** 2)
-        return pois + shots_per_goal * credit + pen
+    hyp = RateHypers(nb=nb, has_a2=has_a2, has_rw=has_rw, has_ar_rw=has_ar_rw,
+                     shots_per_goal=shots_per_goal, lsh=lsh, lcr=lcr, ldf=ldf,
+                     w_sh=w_sh, w_cr=w_cr, w_df=w_df, la_ar=la_ar, lrw_ar=lrw_ar)
+    nll = make_rate_nll(lay, hyp, (a_ep, a_en, a_iw))
 
     x0 = np.zeros(lay.n_theta)
     if nb:
@@ -1298,7 +1014,7 @@ def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson", a2
         cdiag = sparse.csr_matrix((cinfo, (ci, ci)), shape=(lay.n_core, lay.n_core))
         H = XtWX + _rate_penalty(lay, fm, e_prev, e_next, e_gap) + shots_per_goal * cdiag
         M = XtWX + shots_per_goal ** 2 * cdiag
-        se_sh, se_cr, se_df = _rate_ses(H, M, lay, lu)
+        se_sh, se_cr, se_df = _rate_ses(H, M, lay, lu, dense_max)
     out = {"intercept": float(th[0]), "beta": b, "psi0": psi0,
            "shoot": sh, "create": cr, "def": df,
            "unit_player": up, "unit_season": R.get("unit_season"), "last_unit": lu,
@@ -1359,29 +1075,8 @@ def fit_quality_creator(Q, P, creates, isD=None, warm=None, reuse=False, pids=No
     pi_np = np.exp(lg - lg.max(1, keepdims=True)); pi_np /= pi_np.sum(1, keepdims=True)
     lay = QualLayout(P, k, n_ar)
 
-    def split(th):                                # [mq | qshoot(P) | qcreate(2) | qdef(P) | beta(k) | arena]
-        return th[lay.mq], th[lay.qshoot], th[lay.qcreate], th[lay.qdef], th[lay.beta]
-
-    def nll(th, sh_i, tm_i, tp_i, df_i, dm, X, xg, obs, cidx, pi, acl):
-        mq, qs, qc, qd, b = split(th)
-        base = mq + qs[sh_i] + jnp.sum(qd[df_i] * dm, 1) + X @ b
-        if n_ar:                                            # venue location-bias offset (−1 = ref)
-            arq = th[lay.arena]
-            base = base + jnp.where(acl >= 0, arq[jnp.clip(acl, 0, None)], 0.0)
-        sig5 = jnp.concatenate([jax.nn.sigmoid(base)[:, None],
-                                jax.nn.sigmoid(base[:, None] + qc[tp_i])], axis=1)   # (n,5) col0=unassisted
-
-        def fb(p):
-            return xg * jnp.log(p + EPS) + (1 - xg) * jnp.log(1 - p + EPS)
-        gs = jnp.take_along_axis(sig5, cidx[:, None], 1)[:, 0]       # observed-creator quality
-        marg = jnp.sum(pi * sig5, axis=1)                           # latent: marginalize over FIXED pi
-        ll = jnp.where(obs, fb(gs), fb(marg))
-        pen = 0.5 * (lqs * jnp.sum(qs ** 2) + lqc * jnp.sum(qc ** 2) + lqd * jnp.sum(qd ** 2))
-        if n_ar:                                            # arena nuisance prior: ridge + season RW
-            pen += 0.5 * la_ar * jnp.sum(arq ** 2)
-            if has_ar_rw:
-                pen += 0.5 * lrw_ar * jnp.sum(a_iw * (arq[a_en] - arq[a_ep]) ** 2)
-        return -jnp.sum(ll) + pen
+    hyp = QualHypers(has_ar_rw=has_ar_rw, lqs=lqs, lqc=lqc, lqd=lqd, la_ar=la_ar, lrw_ar=lrw_ar)
+    nll = make_quality_nll(lay, hyp, (a_ep, a_en, a_iw))
 
     x0 = np.zeros(lay.n_theta)
     if reuse:
@@ -1522,15 +1217,7 @@ def fit_conversion(Cr, P, warm=None, reuse=False, pids=None):
         Cctx = np.zeros((len(Cr["y"]), 0))
     lay = ConvLayout(S, kc, P, G)
 
-    def split(th):                                          # [a(S) | b(S) | c(kc) | fin(P) | gsave(G)]
-        return th[lay.a], th[lay.b], th[lay.ctx], th[lay.fin], th[lay.gsave]
-
-    def nll(th, si, sh_i, g_i, lxg, Cx, y):
-        a, b, c, fin, gsave = split(th)
-        eta = a[si] * lxg + b[si] + Cx @ c + fin[sh_i] + gsave[g_i]
-        bce = jnp.sum(jax.nn.softplus(eta) - y * eta)       # = −Σ[y·log p + (1−y)·log(1−p)]
-        pen = 0.5 * (lf * jnp.sum(fin ** 2) + lg * jnp.sum(gsave ** 2))
-        return bce + pen                                    # a, b, c all unpenalized
+    nll = make_conversion_nll(lay, lf, lg)
 
     x0 = np.zeros(lay.n_theta)
     x0[lay.a] = 1.0                                         # start each strength's slope at 1
@@ -1657,28 +1344,6 @@ def unit_effective(rate, agepos):
 
 # ── attribution: merge the rate (volume) and quality loadings into goal-scale numbers ──────────────
 
-_GL_X, _GL_W = np.polynomial.legendre.leggauss(40)          # fixed nodes on (0,1) for the Beta marginal
-_GL_X = 0.5 * (_GL_X + 1.0)
-_GL_W = 0.5 * _GL_W
-
-
-def marginal_goal_prob(qbar, s, a, b, fin=0.0):
-    """The model's own goals-per-shot: E[sigmoid(a·logit(x) + b + fin)] under the model's fitted
-    shot-quality distribution x ~ Beta(s·qbar, s·(1−qbar)) (Stage 2's mean qbar + concentration
-    beta_s). The point shortcut sigmoid(a·logit(qbar)+b+fin) evaluates the conversion curve at the
-    MEAN quality and overstates goals over the right-skewed quality distribution (a Jensen gap of
-    ~+13% league-wide); this computes the marginal the PPC simulator computes by Monte Carlo, but
-    deterministically. Quadrature runs in CDF space — E[f(X)] = ∫₀¹ f(Q(u)) du with Q the Beta
-    quantile function — so the α<1 density singularity (low-quality shooters) costs no accuracy
-    and s → ∞ recovers the point evaluation exactly. Vectorized over players."""
-    qbar = np.clip(np.atleast_1d(np.asarray(qbar, dtype=np.float64)), EPS, 1 - EPS)
-    al, be = s * qbar, s * (1.0 - qbar)                      # (P,)
-    x = np.clip(betaincinv(al[:, None], be[:, None], _GL_X[None, :]), EPS, 1 - EPS)   # (P, K)
-    lx = np.log(x / (1.0 - x))
-    f = _sigmoid(a * lx + b + np.atleast_1d(np.asarray(fin, dtype=np.float64))[:, None])
-    return np.sum(_GL_W[None, :] * f, axis=1)
-
-
 def value_environment(rate, season=None):
     """TOI-weighted mean ENVIRONMENT multiplier over the fit's own rows: everything in a row's
     log-rate beyond the intercept and the shooter's own effective shoot — teammates' create
@@ -1708,19 +1373,6 @@ def value_environment(rate, season=None):
         if m.any():
             eta, w = eta[m], w[m]
     return float(np.sum(w * np.exp(eta)) / max(np.sum(w), 1e-9))
-
-
-def creator_mix(psi0, isD, key):
-    """Creator-class weights (unassisted, F-created, D-created) per shooter, in the model's own
-    REFERENCE environment (teammate creates = 0): w0 = e^psi0/(e^psi0 + 4); the rest splits by the
-    on-ice teammate position mix — EV 5v5 rosters are 3F+2D (an F shooter has 2F+2D teammates, a D
-    has 3F+1D); the MA bucket uses the typical 4F+1D PP unit. A documented convention for the
-    deployment-free VALUES; the WAR engine uses each stint's actual teammates instead."""
-    isD = np.asarray(isD, dtype=np.float64)
-    w0 = float(np.exp(psi0) / (np.exp(psi0) + 4.0))
-    n_f = np.where(isD > 0, 3.0, 2.0) if key == "ev" else np.where(isD > 0, 4.0, 3.0)
-    w_f = (1.0 - w0) * n_f / 4.0
-    return w0, w_f, (1.0 - w0) - w_f
 
 
 def player_values(rates, qual, conv, players, isD=None):
@@ -1779,10 +1431,6 @@ def player_values(rates, qual, conv, players, isD=None):
 
 
 # ── simulation + posterior-predictive check ───────────────────────────────────────────────────────
-
-def _sigmoid(x):
-    return 1.0 / (1.0 + np.exp(-x))
-
 
 def ppc(R, rate, qual, conv, key, seed=0, agepos=None):
     """Forward-simulate every shooter-stint row of one strength bucket (`key` ∈ {'ev','ma'}) and compare

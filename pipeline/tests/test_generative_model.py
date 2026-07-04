@@ -352,15 +352,16 @@ def test_age_curve_recovery_and_projection():
                                atol=1e-9)
 
 
-def test_sparse_dense_se_parity(monkeypatch):
+def test_sparse_dense_se_parity():
     """The sparse splu column-solve SE path (used when the state expansion outgrows the dense
-    Hessian) matches the dense inverse, including the F1 sandwich on create."""
+    Hessian) matches the dense inverse, including the F1 sandwich on create. `dense_max` is the
+    parameter selecting the path: a tiny threshold forces the sparse solve, which must reproduce the
+    dense SEs exactly."""
     R, gt, gc, _, _, _ = _synth_create(P=40, n=40000, seed=3)
-    fit_d = G.fit_rate_create(R, gt, gc, shots_per_goal=16)
-    monkeypatch.setattr(G, "DENSE_H_MAX", 1)
-    fit_s = G.fit_rate_create(R, gt, gc, shots_per_goal=16)
+    fit_dense = G.fit_rate_create(R, gt, gc, shots_per_goal=16)                # large default: dense inverse
+    fit_sparse = G.fit_rate_create(R, gt, gc, shots_per_goal=16, dense_max=1)  # forced sparse splu solve
     for k in ("se_shoot", "se_create", "se_def"):
-        np.testing.assert_allclose(fit_d[k], fit_s[k], rtol=1e-6, atol=1e-10)
+        np.testing.assert_allclose(fit_dense[k], fit_sparse[k], rtol=1e-6, atol=1e-10)
 
 
 def _synth_a2(gt, gc, create, q_true=0.6, seed=21):

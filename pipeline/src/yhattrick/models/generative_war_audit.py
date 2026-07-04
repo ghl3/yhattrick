@@ -25,7 +25,7 @@ import pandas as pd
 
 from .. import config as C
 from . import generative_cards as GC
-from .generative_model import _sigmoid, EV_STRENGTHS, MA_STRENGTHS, AGE_SCALE
+from .generative_likelihood import _sigmoid, EV_STRENGTHS, MA_STRENGTHS, AGE_SCALE
 from .generative_features import side_rows
 
 E_TOL = 0.02                # league ΣE vs actual: |residual| beyond this is a model finding

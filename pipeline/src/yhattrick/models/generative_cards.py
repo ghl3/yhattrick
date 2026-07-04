@@ -53,8 +53,8 @@ import numpy as np
 import pandas as pd
 
 from .. import config as C
-from .generative_model import (_sigmoid, creator_mix, marginal_goal_prob,
-                               EV_STRENGTHS, MA_STRENGTHS, AGE_PEAK, AGE_SCALE)
+from .generative_likelihood import (_sigmoid, creator_mix, marginal_goal_prob,
+                                    EV_STRENGTHS, MA_STRENGTHS, AGE_PEAK, AGE_SCALE)
 from .generative_features import side_rows
 
 EV_GATE = 6000.0            # seconds (100 min) — EV card eligibility, matches export_players
