@@ -53,8 +53,9 @@ import numpy as np
 import pandas as pd
 
 from .. import config as C
-from .generative_model import (_load_stints, _sigmoid, _zone, creator_mix, marginal_goal_prob,
+from .generative_model import (_sigmoid, creator_mix, marginal_goal_prob,
                                EV_STRENGTHS, MA_STRENGTHS, AGE_PEAK, AGE_SCALE)
+from .generative_features import side_rows
 
 EV_GATE = 6000.0            # seconds (100 min) — EV card eligibility, matches export_players
 MA_GATE = 2400.0            # seconds (40 min) — PP/PK card eligibility
@@ -272,46 +273,15 @@ def pct_within(v, elig, isD):
 # ── WAR engine ───────────────────────────────────────────────────────────────────────────────────
 
 def war_rows(seasons, idx):
-    """Per stint-side rows for the WAR accounting, one dict of arrays per (season, bucket):
-    attacker index matrix (n,5), defender index matrix + mask, goalie ids, duration, context
-    columns [home, ozone, dzone, trail, lead]. MA keeps only the PP side."""
+    """Per stint-side rows for the WAR accounting, one dict of arrays per (season, bucket): attacker
+    index matrix (n,5), defender index matrix + mask, goalie ids, duration, RATE_CTX. MA keeps only the
+    PP side. Thin wrapper over the shared `side_rows` builder (one orientation implementation)."""
     out = {}
     for s in seasons:
         for key, strengths, dual in (("ev", EV_STRENGTHS, True), ("ma", MA_STRENGTHS, False)):
-            df = _load_stints([s], strengths)
-            if df.empty:
-                continue
-            atk, dfd, dmask, gid, dur, ctx = [], [], [], [], [], []
-
-            def emit(A, B, home, st, goalie):
-                if any(q not in idx for q in (*A, *B)):
-                    return
-                nb = len(B)
-                dfd.append([idx[q] for q in B] + [0] * (5 - nb))
-                dmask.append([1.0] * nb + [0.0] * (5 - nb))
-                atk.append([idx[q] for q in A])
-                oz, dz = _zone(home, st.start_type, st.start_zone)
-                lead = st.home_lead if home else -st.home_lead
-                ctx.append([1.0 if home else 0.0, oz, dz,
-                            1.0 if lead < 0 else 0.0, 1.0 if lead > 0 else 0.0])
-                gid.append(goalie); dur.append(st.duration_s)
-
-            for st in df.itertuples():
-                hn, an = len(st.home_skaters), len(st.away_skaters)
-                if dual:
-                    if hn == 5 and an == 5:
-                        emit(st.home_skaters, st.away_skaters, True, st, st.away_goalie)
-                        emit(st.away_skaters, st.home_skaters, False, st, st.home_goalie)
-                elif hn != an and max(hn, an) == 5:
-                    home = hn > an
-                    A, B = (st.home_skaters, st.away_skaters) if home else (st.away_skaters, st.home_skaters)
-                    emit(A, B, home, st, st.away_goalie if home else st.home_goalie)
-            if atk:
-                out[(s, key)] = {"atk": np.asarray(atk, dtype=np.int64),
-                                 "def": np.asarray(dfd, dtype=np.int64),
-                                 "dmask": np.asarray(dmask), "goalie": np.asarray(gid, dtype=object),
-                                 "dur": np.asarray(dur, dtype=np.float64),
-                                 "ctx": np.asarray(ctx, dtype=np.float64)}
+            r = side_rows([s], strengths, dual, idx)
+            if r is not None:
+                out[(s, key)] = r
     return out
 
 

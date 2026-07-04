@@ -8,7 +8,7 @@ for how each table is produced.
 
 - `nhl/shiftcharts/<gameId>.json` — NHL shiftcharts API response (`data[]` of shifts).
 - `nhl/pbp/<gameId>.json` — NHL play-by-play API response (`plays[]`, `rosterSpots[]`, teams).
-- `nhl/players/<playerId>.json` — NHL player-landing API response; we use `shootsCatches` (handedness, for off-wing).
+- `nhl/players/<playerId>.json` — NHL player-landing API response; source of the static player bio in `dimensions/players` (`birthDate` for aging curves, `shootsCatches`, height/weight, draft).
 
 The game list isn't a stored file: it comes from the NHL schedule (the season's teams via the
 standings endpoint, then each club's `club-schedule-season`, regular-season `gameType == 2`).
@@ -114,10 +114,33 @@ Context & volume (all from our own pbp; stored for current and future modeling):
 ## processed/shots_onice/&lt;season&gt;.parquet — one row per shot, with on-ice context
 
 `nhl_game_id`, `event_idx`, `game_seconds`, `period`, `stint_idx`, `strength`, `shooter_id`,
-`shooter`, `is_home`, `xg` (null for empty-net shots), `event`, `goal`, `shot_type`, `distance`,
+`shooter`, `assist1_id`, `assist2_id` (int|null — the credited assisters on goal rows, from
+`interim/events`; null on non-goals; they ground the creator/playmaking anchor), `is_home`,
+`xg` (null for empty-net shots), `event`, `goal`, `shot_type`, `distance`,
 `angle`, `rebound`, `rush`, `x`, `y`, `home_skaters`, `away_skaters`, `home_goalie`,
 `away_goalie`, `sit_home_n`, `sit_away_n` (situationCode skater counts), `onice_match` ∈ {`exact`,
 `within1`, `large`} (reconstruction vs. those counts).
+
+## dimensions/ — entity attributes joined into the facts by key (`make dims`)
+
+Descriptive attributes stored once per entity (built by `data/dimensions.py`), joined into the fact
+tables at model time. See [processing.md](processing.md) for the fact-vs-dimension rationale.
+
+**`dimensions/players.parquet`** — one row per player (static bio): `player_id`, `name`, `birthdate`
+(datetime|NaT), `shoots` (`L`/`R`), `height_in`, `weight_lb`, `draft_year`, `draft_overall`. Source:
+`raw/nhl/players/<id>.json`. `birthdate` feeds the aging curves.
+
+**`dimensions/player_season.parquet`** — one row per (`player_id`, `season`): `position` (`C/L/R/D/G`),
+`number`. **No team** — team is a (player, game) property (a trade splits a season across two teams),
+derived by joining `games` with the player's on-ice side, never stored here.
+
+**`dimensions/games.parquet`** — one row per game: `nhl_game_id`, `date` (`YYYY-MM-DD`), `season` (int,
+start year), `game_type` (int — 2 = regular, 3 = playoff; `== 2` is the regular-season test),
+`home_team`, `away_team` (abbrev), `venue_id` (FK → arenas). Source: `raw/nhl/pbp`.
+
+**`dimensions/arenas.parquet`** — one row per physical building: `venue_id`, `canonical_name`,
+`raw_names` (list — sponsor-rename aliases that map here), `active_seasons` (list). Canonicalization
+keeps a venue's scorer-bias states one random-walk chain across renames; real building moves stay split.
 
 ## data/games/ (site JSON; synced to web/public/data/)
 

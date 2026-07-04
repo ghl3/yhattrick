@@ -36,7 +36,7 @@ SEASON ?=
 FAMILY ?= gaussian        # response family for `make model`: gaussian | tweedie
 
 .DEFAULT_GOAL := all
-.PHONY: all fetch fetch-season fetch-handedness fetch-htmlshifts clean-data xg stints box model shooting goal-accounting games gamelog players goalie-box goalie-gamelog goalies generative-model generative-cards publish-data validate test pipeline web-dev web-build
+.PHONY: all fetch fetch-season fetch-handedness fetch-htmlshifts clean-data dims xg stints box model shooting goal-accounting games gamelog players goalie-box goalie-gamelog goalies generative-model generative-cards publish-data validate test pipeline web-dev web-build
 
 all: clean-data xg stints box model shooting goal-accounting games gamelog players goalie-gamelog goalie-box goalies
 
@@ -54,6 +54,11 @@ fetch-htmlshifts:
 
 clean-data:
 	$(RUN) yhattrick.data.clean 2>&1 | tee $(LOGDIR)/clean.log
+
+# dimension tables (players bio + player_season) joined into the fact tables at model time; see
+# data/dimensions.py. Depends on interim/roster (clean-data) and the RAW_PLAYERS landing JSONs.
+dims:
+	$(RUN) yhattrick.data.dimensions 2>&1 | tee $(LOGDIR)/dims.log
 
 stints:
 	$(RUN) yhattrick.data.stints 2>&1 | tee $(LOGDIR)/stints.log

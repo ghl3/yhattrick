@@ -112,6 +112,10 @@ from jax.scipy.special import gammaln, logsumexp
 
 from .. import config as C
 from .player_onice_model import roster_names
+# Shared row-building primitives (load/orient/context/side-gating) live in generative_features so the
+# fit and the WAR consumers (cards, audit) share ONE orientation implementation. The fit uses
+# load_stints + base_ctx; the WAR consumers import side_rows from generative_features directly.
+from .generative_features import RATE_CTX, base_ctx, load_stints as _load_stints
 
 jax.config.update("jax_enable_x64", True)   # float64: stable optimization + Hessian
 
@@ -167,36 +171,6 @@ ALL_STRENGTHS = EV_STRENGTHS + MA_STRENGTHS
 
 # ── data loaders (5v5) ──────────────────────────────────────────────────────────────────────────
 
-def _zone(atk_home, start_type, start_zone):
-    """Attacking-team zone start: O/D flips for the away team. Returns (ozone, dzone) indicators."""
-    if start_type != "faceoff" or start_zone not in ("O", "D"):
-        return 0.0, 0.0
-    az = start_zone if atk_home else ("O" if start_zone == "D" else "D")
-    return (1.0, 0.0) if az == "O" else (0.0, 1.0)
-
-
-RATE_CTX = ["home", "ozone", "dzone", "trail", "lead"]
-
-
-def _load_stints(seasons, strengths):
-    """Regular-season non-overload stints in the given strength states (e.g. ('5v5',) or
-    ('5v4','4v5')). Keeps short <10s stints (the Poisson offset handles them). Adds a `season` column
-    for the season fixed-effect."""
-    frames = []
-    for s in seasons:
-        p = C.PROCESSED / "stints" / f"{s}.parquet"
-        if not p.exists():
-            continue
-        df = pd.read_parquet(p)
-        if "overload" not in df.columns:
-            df["overload"] = False
-        reg = (df.nhl_game_id // 10000) % 100 == 2
-        sub = df[reg & df.strength.isin(strengths) & (~df.overload) & (df.duration_s >= 1)].copy()
-        sub["season"] = s
-        frames.append(sub)
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-
-
 def player_index(seasons):
     """Shared player index across ALL modeled strengths (EV+MA), so the per-strength rate fits align to
     one player list. Returns (players, idx)."""
@@ -215,55 +189,22 @@ def _season_cols(seasons):
 
 # ── game venues (the arena recording-bias offsets) ──────────────────────────────────────────────
 
-# Same building, new sponsor name → alias to the CURRENT name so a venue's bias states stay one
-# random-walk chain across the rename (scorer crew doesn't change with the signage). Real building
-# moves stay split on purpose: Gila River → Mullett → Delta Center, Joe Louis → Little Caesars,
-# Nassau/Barclays → UBS are different rinks with different crews. Covers 2016+ for the backfill.
-_VENUE_ALIAS = {
-    "STAPLES Center": "Crypto.com Arena",
-    "FLA Live Arena": "Amerant Bank Arena",
-    "BB&T Center": "Amerant Bank Arena",
-    "Amalie Arena": "Benchmark International Arena",
-    "PNC Arena": "Lenovo Center",
-    "Wells Fargo Center": "Xfinity Mobile Arena",
-    "Xcel Energy Center": "Grand Casino Arena",
-    "Pepsi Center": "Ball Arena",
-    "Scottrade Center": "Enterprise Center",
-    "Verizon Center": "Capital One Arena",
-    "Air Canada Centre": "Scotiabank Arena",
-    "Bell MTS Place": "Canada Life Centre",
-    "MTS Centre": "Canada Life Centre",
-    "First Niagara Center": "KeyBank Center",
-    "Consol Energy Center": "PPG Paints Arena",
-}
-
-
 def _game_venues(seasons):
-    """{nhl_game_id: venue name} for all downloaded games in the seasons. NHL scorekeeping varies by
-    building (shot counts AND recorded locations), so the rate/quality stages carry per-venue
-    offsets. Venue comes from raw pbp `venue.default` (building-keyed, so Arizona's moves and
-    relocations split correctly); cached to interim/game_venue/<season>.parquet on first build."""
-    out = {}
-    for s in sorted(set(seasons)):
-        cache = C.INTERIM / "game_venue" / f"{s}.parquet"
-        if cache.exists():
-            df = pd.read_parquet(cache)
-        else:
-            rows = []
-            for pf in sorted(C.RAW_PBP.glob(f"{s}0*.json")):
-                try:
-                    d = json.loads(pf.read_text())
-                except (OSError, json.JSONDecodeError):
-                    continue
-                v = (d.get("venue") or {}).get("default") or (d.get("homeTeam") or {}).get("abbrev")
-                if v:
-                    rows.append({"nhl_game_id": int(pf.stem), "venue": str(v)})
-            df = pd.DataFrame(rows, columns=["nhl_game_id", "venue"])
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            df.to_parquet(cache)
-        out.update({int(g): _VENUE_ALIAS.get(v, v)
-                    for g, v in zip(df.nhl_game_id.astype(int), df.venue)})
-    return out
+    """{nhl_game_id: canonical venue name} for the seasons, from the games + arenas DIMENSIONS
+    (`make dims`). NHL scorekeeping varies by building (shot counts AND recorded locations), so the
+    rate/quality stages carry per-venue offsets. Canonicalisation — sponsor-rename aliases, so a
+    venue's bias states stay one random-walk chain, while real building moves stay split — lives in the
+    arenas table."""
+    gp = C.DIM / "games.parquet"
+    ap = C.DIM / "arenas.parquet"
+    if not gp.exists() or not ap.exists():
+        raise FileNotFoundError(f"games/arenas dimensions missing ({C.DIM}); run `make dims` first")
+    sset = set(int(s) for s in seasons)
+    g = pd.read_parquet(gp, columns=["nhl_game_id", "season", "venue_id"])
+    g = g[g.season.isin(sset)]
+    a = pd.read_parquet(ap, columns=["venue_id", "canonical_name"])
+    vid2name = dict(zip(a.venue_id.astype(int), a.canonical_name))
+    return {int(gid): vid2name.get(int(vid)) for gid, vid in zip(g.nhl_game_id, g.venue_id)}
 
 
 ARENA_MIN_GAMES = 20        # venues with fewer games in the fit window (outdoor/neutral sites)
@@ -307,13 +248,14 @@ def _arena_index(seasons, min_games=ARENA_MIN_GAMES):
 # ── age & position (the shared aging-curve inputs) ──────────────────────────────────────────────
 
 def _birthdates(ids):
-    """Birthdates for a list of player/goalie ids from the raw landing JSONs (NaT if missing)."""
-    born = []
-    for pid in ids:
-        f = C.RAW_PLAYERS / f"{int(pid)}.json"
-        b = json.loads(f.read_text()).get("birthDate") if f.exists() else None
-        born.append(b)
-    return pd.to_datetime(pd.Series(born), errors="coerce")
+    """Birthdates for a list of player/goalie ids from the players DIMENSION (`make dims`), aligned to
+    `ids`; NaT for any id absent from the dimension."""
+    p = C.DIM / "players.parquet"
+    if not p.exists():
+        raise FileNotFoundError(f"players dimension missing ({p}); run `make dims` first")
+    df = pd.read_parquet(p, columns=["player_id", "birthdate"])
+    bd = dict(zip(df.player_id.astype(int), pd.to_datetime(df.birthdate, errors="coerce")))
+    return pd.to_datetime(pd.Series([bd.get(int(x)) for x in ids]), errors="coerce")
 
 
 def _season_age(born, season):
@@ -416,9 +358,7 @@ def rate_rows(seasons, strengths, dual, players, idx, agepos=None, states=False,
         nd = len(di)
         di_pad = di + [0] * (MAX_DEF - nd)                     # pad to width 5 (masked slots point at 0)
         mrow = [1.0] * nd + [0.0] * (MAX_DEF - nd)
-        oz, dz = _zone(atk_home, s.start_type, s.start_zone)
-        lead = s.home_lead if atk_home else -s.home_lead
-        base = [1.0 if atk_home else 0.0, oz, dz, 1.0 if lead < 0 else 0.0, 1.0 if lead > 0 else 0.0]
+        base = base_ctx(atk_home, s)
         seas = [0.0] * nseas
         if s.season in scol:
             seas[scol[s.season]] = 1.0
@@ -542,7 +482,7 @@ def quality_creator_rows(seasons, idx, strengths, agepos=None, arenas=True):
     Creator: for goals, which teammate (0–3) got the primary assist, 4=unassisted, or −1 when the
     credited assister is not an on-ice teammate (data glitch / goalie assist — latent, and excluded
     from the assist-credit anchor; F4). Non-goals −1 (latent).
-    Join: shots_onice.event_idx == pbp goal sortOrder."""
+    Creator labels come from `shots_onice.assist1_id`/`assist2_id` (event_idx == pbp goal sortOrder)."""
     scol, nseas = _season_cols(seasons)
     isD = agepos["isD"] if agepos else None
     ven, acol_of, amach = _arena_index(seasons) if arenas else ({}, {}, None)
@@ -552,20 +492,12 @@ def quality_creator_rows(seasons, idx, strengths, agepos=None, arenas=True):
         p = C.PROCESSED / "shots_onice" / f"{s}.parquet"
         if not p.exists():
             continue
-        d = pd.read_parquet(p, columns=["nhl_game_id", "event_idx", "strength", "is_home", "xg",
-                                        "goal", "shooter_id", "home_skaters", "away_skaters"])
+        d = pd.read_parquet(p, columns=["nhl_game_id", "strength", "is_home", "xg", "goal",
+                                        "shooter_id", "assist1_id", "assist2_id",
+                                        "home_skaters", "away_skaters"])
         d = d[d.strength.isin(strengths) & d.xg.notna() & d.shooter_id.notna()]
         for gid, sub in d.groupby("nhl_game_id"):
-            a1, a2 = {}, {}
             ac_i = acol_of.get((ven.get(int(gid)), s), -1)    # −1 = rare/unknown venue
-            pf = C.RAW_PBP / f"{int(gid)}.json"
-            if pf.exists():
-                plays = json.loads(pf.read_text()).get("plays", [])
-                for pl in plays:
-                    if pl.get("typeDescKey") == "goal":
-                        det = pl.get("details", {})
-                        a1[pl.get("sortOrder")] = det.get("assist1PlayerId")
-                        a2[pl.get("sortOrder")] = det.get("assist2PlayerId")
             for r in sub.itertuples():
                 hs, as_ = list(r.home_skaters), list(r.away_skaters)
                 atk, dfd = (hs, as_) if r.is_home == 1 else (as_, hs)
@@ -595,16 +527,16 @@ def quality_creator_rows(seasons, idx, strengths, agepos=None, arenas=True):
                 goal.append(int(r.goal)); slab.append(0 if is_ev else 1); seas_row.append(s)
                 arena.append(ac_i)
                 if r.goal == 1:
-                    ap = a1.get(int(r.event_idx))
-                    if ap is None:
+                    ap = r.assist1_id
+                    if pd.isna(ap):
                         creator.append(4)                    # genuinely unassisted
                     elif int(ap) in mates:
                         creator.append(mates.index(int(ap)))
                     else:
                         creator.append(-1)                   # assister not an on-ice teammate (data
-                    ap2 = a2.get(int(r.event_idx))           # glitch / goalie assist): latent, and
+                    ap2 = r.assist2_id                       # glitch / goalie assist): latent, and
                     creator2.append(mates.index(int(ap2))    # excluded from the assist-credit anchor
-                                    if ap2 is not None and int(ap2) in mates else -1)
+                                    if pd.notna(ap2) and int(ap2) in mates else -1)
                 else:
                     creator.append(-1)
                     creator2.append(-1)

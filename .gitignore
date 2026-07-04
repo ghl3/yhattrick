@@ -2,6 +2,7 @@
 /data/raw/
 /data/interim/
 /data/processed/
+/data/dimensions/
 /data/games/
 /data/models/
 /data/golden/

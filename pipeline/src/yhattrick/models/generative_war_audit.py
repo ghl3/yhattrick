@@ -25,50 +25,17 @@ import pandas as pd
 
 from .. import config as C
 from . import generative_cards as GC
-from .generative_model import _load_stints, _sigmoid, _zone, EV_STRENGTHS, MA_STRENGTHS, AGE_SCALE
+from .generative_model import _sigmoid, EV_STRENGTHS, MA_STRENGTHS, AGE_SCALE
+from .generative_features import side_rows
 
 E_TOL = 0.02                # league ΣE vs actual: |residual| beyond this is a model finding
 SCALE_TOL = 0.15            # card units vs reality: model F-mean scoring vs actual F goals/60
 
 
 def rows_with_teams(season, key, strengths, dual, idx, gteam):
-    """war_rows for ONE (season, bucket), plus the attacking/defending team label per side-row."""
-    df = _load_stints([season], strengths)
-    atk, dfd, dmask, gid, dur, ctx, ateam, dteam = [], [], [], [], [], [], [], []
-
-    def emit(A, B, home, st, goalie, pair):
-        if any(q not in idx for q in (*A, *B)):
-            return
-        nb = len(B)
-        dfd.append([idx[q] for q in B] + [0] * (5 - nb))
-        dmask.append([1.0] * nb + [0.0] * (5 - nb))
-        atk.append([idx[q] for q in A])
-        oz, dz = _zone(home, st.start_type, st.start_zone)
-        lead = st.home_lead if home else -st.home_lead
-        ctx.append([1.0 if home else 0.0, oz, dz, 1.0 if lead < 0 else 0.0, 1.0 if lead > 0 else 0.0])
-        gid.append(goalie); dur.append(st.duration_s)
-        ht, at_ = pair
-        ateam.append(ht if home else at_); dteam.append(at_ if home else ht)
-
-    for st in df.itertuples():
-        pair = gteam.get(int(st.nhl_game_id))
-        if pair is None:
-            continue
-        hn, an = len(st.home_skaters), len(st.away_skaters)
-        if dual:
-            if hn == 5 and an == 5:
-                emit(st.home_skaters, st.away_skaters, True, st, st.away_goalie, pair)
-                emit(st.away_skaters, st.home_skaters, False, st, st.home_goalie, pair)
-        elif hn != an and max(hn, an) == 5:
-            home = hn > an
-            A, B = (st.home_skaters, st.away_skaters) if home else (st.away_skaters, st.home_skaters)
-            emit(A, B, home, st, st.away_goalie if home else st.home_goalie, pair)
-    if not atk:
-        return None
-    return {"atk": np.asarray(atk, dtype=np.int64), "def": np.asarray(dfd, dtype=np.int64),
-            "dmask": np.asarray(dmask), "goalie": np.asarray(gid, dtype=object),
-            "dur": np.asarray(dur, dtype=np.float64), "ctx": np.asarray(ctx, dtype=np.float64),
-            "ateam": np.asarray(ateam), "dteam": np.asarray(dteam)}
+    """war_rows for ONE (season, bucket), plus the attacking/defending team label per side-row. Thin
+    wrapper over the shared `side_rows` builder with team resolution (`gteam`)."""
+    return side_rows([season], strengths, dual, idx, gteam=gteam)
 
 
 def run_audit(season=None, fit_path=None):

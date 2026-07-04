@@ -289,6 +289,8 @@ def _shot_onice_rows(gid: int, sho_g: pd.DataFrame, stints: list[dict], bounds: 
             "stint_idx": st["stint_idx"], "strength": st["strength"],
             "shooter_id": int(shot.shooter_id) if pd.notna(shot.shooter_id) else None,
             "shooter": shot.shooter if pd.notna(shot.shooter) else None,
+            "assist1_id": int(shot.assist1_player_id) if pd.notna(shot.assist1_player_id) else None,
+            "assist2_id": int(shot.assist2_player_id) if pd.notna(shot.assist2_player_id) else None,
             "is_home": int(shot.is_home), "xg": float(shot.xg) if pd.notna(shot.xg) else None,
             "event": shot.event, "goal": int(shot.goal),
             "shot_type": shot.shot_type if pd.notna(shot.shot_type) else None,
@@ -321,6 +323,12 @@ def process_season(season: int, limit: int | None = None) -> dict:
         print(f"[stints] {season}: missing processed/xg — run `make xg` first")
         return {}
     shots = shots.merge(xg, on=["nhl_game_id", "event_idx"], how="left")
+
+    # attach goal assist IDs (creator labels): join by event_idx == pbp sortOrder, goals only.
+    # Downstream (generative creator anchor) reads these columns instead of re-reading raw pbp.
+    ga = events.loc[events.type == "goal",
+                    ["nhl_game_id", "event_idx", "assist1_player_id", "assist2_player_id"]]
+    shots = shots.merge(ga, on=["nhl_game_id", "event_idx"], how="left")
 
     goalie_ids = set(roster.loc[roster.position == "G", "player_id"])
     home_of = shots.groupby("nhl_game_id").home_team.first().to_dict()

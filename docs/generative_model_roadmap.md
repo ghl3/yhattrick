@@ -172,6 +172,101 @@ and GA/60 −0.50. Investigating the clash surfaced three distinct issues:
   this). Documented in metrics.md + the data-sources memory; consider renaming the column or
   adding a shooter-relative `sit` column at the next stints regeneration.
 
+### 5e. `create` identifiability for low-linemate-variation players (the Kapanen class)
+**Status: open, root-cause understood, first experiment specified.** Motivating case: Oliver Kapanen
+(MTL, 8482775) reads worst-in-league WAR (−1.32) despite 22 goals; a four-model comparison agreed his
+defense is bad but split hard on EV-offense credit (E-H +6.5/+7.0 GAR and actual WAR +0.1; us and
+hockeyviz harsh). His EV offense collapses because his `create` is fit at −0.109 — below both the
+forward mean (+0.28) and replacement (+0.088). See `docs/notes/2026-07-03-assist-role-negative-result.md`
+(the reverted fix) and `docs/notes/2026-07-03-war-case-studies.md`.
+
+**Why `create` goes far-negative for these players (mechanism, confirmed).** `create` does double duty:
+(i) a multiplicative lift on teammates' shot RATE (identified only by seeing a player with *varied*
+linemates), and (ii) the credited-assister propensity in the conditional-logit anchor
+`softmax([psi0, create[teammates]])` (`generative_model.py` ~1146). For a finisher glued to elite
+distributors (Kapanen: 754 of 1102 5v5 min with Demidov), the rate channel carries almost no
+independent info about him, so his WAR-relevant `create` is pinned almost entirely by the anchor —
+i.e. by his **assist share within the unit**, which is puck-role, not chance creation. On his line's
+55 on-ice 5v5 goals he is credited on 13 (24%; 5 A1 + 8 A2) while Demidov gets 21, Slafkovský 15,
+Hutson 11. The anchor reads "few assists" as "low creation" and drags `create` below his linemates;
+because WAR reads `create` absolutely in the stint swap, that within-unit relativity becomes an
+absolute "suppresses offense" penalty. The with/without shift data confirms it is NOT real
+suppression: his FORWARD linemates shoot the same or more with him (Demidov +0.38, Slafkovský −0.01
+F/60); the only "shoots more without Kapanen" signal is his defensemen, and it scales with how much of
+their time is spent AWAY from him (Dobson/Matheson ~88% away) — a deployment artifact, not a Kapanen
+effect.
+
+**The gauge finding (this is the key correction — read before re-trying anything).** The overall
+`create` LEVEL is *exactly unidentified* by the likelihood, so **re-centering the ridge prior uniformly
+is a mathematical no-op** (this matches the earlier "+0.28 shift across all groups" experiment):
+- Rate term `eta = intercept + shoot + Σ create[teammates] + …` (~1135): at 5v5 there are exactly 4
+  teammates per shot, so shifting *all* `create` by a constant c adds exactly 4c to every eta, which
+  the strength intercept absorbs. Exactly flat.
+- Anchor `softmax([psi0, create[4 teammates]])` (~1146): shift all four creates AND `psi0` by c and the
+  softmax is exactly invariant. **`psi0` is a FREE fitted parameter** (`th[PS]`, split at ~1129), so it
+  completes the gauge rather than breaking it.
+- The ridge `Σ create²` centered at C (~1155) is the ONLY thing that fixes the level, setting
+  mean(create)=C. Re-centering C just translates the whole cloud along the flat direction.
+- WAR swaps player→replacement and reads `exp(Σ create)`; the swap depends on
+  (create_player − create_replacement), a DIFFERENCE, invariant to the level. So a uniform re-center
+  cannot change any player's WAR.
+
+**Position-mean re-centering is NOT the same as uniform (and was never run).** Re-centering forwards
+toward +0.28 and defensemen toward their (lower) mean is *not* a uniform shift, and the single global
+gauge cannot absorb it: lines mix F and D in varying ratios, so an F-vs-D differential shift changes
+different lines' etas differently and IS data-identified. So position-mean re-centering does change the
+solution — but whether its non-gauge component lifts a collinear forward enough to overcome the
+anchor's within-line pull is **unproven**; it needs a refit. The note's prescription ("re-center on the
+position mean") is therefore *uniform-dead, position-untested*, not a guaranteed fix.
+
+**Why the reverted `assist_role` attempt cannot simply be re-tuned.** The reverted implementation is
+NOT in git history (it was `git checkout`-reverted); it survives as **dangling blob `d426cbe4`** (the
+model) and `7bb4df89` (the tests) — recover with `git cat-file -p <blob>`. Verified spec:
+`crx = cr + assist_role[player]` used ONLY in the anchor (~1157), rate term keeps bare `cr`; role prior
+= unconstrained ridge to 0 (~1170), `sd` via `--assist-role-sd` (failed refit at 0.30, looser than
+create's 0.12); the create prior stayed centered at 0. Documented failure modes: (1) didn't fire for
+Kapanen (create −0.109→−0.098, role≈0) because create-prior-at-0 makes "low create" cheaper than
+"average create + negative role"; (2) well-identified players moved too much and create's spread
+collapsed 0.142→0.077 because the role prior was *looser* than create's and stole shared signal;
+(3) fringe/low-sample players over-lifted from noise. **Self-defeating tension:** a *tighter* role prior
+(the note's own fix for modes 2/3) makes negative role MORE expensive, worsening mode 1. With create
+centered at 0 there is no single global `role_sd` that both helps Kapanen and stays stable — and
+re-centering (the escape) is uniform-dead per above. So re-running this family is not expected to work.
+
+**Candidate levers, ranked (only the first is not a re-run):**
+1. **Global EV `anchor_scale` (do this first — cheap, and the one genuinely different lever).** Reuse
+   the existing per-bucket anchor-weight plumbing (`ma_anchor_scale`, applied at ~1932) but expose it
+   for the EV bucket, selected by held-out validation like the MA hyperparameters (item 5c / §7).
+   Lowering it loosens the anchor's grip so a collinear finisher's relative `create` relaxes toward the
+   population center instead of being dragged below by assist share. It does not add a per-player
+   parameter and does not depend on the prior center. Cost is real: it discards genuine assist
+   information for players who need it, so it is a global bias/variance trade, not a free win — decide
+   by held-out likelihood, not by whether it fixes Kapanen. **First experiment:** sweep EV
+   `anchor_scale ∈ {1.0, 0.5, 0.25}`; success = Kapanen moves toward average AND well-identified
+   forwards stay put (corr(create old,new) ~0.99, spread preserved) AND held-out create-side tm-corr
+   does not regress. The θ̂ checkpoint chain makes the sweep cheap.
+2. **Better grounding data (item 18, pass-tracking) — the real fix.** The anchor is sparse (goals only)
+   AND role-biased (passer credited, finisher not). Grounding `create` on the last pass before EVERY
+   shot (~16× more labels, not goal/role-conditioned) removes both defects and drops the `spg` IPW.
+   Data-limited: not in the NHL public feed. This is the principled resolution; everything else is a
+   workaround.
+3. **Position-mean create prior + a sum-to-zero / constrained role term.** Untested and not a pure
+   no-op (unlike uniform), but carries the self-defeating tension above; only a refit settles it. Lower
+   priority than (1).
+4. **Honest fallback (item 14 + #5 bootstrap CIs).** Flag low-linemate-variation players
+   ("context-dependent") and widen their WAR CI so an unidentified number is not shown as precise. Does
+   not fix the point estimate; it stops overstating it. Cheapest correct thing if (1) and (2) stall.
+
+**Calibration anchor for any fix.** Counterfactuals (holding all else at production): Kapanen create
++0.088 (replacement) → WAR −0.46; +0.199 (average) → WAR +0.12 ≈ E-H's +0.1. So the −1.32 rests
+entirely on the create artifact, and any principled relaxation toward average lands near the
+third-party consensus — a good sanity target, not a tuning objective. Validate every candidate on a
+synthetic that checks LEVEL and SPREAD stability and well-identified invariance (the metric that masked
+the first failure was focal-minus-population, which cancels exactly the level degeneracy above), plus
+the real two-failure-mode harness (`scratchpad/validate_assist_role.py` pattern). Related: items 13
+(feature-based `qcreate`), 14 (lineup-diversity diagnostic), 18 (pass tracking), and the 5c PP escalation
+note (same anchor split, PP flavor).
+
 ## Tier 2 — valuable, after Tier 1
 
 ### 6. Stage-2 goal-selection reweighting

@@ -35,6 +35,9 @@ RAW_PLAYERS = RAW / "nhl" / "players"   # per-player landing json (handedness, b
 
 INTERIM = DATA / "interim"
 PROCESSED = DATA / "processed"
+DIM = DATA / "dimensions"         # dimension tables (players bio, player_season, games, arenas) —
+                                  # descriptive attrs joined into facts by key, built once, not
+                                  # re-derived from raw feeds per fit
 MODELS = DATA / "models"          # model outputs (impact coefficients, WAR, ...)
 
 # Run logs for every stage (parse, join, fits, exports). The model-fit log lives here too.
@@ -46,7 +49,7 @@ SITE_JSON = DATA / "games"
 WEB_DIR = REPO_ROOT / "web"
 WEB_DATA = WEB_DIR / "public" / "data"
 
-_ALL_DIRS = (RAW_SHIFTS, RAW_HTMLSHIFTS, RAW_PBP, RAW_PLAYERS, INTERIM, PROCESSED, SITE_JSON, LOGS, LOGS_MODEL)
+_ALL_DIRS = (RAW_SHIFTS, RAW_HTMLSHIFTS, RAW_PBP, RAW_PLAYERS, INTERIM, PROCESSED, DIM, SITE_JSON, LOGS, LOGS_MODEL)
 
 
 def ensure_dirs() -> None:
