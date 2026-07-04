@@ -93,6 +93,7 @@ shooting_model._estimate_k — then holds it FIXED during the fit. Usage:
   uv run --group experimental python -m yhattrick.models.generative_model --pool --spg-scale 0.5
                                        # A3: assist-credit weight sensitivity (rerun with 2.0, compare)
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -105,26 +106,58 @@ import jax
 import jax.numpy as jnp
 
 from .. import config as C
+
 # The likelihood itself — parameter layouts, the sparse design + prior-precision matrices, the three
 # objective factories, and the math primitives / prior constants — lives in generative_likelihood.
 # This module builds the design arrays from the fact tables and minimizes the objective it returns.
 from .generative_likelihood import (
-    PRIOR_SD_SHOOT, PRIOR_SD_CREATE, PRIOR_SD_QSHOOT, PRIOR_SD_QCREATE,
-    RW_SD_SHOOT, RW_SD_CREATE, RW_SD_DEF, AGE_PEAK, AGE_SCALE, DENSE_H_MAX,
-    EV_STRENGTHS, MA_STRENGTHS, ALL_STRENGTHS, ARENA_SD, ARENA_RW_SD,
-    RateLayout, QualLayout, ConvLayout, RateHypers, QualHypers,
-    _sigmoid, _se_from_hessian, _build_X, _build_conv_X, _rate_penalty,
-    make_rate_nll, make_quality_nll, make_conversion_nll,
+    PRIOR_SD_SHOOT,
+    PRIOR_SD_CREATE,
+    PRIOR_SD_QSHOOT,
+    PRIOR_SD_QCREATE,
+    RW_SD_SHOOT,
+    RW_SD_CREATE,
+    RW_SD_DEF,
+    AGE_PEAK,
+    AGE_SCALE,
+    DENSE_H_MAX,
+    EV_STRENGTHS,
+    MA_STRENGTHS,
+    ALL_STRENGTHS,
+    ARENA_SD,
+    ARENA_RW_SD,
+    RateLayout,
+    QualLayout,
+    ConvLayout,
+    RateHypers,
+    QualHypers,
+    _sigmoid,
+    _se_from_hessian,
+    _build_X,
+    _build_conv_X,
+    _rate_penalty,
+    make_rate_nll,
+    make_quality_nll,
+    make_conversion_nll,
 )
+
 # Data-in: the fact/dimension tables become per-fit design rows in generative_data; this module
 # builds nothing itself, it fits the arrays that builder produces.
-from .generative_data import (player_index, _age_position, _curve_val, rate_rows,
-                              quality_creator_rows, conversion_rows, estimate_conversion_prior_sds)
+from .generative_data import (
+    player_index,
+    _age_position,
+    _curve_val,
+    rate_rows,
+    quality_creator_rows,
+    conversion_rows,
+    estimate_conversion_prior_sds,
+)
 
-jax.config.update("jax_enable_x64", True)   # float64: stable optimization + Hessian
+jax.config.update("jax_enable_x64", True)  # float64: stable optimization + Hessian
 
 
 # ── fits (JAX autodiff gradient + scipy L-BFGS-B; exact Hessian for SEs) ───────────────────────────
+
 
 def _optimize(nll, x0, *data):
     """Minimize nll(th, *data) over th (scipy L-BFGS-B; grad via JAX). The big data arrays are passed
@@ -138,8 +171,13 @@ def _optimize(nll, x0, *data):
         v, g = vg(jnp.asarray(x), *dargs)
         return float(v), np.asarray(g, dtype=np.float64)
 
-    return minimize(f, x0, jac=True, method="L-BFGS-B",
-                    options={"maxiter": 1500, "maxfun": 1500, "ftol": 1e-10, "gtol": 1e-7})
+    return minimize(
+        f,
+        x0,
+        jac=True,
+        method="L-BFGS-B",
+        options={"maxiter": 1500, "maxfun": 1500, "ftol": 1e-10, "gtol": 1e-7},
+    )
 
 
 # ── θ̂ checkpoint: warm starts + optimization-free re-exports ──────────────────────────────────────
@@ -150,6 +188,7 @@ def _optimize(nll, x0, *data):
 # unchanged, only the path to it shortens), and `--reexport` can skip optimization AND the SE Hessian
 # outright when the fit signature matches exactly (export-side tweaks rerun in minutes, not hours).
 # The holdout harness never warm-starts: its train fits must not touch a solution that saw test data.
+
 
 def _ckpt_path():
     return C.MODELS / "generative_ckpt.npz"
@@ -172,48 +211,77 @@ def _stage_rate(rate, pids):
     up = np.asarray(rate["unit_player"], dtype=np.int64)
     us = rate.get("unit_season")
     us = np.asarray(us, dtype=np.int64) if us is not None else np.full(len(up), -1, dtype=np.int64)
-    return {"theta": np.asarray(rate["theta"], dtype=np.float64),
-            "unit_pid": np.asarray(pids)[up], "unit_season": us,
-            "n_ctx": np.asarray(len(rate["beta"])),          # ctx block SIZE (names may be absent)
-            "ctx_names": _arr(rate.get("ctx_names"), str),
-            "arena_venue": _arr(rate.get("arena_venue"), str),
-            "arena_season": _arr(rate.get("arena_season"), np.int64),
-            "has_a2": np.asarray(rate.get("a2_q") is not None),
-            "nb": np.asarray(rate.get("r") is not None),
-            "converged": np.asarray(rate["converged"]), "grad_norm": np.asarray(rate["grad_norm"]),
-            "se_shoot_last": rate["se_shoot_last"], "se_create_last": rate["se_create_last"],
-            "se_def_last": rate["se_def_last"]}
+    return {
+        "theta": np.asarray(rate["theta"], dtype=np.float64),
+        "unit_pid": np.asarray(pids)[up],
+        "unit_season": us,
+        "n_ctx": np.asarray(len(rate["beta"])),  # ctx block SIZE (names may be absent)
+        "ctx_names": _arr(rate.get("ctx_names"), str),
+        "arena_venue": _arr(rate.get("arena_venue"), str),
+        "arena_season": _arr(rate.get("arena_season"), np.int64),
+        "has_a2": np.asarray(rate.get("a2_q") is not None),
+        "nb": np.asarray(rate.get("r") is not None),
+        "converged": np.asarray(rate["converged"]),
+        "grad_norm": np.asarray(rate["grad_norm"]),
+        "se_shoot_last": rate["se_shoot_last"],
+        "se_create_last": rate["se_create_last"],
+        "se_def_last": rate["se_def_last"],
+    }
 
 
 def _stage_qual(qual, pids):
-    return {"theta": np.asarray(qual["theta"], dtype=np.float64), "pid": np.asarray(pids),
-            "n_ctx": np.asarray(len(qual["beta"])),
-            "ctx_names": _arr(qual.get("ctx_names"), str),
-            "arena_venue": _arr(qual.get("arena_venue"), str),
-            "arena_season": _arr(qual.get("arena_season"), np.int64),
-            "converged": np.asarray(qual["converged"]), "grad_norm": np.asarray(qual["grad_norm"]),
-            "se_qcreate": qual["se_qcreate"]}
+    return {
+        "theta": np.asarray(qual["theta"], dtype=np.float64),
+        "pid": np.asarray(pids),
+        "n_ctx": np.asarray(len(qual["beta"])),
+        "ctx_names": _arr(qual.get("ctx_names"), str),
+        "arena_venue": _arr(qual.get("arena_venue"), str),
+        "arena_season": _arr(qual.get("arena_season"), np.int64),
+        "converged": np.asarray(qual["converged"]),
+        "grad_norm": np.asarray(qual["grad_norm"]),
+        "se_qcreate": qual["se_qcreate"],
+    }
 
 
 def _stage_conv(conv, pids):
-    return {"theta": np.asarray(conv["theta"], dtype=np.float64), "pid": np.asarray(pids),
-            "gid": np.asarray(conv["goalies"]),
-            "keys": np.asarray(list(conv["a"].keys()), dtype=str),
-            "n_ctx": np.asarray(len(conv["beta"])),
-            "ctx_names": _arr(conv.get("ctx_names"), str),
-            "converged": np.asarray(conv["converged"]), "grad_norm": np.asarray(conv["grad_norm"]),
-            "se_fin": conv["se_fin"], "se_gsave": conv["se_gsave"]}
+    return {
+        "theta": np.asarray(conv["theta"], dtype=np.float64),
+        "pid": np.asarray(pids),
+        "gid": np.asarray(conv["goalies"]),
+        "keys": np.asarray(list(conv["a"].keys()), dtype=str),
+        "n_ctx": np.asarray(len(conv["beta"])),
+        "ctx_names": _arr(conv.get("ctx_names"), str),
+        "converged": np.asarray(conv["converged"]),
+        "grad_norm": np.asarray(conv["grad_norm"]),
+        "se_fin": conv["se_fin"],
+        "se_gsave": conv["se_gsave"],
+    }
 
 
-def ckpt_save(seasons, count_model, spg_scale, rates, qual, conv, players, path=None,
-              ma_anchor_scale=1.0, ma_create_prior_sd=None, ma_def_prior_sd=None):
+def ckpt_save(
+    seasons,
+    count_model,
+    spg_scale,
+    rates,
+    qual,
+    conv,
+    players,
+    path=None,
+    ma_anchor_scale=1.0,
+    ma_create_prior_sd=None,
+    ma_def_prior_sd=None,
+):
     pids = np.asarray(players)
-    z = {"seasons": np.asarray([int(s) for s in seasons]), "count_model": np.asarray(count_model),
-         "spg_scale": np.asarray(float(spg_scale)),
-         "ma_anchor_scale": np.asarray(float(ma_anchor_scale)),
-         "ma_create_prior_sd": np.asarray(float(ma_create_prior_sd)
-                                          if ma_create_prior_sd else np.nan),
-         "ma_def_prior_sd": np.asarray(float(ma_def_prior_sd) if ma_def_prior_sd else np.nan)}
+    z = {
+        "seasons": np.asarray([int(s) for s in seasons]),
+        "count_model": np.asarray(count_model),
+        "spg_scale": np.asarray(float(spg_scale)),
+        "ma_anchor_scale": np.asarray(float(ma_anchor_scale)),
+        "ma_create_prior_sd": np.asarray(
+            float(ma_create_prior_sd) if ma_create_prior_sd else np.nan
+        ),
+        "ma_def_prior_sd": np.asarray(float(ma_def_prior_sd) if ma_def_prior_sd else np.nan),
+    }
     for key, rate in rates.items():
         for k, v in _stage_rate(rate, pids).items():
             z[f"{key}_{k}"] = v
@@ -240,7 +308,7 @@ def _ck_stage(ck, key):
     if ck is None or f"{key}_theta" not in ck:
         return None
     pre = key + "_"
-    return {k[len(pre):]: v for k, v in ck.items() if k.startswith(pre)}
+    return {k[len(pre) :]: v for k, v in ck.items() if k.startswith(pre)}
 
 
 def _seq(x):
@@ -256,7 +324,7 @@ def _warm_rate_x0(x0, w, R, NU, PS, QI, has_a2, nb):
     u_pid, u_sea = _rate_unit_keys(R)
     oth = np.asarray(w["theta"], dtype=np.float64)
     onu, ok, onar = len(w["unit_pid"]), int(w["n_ctx"]), len(w["arena_venue"])
-    ops = 1 + 3 * onu + ok                                   # old psi0 index
+    ops = 1 + 3 * onu + ok  # old psi0 index
     old = {(str(p), int(s)): j for j, (p, s) in enumerate(zip(w["unit_pid"], w["unit_season"]))}
     x0[0] = oth[0]
     hits = 0
@@ -266,16 +334,18 @@ def _warm_rate_x0(x0, w, R, NU, PS, QI, has_a2, nb):
             hits += 1
             for b in range(3):
                 x0[1 + b * NU + i] = oth[1 + b * onu + j]
-    oc = {str(nm): float(v) for nm, v in zip(w["ctx_names"], oth[1 + 3 * onu:ops])}
+    oc = {str(nm): float(v) for nm, v in zip(w["ctx_names"], oth[1 + 3 * onu : ops])}
     for j, nm in enumerate(R.get("ctx_names") or []):
         if nm in oc:
             x0[1 + 3 * NU + j] = oc[nm]
-    x0[PS] = oth[ops]                                        # psi0 (create_0)
-    oa = {(str(v), int(s)): float(x) for v, s, x in
-          zip(w["arena_venue"], w["arena_season"], oth[ops + 1:ops + 1 + onar])}
+    x0[PS] = oth[ops]  # psi0 (create_0)
+    oa = {
+        (str(v), int(s)): float(x)
+        for v, s, x in zip(w["arena_venue"], w["arena_season"], oth[ops + 1 : ops + 1 + onar])
+    }
     for j, (v, s) in enumerate(zip(_seq(R.get("arena_venue")), _seq(R.get("arena_season")))):
         x0[PS + 1 + j] = oa.get((str(v), int(s)), 0.0)
-    pos = ops + 1 + onar                                     # old tail: [q?] [log r?]
+    pos = ops + 1 + onar  # old tail: [q?] [log r?]
     if bool(w["has_a2"]):
         if has_a2:
             x0[QI] = oth[pos]
@@ -287,12 +357,16 @@ def _warm_rate_x0(x0, w, R, NU, PS, QI, has_a2, nb):
 
 def _reuse_theta_rate(w, n_th, R, has_a2, nb):
     u_pid, u_sea = _rate_unit_keys(R)
-    ok = (w is not None and len(np.asarray(w["theta"])) == n_th
-          and np.array_equal(np.asarray(w["unit_pid"]), u_pid)
-          and np.array_equal(np.asarray(w["unit_season"]), u_sea)
-          and [str(x) for x in w["ctx_names"]] == [str(x) for x in _seq(R.get("ctx_names"))]
-          and [str(x) for x in w["arena_venue"]] == [str(x) for x in _seq(R.get("arena_venue"))]
-          and bool(w["has_a2"]) == bool(has_a2) and bool(w["nb"]) == bool(nb))
+    ok = (
+        w is not None
+        and len(np.asarray(w["theta"])) == n_th
+        and np.array_equal(np.asarray(w["unit_pid"]), u_pid)
+        and np.array_equal(np.asarray(w["unit_season"]), u_sea)
+        and [str(x) for x in w["ctx_names"]] == [str(x) for x in _seq(R.get("ctx_names"))]
+        and [str(x) for x in w["arena_venue"]] == [str(x) for x in _seq(R.get("arena_venue"))]
+        and bool(w["has_a2"]) == bool(has_a2)
+        and bool(w["nb"]) == bool(nb)
+    )
     if not ok:
         raise ValueError("reuse: checkpoint does not match this rate fit exactly — run a full fit")
     return np.asarray(w["theta"], dtype=np.float64)
@@ -310,27 +384,37 @@ def _warm_qual_x0(x0, w, pids, ctx_names, ar_v, ar_s, P, k):
         j = old.get(str(p))
         if j is not None:
             hits += 1
-            x0[1 + i] = oth[1 + j]                           # qshoot
-            x0[3 + P + i] = oth[3 + oP + j]                  # qdef
-    x0[1 + P:3 + P] = oth[1 + oP:3 + oP]                     # qcreate position pair
-    oc = {str(nm): float(v) for nm, v in zip(w["ctx_names"], oth[3 + 2 * oP:3 + 2 * oP + ok])}
+            x0[1 + i] = oth[1 + j]  # qshoot
+            x0[3 + P + i] = oth[3 + oP + j]  # qdef
+    x0[1 + P : 3 + P] = oth[1 + oP : 3 + oP]  # qcreate position pair
+    oc = {str(nm): float(v) for nm, v in zip(w["ctx_names"], oth[3 + 2 * oP : 3 + 2 * oP + ok])}
     for j, nm in enumerate(ctx_names or []):
         if nm in oc:
             x0[3 + 2 * P + j] = oc[nm]
-    oa = {(str(v), int(s)): float(x) for v, s, x in
-          zip(w["arena_venue"], w["arena_season"], oth[3 + 2 * oP + ok:3 + 2 * oP + ok + onar])}
+    oa = {
+        (str(v), int(s)): float(x)
+        for v, s, x in zip(
+            w["arena_venue"], w["arena_season"], oth[3 + 2 * oP + ok : 3 + 2 * oP + ok + onar]
+        )
+    }
     for j, (v, s) in enumerate(zip(_seq(ar_v), _seq(ar_s))):
         x0[3 + 2 * P + k + j] = oa.get((str(v), int(s)), 0.0)
     return hits
 
 
 def _reuse_theta_qual(w, n_th, pids, Q):
-    ok = (w is not None and pids is not None and len(np.asarray(w["theta"])) == n_th
-          and np.array_equal(np.asarray(w["pid"]), np.asarray(pids))
-          and [str(x) for x in w["ctx_names"]] == [str(x) for x in _seq(Q.get("ctx_names"))]
-          and [str(x) for x in w["arena_venue"]] == [str(x) for x in _seq(Q.get("arena_venue"))])
+    ok = (
+        w is not None
+        and pids is not None
+        and len(np.asarray(w["theta"])) == n_th
+        and np.array_equal(np.asarray(w["pid"]), np.asarray(pids))
+        and [str(x) for x in w["ctx_names"]] == [str(x) for x in _seq(Q.get("ctx_names"))]
+        and [str(x) for x in w["arena_venue"]] == [str(x) for x in _seq(Q.get("arena_venue"))]
+    )
     if not ok:
-        raise ValueError("reuse: checkpoint does not match this quality fit exactly — run a full fit")
+        raise ValueError(
+            "reuse: checkpoint does not match this quality fit exactly — run a full fit"
+        )
     return np.asarray(w["theta"], dtype=np.float64)
 
 
@@ -345,7 +429,7 @@ def _warm_conv_x0(x0, w, pids, gids, keys, ctx_names, S, kc, P):
             j = okeys.index(kk)
             x0[i] = oth[j]
             x0[S + i] = oth[oS + j]
-    oc = {str(nm): float(v) for nm, v in zip(w["ctx_names"], oth[2 * oS:2 * oS + okc])}
+    oc = {str(nm): float(v) for nm, v in zip(w["ctx_names"], oth[2 * oS : 2 * oS + okc])}
     for j, nm in enumerate(ctx_names or []):
         if nm in oc:
             x0[2 * S + j] = oc[nm]
@@ -366,13 +450,19 @@ def _warm_conv_x0(x0, w, pids, gids, keys, ctx_names, S, kc, P):
 
 
 def _reuse_theta_conv(w, n_th, pids, Cr, keys):
-    ok = (w is not None and pids is not None and len(np.asarray(w["theta"])) == n_th
-          and np.array_equal(np.asarray(w["pid"]), np.asarray(pids))
-          and np.array_equal(np.asarray(w["gid"]), np.asarray(Cr["goalies"]))
-          and [str(x) for x in w["keys"]] == list(keys)
-          and [str(x) for x in w["ctx_names"]] == [str(x) for x in (Cr.get("ctx_names") or [])])
+    ok = (
+        w is not None
+        and pids is not None
+        and len(np.asarray(w["theta"])) == n_th
+        and np.array_equal(np.asarray(w["pid"]), np.asarray(pids))
+        and np.array_equal(np.asarray(w["gid"]), np.asarray(Cr["goalies"]))
+        and [str(x) for x in w["keys"]] == list(keys)
+        and [str(x) for x in w["ctx_names"]] == [str(x) for x in (Cr.get("ctx_names") or [])]
+    )
     if not ok:
-        raise ValueError("reuse: checkpoint does not match this conversion fit exactly — run a full fit")
+        raise ValueError(
+            "reuse: checkpoint does not match this conversion fit exactly — run a full fit"
+        )
     return np.asarray(w["theta"], dtype=np.float64)
 
 
@@ -408,19 +498,28 @@ def _rate_ses(H, M, lay, lu, dense_max=DENSE_H_MAX):
         for b in range(3):
             cj = cols[b]
             for i0 in range(0, len(cj), 512):
-                sel = cj[i0:i0 + 512]
+                sel = cj[i0 : i0 + 512]
                 E = np.zeros((ncol, len(sel)))
                 E[sel, np.arange(len(sel))] = 1.0
                 Hc = slu.solve(E)
-                var = (np.einsum("ij,ij->j", Hc, M @ Hc) if b == 1
-                       else Hc[sel, np.arange(len(sel))])
-                se[b][act[i0:i0 + 512]] = np.sqrt(np.clip(var, 0.0, None))
+                var = np.einsum("ij,ij->j", Hc, M @ Hc) if b == 1 else Hc[sel, np.arange(len(sel))]
+                se[b][act[i0 : i0 + 512]] = np.sqrt(np.clip(var, 0.0, None))
     return se
 
 
-def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson", a2=None,
-                    warm=None, reuse=False, create_prior_sd=None, def_prior_sd=None,
-                    dense_max=DENSE_H_MAX):
+def fit_rate_create(
+    R,
+    g_team,
+    g_cidx,
+    shots_per_goal,
+    count_model="poisson",
+    a2=None,
+    warm=None,
+    reuse=False,
+    create_prior_sd=None,
+    def_prior_sd=None,
+    dense_max=DENSE_H_MAX,
+):
     """UNIFIED CREATION over per-(player, season) STATES. One `create` parameter per unit that does
     double duty:
       (i) lifts teammates' shot rate in the Poisson/NB count layer, and
@@ -454,12 +553,12 @@ def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson", a2
     solution mapped by key; `reuse=True` additionally SKIPS optimization and the SE Hessian,
     taking θ and SEs straight from the checkpoint — valid only for the exact same fit (enforced)."""
     P, k = len(R["players"]), R["Xctx"].shape[1]
-    lsh = 1 / PRIOR_SD_SHOOT ** 2
+    lsh = 1 / PRIOR_SD_SHOOT**2
     ldf = 1 / (def_prior_sd if def_prior_sd else PRIOR_SD_SHOOT) ** 2
     lcr = 1 / (create_prior_sd if create_prior_sd else PRIOR_SD_CREATE) ** 2
     nb = count_model == "nb"
     dmask = R.get("def_mask")
-    if dmask is None:                                        # synthetic/legacy rows: all defenders real
+    if dmask is None:  # synthetic/legacy rows: all defenders real
         dmask = np.ones_like(R["def_idx"], dtype=np.float64)
     states = "unit_player" in R
     if states:
@@ -471,39 +570,55 @@ def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson", a2
         NU = P
         sh_i, tm_i, df_i = R["shooter_idx"], R["team_idx"], R["def_idx"]
         up, fm = np.arange(P, dtype=np.int64), np.ones(P)
-        e_prev = np.zeros(0, dtype=np.int64); e_next = np.zeros(0, dtype=np.int64); e_gap = np.ones(0)
-    w_sh, w_cr, w_df = 1 / RW_SD_SHOOT ** 2, 1 / RW_SD_CREATE ** 2, 1 / RW_SD_DEF ** 2
+        e_prev = np.zeros(0, dtype=np.int64)
+        e_next = np.zeros(0, dtype=np.int64)
+        e_gap = np.ones(0)
+    w_sh, w_cr, w_df = 1 / RW_SD_SHOOT**2, 1 / RW_SD_CREATE**2, 1 / RW_SD_DEF**2
     has_rw = len(e_prev) > 0
-    n_ar = int(R.get("n_arenas", 0))                         # arena offsets: [PS+1, PS+1+n_ar)
+    n_ar = int(R.get("n_arenas", 0))  # arena offsets: [PS+1, PS+1+n_ar)
     acol = R.get("arena_col")
     if acol is None:
         acol = np.full(len(R["count"]), -1, dtype=np.int32)
-    la_ar, lrw_ar = 1 / ARENA_SD ** 2, 1 / ARENA_RW_SD ** 2  # (venue, season)-state nuisance prior
+    la_ar, lrw_ar = 1 / ARENA_SD**2, 1 / ARENA_RW_SD**2  # (venue, season)-state nuisance prior
     a_ep = jnp.asarray(R.get("arena_e_prev", np.zeros(0, dtype=np.int64)))
     a_en = jnp.asarray(R.get("arena_e_next", np.zeros(0, dtype=np.int64)))
     a_iw = jnp.asarray(1.0 / np.maximum(R.get("arena_e_gap", np.ones(0)), 1e-9))
     has_ar_rw = int(a_ep.shape[0]) > 0
-    has_a2 = a2 is not None and len(a2[0]) > 0               # A2 mixture stage; q at index PS+1+n_ar
+    has_a2 = a2 is not None and len(a2[0]) > 0  # A2 mixture stage; q at index PS+1+n_ar
     if has_a2:
-        g2_team, g2_c1, g2_c2 = (np.asarray(a2[0], dtype=np.int64),
-                                 np.asarray(a2[1], dtype=np.int64),
-                                 np.asarray(a2[2], dtype=np.int64))
+        g2_team, g2_c1, g2_c2 = (
+            np.asarray(a2[0], dtype=np.int64),
+            np.asarray(a2[1], dtype=np.int64),
+            np.asarray(a2[2], dtype=np.int64),
+        )
     else:
         g2_team = np.zeros((0, 4), dtype=np.int64)
         g2_c1 = g2_c2 = np.zeros(0, dtype=np.int64)
 
     lay = RateLayout(NU, k, n_ar, has_a2, nb)
-    PS, QI = lay.PS, lay.QI                                  # psi0 index / A2-mixture-logit index
+    PS, QI = lay.PS, lay.QI  # psi0 index / A2-mixture-logit index
 
-    hyp = RateHypers(nb=nb, has_a2=has_a2, has_rw=has_rw, has_ar_rw=has_ar_rw,
-                     shots_per_goal=shots_per_goal, lsh=lsh, lcr=lcr, ldf=ldf,
-                     w_sh=w_sh, w_cr=w_cr, w_df=w_df, la_ar=la_ar, lrw_ar=lrw_ar)
+    hyp = RateHypers(
+        nb=nb,
+        has_a2=has_a2,
+        has_rw=has_rw,
+        has_ar_rw=has_ar_rw,
+        shots_per_goal=shots_per_goal,
+        lsh=lsh,
+        lcr=lcr,
+        ldf=ldf,
+        w_sh=w_sh,
+        w_cr=w_cr,
+        w_df=w_df,
+        la_ar=la_ar,
+        lrw_ar=lrw_ar,
+    )
     nll = make_rate_nll(lay, hyp, (a_ep, a_en, a_iw))
 
     x0 = np.zeros(lay.n_theta)
     if nb:
-        x0[-1] = 1.0                                         # NB dispersion log r starts at 1 (r ≈ e);
-                                                             #   q's cold logit stays 0 ⇒ q = 0.5
+        x0[-1] = 1.0  # NB dispersion log r starts at 1 (r ≈ e);
+        #   q's cold logit stays 0 ⇒ q = 0.5
     if reuse:
         th = _reuse_theta_rate(warm, len(x0), R, has_a2, nb)
         converged, gnorm, nit = bool(warm["converged"]), float(warm["grad_norm"]), 0
@@ -512,14 +627,32 @@ def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson", a2
             try:
                 hits = _warm_rate_x0(x0, warm, R, NU, PS, QI, has_a2, nb)
                 print(f"    warm start: {hits}/{NU} unit states carried from checkpoint")
-            except Exception as e:                           # a stale checkpoint must never kill a fit
+            except Exception as e:  # a stale checkpoint must never kill a fit
                 print(f"    warm start skipped ({e}) — cold init")
                 x0 = np.zeros_like(x0)
                 if nb:
                     x0[-1] = 1.0
-        res = _optimize(nll, x0, sh_i, tm_i, df_i, dmask, R["Xctx"], R["count"], R["offset"],
-                        g_team, g_cidx, fm, e_prev, e_next, 1.0 / np.maximum(e_gap, 1e-9), acol,
-                        g2_team, g2_c1, g2_c2)
+        res = _optimize(
+            nll,
+            x0,
+            sh_i,
+            tm_i,
+            df_i,
+            dmask,
+            R["Xctx"],
+            R["count"],
+            R["offset"],
+            g_team,
+            g_cidx,
+            fm,
+            e_prev,
+            e_next,
+            1.0 / np.maximum(e_gap, 1e-9),
+            acol,
+            g2_team,
+            g2_c1,
+            g2_c2,
+        )
         th, converged = res.x, bool(res.success)
         gnorm, nit = float(np.max(np.abs(res.jac))), int(res.nit)
     a2_q = float(_sigmoid(th[QI])) if has_a2 else None
@@ -529,8 +662,8 @@ def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson", a2
     r = float(np.exp(th[-1])) if nb else None
 
     lu = np.full(P, -1, dtype=np.int64)
-    lu[up] = np.arange(NU)                                   # last unit per player (units season-sorted)
-    if reuse:                                                # same fit ⇒ SEs come from the checkpoint
+    lu[up] = np.arange(NU)  # last unit per player (units season-sorted)
+    if reuse:  # same fit ⇒ SEs come from the checkpoint
         se_sh = np.asarray(warm["se_shoot_last"], dtype=np.float64)
         se_cr = np.asarray(warm["se_create_last"], dtype=np.float64)
         se_df = np.asarray(warm["se_def_last"], dtype=np.float64)
@@ -545,14 +678,16 @@ def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson", a2
         Xs = _build_X(sh_i, tm_i, df_i, R["Xctx"], lay, dmask)
         XtWX = (Xs.T @ Xs.multiply(W[:, None])).tocsr()
         logit5 = np.concatenate([np.full((len(g_cidx), 1), psi0), cr[g_team]], 1)
-        pi = np.exp(logit5 - logit5.max(1, keepdims=True)); pi /= pi.sum(1, keepdims=True)
-        cinfo = np.zeros(NU)                                 # per-goal creator Fisher info (weight 1)
+        pi = np.exp(logit5 - logit5.max(1, keepdims=True))
+        pi /= pi.sum(1, keepdims=True)
+        cinfo = np.zeros(NU)  # per-goal creator Fisher info (weight 1)
         for t in range(4):
             np.add.at(cinfo, g_team[:, t], pi[:, t + 1] * (1 - pi[:, t + 1]))
-        if has_a2:                                           # A2 Fisher, responsibility-weighted by the
-            lg2 = cr[g2_team].astype(np.float64)             # mixture (noise share carries no info)
+        if has_a2:  # A2 Fisher, responsibility-weighted by the
+            lg2 = cr[g2_team].astype(np.float64)  # mixture (noise share carries no info)
             lg2[np.arange(4)[None, :] == g2_c1[:, None]] = -1e30
-            pi2 = np.exp(lg2 - lg2.max(1, keepdims=True)); pi2 /= pi2.sum(1, keepdims=True)
+            pi2 = np.exp(lg2 - lg2.max(1, keepdims=True))
+            pi2 /= pi2.sum(1, keepdims=True)
             plc = pi2[np.arange(len(g2_c2)), g2_c2]
             resp = a2_q * plc / (a2_q * plc + (1.0 - a2_q) / 3.0 + 1e-12)
             for t in range(4):
@@ -560,21 +695,43 @@ def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson", a2
                 np.add.at(cinfo, g2_team[:, t], resp * pi2[:, t] * (1 - pi2[:, t]) * valid)
         ci = np.arange(lay.create.start, lay.create.stop)
         cdiag = sparse.csr_matrix((cinfo, (ci, ci)), shape=(lay.n_core, lay.n_core))
-        H = XtWX + _rate_penalty(lay, fm, e_prev, e_next, e_gap, (lsh, lcr, ldf)) + shots_per_goal * cdiag
-        M = XtWX + shots_per_goal ** 2 * cdiag
+        H = (
+            XtWX
+            + _rate_penalty(lay, fm, e_prev, e_next, e_gap, (lsh, lcr, ldf))
+            + shots_per_goal * cdiag
+        )
+        M = XtWX + shots_per_goal**2 * cdiag
         se_sh, se_cr, se_df = _rate_ses(H, M, lay, lu, dense_max)
-    out = {"intercept": float(th[0]), "beta": b, "psi0": psi0,
-           "shoot": sh, "create": cr, "def": df,
-           "unit_player": up, "unit_season": R.get("unit_season"), "last_unit": lu,
-           "shoot_last": _last_view(sh, lu), "create_last": _last_view(cr, lu),
-           "def_last": _last_view(df, lu),
-           "se_shoot_last": se_sh, "se_create_last": se_cr, "se_def_last": se_df,
-           "count_model": count_model, "r": r, "converged": converged,
-           "grad_norm": gnorm, "nit": nit, "theta": np.asarray(th, dtype=np.float64).copy(),
-           "ctx_names": R.get("ctx_names"),
-           "arena_vec": ar_vec, "arena_venue": R.get("arena_venue"),
-           "arena_season": R.get("arena_season"), "a2_q": a2_q, "n_a2": int(len(g2_c2))}
-    if not states:                                           # static aliases (units == players)
+    out = {
+        "intercept": float(th[0]),
+        "beta": b,
+        "psi0": psi0,
+        "shoot": sh,
+        "create": cr,
+        "def": df,
+        "unit_player": up,
+        "unit_season": R.get("unit_season"),
+        "last_unit": lu,
+        "shoot_last": _last_view(sh, lu),
+        "create_last": _last_view(cr, lu),
+        "def_last": _last_view(df, lu),
+        "se_shoot_last": se_sh,
+        "se_create_last": se_cr,
+        "se_def_last": se_df,
+        "count_model": count_model,
+        "r": r,
+        "converged": converged,
+        "grad_norm": gnorm,
+        "nit": nit,
+        "theta": np.asarray(th, dtype=np.float64).copy(),
+        "ctx_names": R.get("ctx_names"),
+        "arena_vec": ar_vec,
+        "arena_venue": R.get("arena_venue"),
+        "arena_season": R.get("arena_season"),
+        "a2_q": a2_q,
+        "n_a2": int(len(g2_c2)),
+    }
+    if not states:  # static aliases (units == players)
         out["se_shoot"], out["se_create"], out["se_def"] = se_sh, se_cr, se_df
     return out
 
@@ -593,34 +750,37 @@ def fit_quality_creator(Q, P, creates, isD=None, warm=None, reuse=False, pids=No
     (creator ≥ 0), MARGINALIZED over pi otherwise — including goals whose credited assister was not an
     on-ice teammate (creator = −1, F4). Defenders masked (≤5). SEs: diagonal Gauss-Newton."""
     n, k = len(Q["y"]), Q["Xctx"].shape[1]
-    cre = Q["creator"]                                      # -1 latent, 0..3 teammate, 4 unassisted
-    cidx_np = np.where(cre == 4, 0, np.clip(cre, 0, 3) + 1).astype(np.int64)  # col in [unassist, t0..t3]
-    obs_np = (cre >= 0) & (Q["goal"] == 1)                  # rows with an OBSERVED creator label
-    lqs, lqc, lqd = 1 / PRIOR_SD_QSHOOT ** 2, 1 / PRIOR_SD_QCREATE ** 2, 1 / PRIOR_SD_QSHOOT ** 2
+    cre = Q["creator"]  # -1 latent, 0..3 teammate, 4 unassisted
+    cidx_np = np.where(cre == 4, 0, np.clip(cre, 0, 3) + 1).astype(
+        np.int64
+    )  # col in [unassist, t0..t3]
+    obs_np = (cre >= 0) & (Q["goal"] == 1)  # rows with an OBSERVED creator label
+    lqs, lqc, lqd = 1 / PRIOR_SD_QSHOOT**2, 1 / PRIOR_SD_QCREATE**2, 1 / PRIOR_SD_QSHOOT**2
     strength = Q.get("strength", np.zeros(n, dtype=np.int64))
     dmask = Q.get("def_mask")
     if dmask is None:
         dmask = np.ones_like(Q["def_idx"], dtype=np.float64)
     if isD is None:
         isD = np.zeros(P)
-    tpos = isD[Q["team_idx"]].astype(np.int64)              # (n,4) teammate position: 0=F, 1=D
-    n_ar = int(Q.get("n_arenas", 0))                        # arena offsets: last n_ar params
+    tpos = isD[Q["team_idx"]].astype(np.int64)  # (n,4) teammate position: 0=F, 1=D
+    n_ar = int(Q.get("n_arenas", 0))  # arena offsets: last n_ar params
     acol = Q.get("arena_col")
     if acol is None:
         acol = np.full(n, -1, dtype=np.int32)
-    la_ar, lrw_ar = 1 / ARENA_SD ** 2, 1 / ARENA_RW_SD ** 2
+    la_ar, lrw_ar = 1 / ARENA_SD**2, 1 / ARENA_RW_SD**2
     a_ep = jnp.asarray(Q.get("arena_e_prev", np.zeros(0, dtype=np.int64)))
     a_en = jnp.asarray(Q.get("arena_e_next", np.zeros(0, dtype=np.int64)))
     a_iw = jnp.asarray(1.0 / np.maximum(Q.get("arena_e_gap", np.ones(0)), 1e-9))
     has_ar_rw = int(a_ep.shape[0]) > 0
-    lg = np.zeros((n, 5))                                   # per-row creator logits by strength
+    lg = np.zeros((n, 5))  # per-row creator logits by strength
     for st, spec in creates.items():
         cr_s, psi_s = spec[0], spec[1]
         tcols = spec[2] if len(spec) > 2 else Q["team_idx"]
         m = strength == st
         if m.any():
             lg[m] = np.concatenate([np.full((int(m.sum()), 1), psi_s), cr_s[tcols[m]]], 1)
-    pi_np = np.exp(lg - lg.max(1, keepdims=True)); pi_np /= pi_np.sum(1, keepdims=True)
+    pi_np = np.exp(lg - lg.max(1, keepdims=True))
+    pi_np /= pi_np.sum(1, keepdims=True)
     lay = QualLayout(P, k, n_ar)
 
     hyp = QualHypers(has_ar_rw=has_ar_rw, lqs=lqs, lqc=lqc, lqd=lqd, la_ar=la_ar, lrw_ar=lrw_ar)
@@ -633,17 +793,44 @@ def fit_quality_creator(Q, P, creates, isD=None, warm=None, reuse=False, pids=No
     else:
         if warm is not None and pids is not None:
             try:
-                hits = _warm_qual_x0(x0, warm, pids, Q.get("ctx_names"), Q.get("arena_venue"),
-                                     Q.get("arena_season"), P, k)
+                hits = _warm_qual_x0(
+                    x0,
+                    warm,
+                    pids,
+                    Q.get("ctx_names"),
+                    Q.get("arena_venue"),
+                    Q.get("arena_season"),
+                    P,
+                    k,
+                )
                 print(f"    quality warm start: {hits}/{P} players carried from checkpoint")
-            except Exception as e:                           # a stale checkpoint must never kill a fit
+            except Exception as e:  # a stale checkpoint must never kill a fit
                 print(f"    quality warm start skipped ({e}) — cold init")
                 x0 = np.zeros_like(x0)
-        res = _optimize(nll, x0, Q["shooter_idx"], Q["team_idx"], tpos,
-                        Q["def_idx"], dmask, Q["Xctx"], _sigmoid(Q["y"]), obs_np, cidx_np, pi_np, acol)
+        res = _optimize(
+            nll,
+            x0,
+            Q["shooter_idx"],
+            Q["team_idx"],
+            tpos,
+            Q["def_idx"],
+            dmask,
+            Q["Xctx"],
+            _sigmoid(Q["y"]),
+            obs_np,
+            cidx_np,
+            pi_np,
+            acol,
+        )
         th, converged = res.x, bool(res.success)
         gnorm, nit = float(np.max(np.abs(res.jac))), int(res.nit)
-    mq, qs, qc, qd, b = (float(th[lay.mq]), th[lay.qshoot], th[lay.qcreate], th[lay.qdef], th[lay.beta])
+    mq, qs, qc, qd, b = (
+        float(th[lay.mq]),
+        th[lay.qshoot],
+        th[lay.qcreate],
+        th[lay.qdef],
+        th[lay.beta],
+    )
     arq_vec = th[lay.arena]
     # Beta concentration from residual MSE around the fitted mean
     base = mq + qs[Q["shooter_idx"]] + (qd[Q["def_idx"]] * dmask).sum(1) + Q["Xctx"] @ b
@@ -651,7 +838,7 @@ def fit_quality_creator(Q, P, creates, isD=None, warm=None, reuse=False, pids=No
         base = base + np.where(acol >= 0, arq_vec[np.clip(acol, 0, None)], 0.0)
     sig5 = np.concatenate([_sigmoid(base)[:, None], _sigmoid(base[:, None] + qc[tpos])], 1)
     ci = cidx_np
-    m = (pi_np * sig5).sum(1)                                    # marginal mean, FIXED pi
+    m = (pi_np * sig5).sum(1)  # marginal mean, FIXED pi
     fitted = np.where(obs_np, sig5[np.arange(n), ci], m)
     mse = float(np.mean((_sigmoid(Q["y"]) - fitted) ** 2))
     s_conc = max(float(np.mean(fitted * (1 - fitted)) / max(mse, 1e-9) - 1.0), 1.0)
@@ -661,32 +848,48 @@ def fit_quality_creator(Q, P, creates, isD=None, warm=None, reuse=False, pids=No
     info_qc = np.zeros(2)
     tg, sg, cig, tpg = tm[obs_np], sig5[obs_np], ci[obs_np], tpos[obs_np]
     is_tm = cig >= 1
-    cr_pl = tg[np.arange(len(tg)), np.clip(cig - 1, 0, 3)]       # creator player (for n_create)
-    cr_pos = tpg[np.arange(len(tpg)), np.clip(cig - 1, 0, 3)]    # creator position (for info)
+    cr_pl = tg[np.arange(len(tg)), np.clip(cig - 1, 0, 3)]  # creator player (for n_create)
+    cr_pos = tpg[np.arange(len(tpg)), np.clip(cig - 1, 0, 3)]  # creator position (for info)
     sc = sg[np.arange(len(sg)), cig]
     np.add.at(info_qc, cr_pos[is_tm], (sc * (1 - sc))[is_tm])
     lat = ~obs_np
     pn, sn, mn, tpn = pi_np[lat], sig5[lat], m[lat], tpos[lat]
     den = np.clip(mn * (1 - mn), 1e-9, None)
     for pos in (0, 1):
-        gpos = sum(pn[:, t + 1] * sn[:, t + 1] * (1 - sn[:, t + 1]) * (tpn[:, t] == pos)
-                   for t in range(4))
-        info_qc[pos] += float(np.sum(gpos ** 2 / den))
-    se_qc = (np.asarray(warm["se_qcreate"], dtype=np.float64) if reuse
-             else 1.0 / np.sqrt(info_qc + lqc))
+        gpos = sum(
+            pn[:, t + 1] * sn[:, t + 1] * (1 - sn[:, t + 1]) * (tpn[:, t] == pos) for t in range(4)
+        )
+        info_qc[pos] += float(np.sum(gpos**2 / den))
+    se_qc = (
+        np.asarray(warm["se_qcreate"], dtype=np.float64) if reuse else 1.0 / np.sqrt(info_qc + lqc)
+    )
     n_create = np.zeros(P, dtype=np.int64)
     np.add.at(n_create, cr_pl[is_tm], 1)
     # per-strength quality intercept: EV = mq; PP = mq + (pp-column coefficient, Xctx col 1)
     mu_qual = {"ev": mq, "ma": mq + (float(b[1]) if len(b) > 1 else 0.0)}
-    return {"intercept": mq, "mu_qual": mu_qual, "qshoot": qs, "qcreate": qc, "qdef": qd, "beta": b,
-            "beta_s": s_conc, "se_qcreate": se_qc, "n_create": n_create, "converged": converged,
-            "grad_norm": gnorm, "nit": nit, "theta": np.asarray(th, dtype=np.float64).copy(),
-            "ctx_names": Q.get("ctx_names"),
-            "arena_vec": arq_vec, "arena_venue": Q.get("arena_venue"),
-            "arena_season": Q.get("arena_season")}
+    return {
+        "intercept": mq,
+        "mu_qual": mu_qual,
+        "qshoot": qs,
+        "qcreate": qc,
+        "qdef": qd,
+        "beta": b,
+        "beta_s": s_conc,
+        "se_qcreate": se_qc,
+        "n_create": n_create,
+        "converged": converged,
+        "grad_norm": gnorm,
+        "nit": nit,
+        "theta": np.asarray(th, dtype=np.float64).copy(),
+        "ctx_names": Q.get("ctx_names"),
+        "arena_vec": arq_vec,
+        "arena_venue": Q.get("arena_venue"),
+        "arena_season": Q.get("arena_season"),
+    }
 
 
 # ── conversion fit (native logit, keyed off the observed xG) ────────────────────────────────────────
+
 
 def fit_conversion(Cr, P, warm=None, reuse=False, pids=None):
     """CONVERSION, fit NATIVELY inside this model (no shooting-model reuse). A Bernoulli goal model
@@ -698,19 +901,22 @@ def fit_conversion(Cr, P, warm=None, reuse=False, pids=None):
     condition, not a hand-solved constant. `fin` (per shooter) and `gsave` (per goalie, <0 = good) are
     log-odds offsets with EB ridge priors whose SDs come from the pre-calculation stage
     (estimate_conversion_prior_sds) — recomputed here each fit, then FIXED during it. Independent of
-    Stages 1-2 (uses observed xg, not create/qcreate/qbar). SEs: diagonal Gauss-Newton (W = p(1−p))."""
+    Stages 1-2 (uses observed xg, not create/qcreate/qbar). SEs: diagonal Gauss-Newton (W = p(1−p)).
+    """
     G = len(Cr["goalies"])
-    prior_sd_fin, prior_sd_gsave = estimate_conversion_prior_sds(Cr, P)   # pre-calc: data-calibrated ridge
-    lf, lg = 1 / prior_sd_fin ** 2, 1 / prior_sd_gsave ** 2
+    prior_sd_fin, prior_sd_gsave = estimate_conversion_prior_sds(
+        Cr, P
+    )  # pre-calc: data-calibrated ridge
+    lf, lg = 1 / prior_sd_fin**2, 1 / prior_sd_gsave**2
     slab = Cr.get("strength")
     if slab is None:
         slab = np.zeros(len(Cr["y"]), dtype=np.int64)
-    present = sorted({int(x) for x in np.unique(slab)})     # strength labels present (0=EV, 1=MA)
+    present = sorted({int(x) for x in np.unique(slab)})  # strength labels present (0=EV, 1=MA)
     smap = {s: i for i, s in enumerate(present)}
-    sidx = np.array([smap[int(x)] for x in slab], dtype=np.int64)   # compact 0..S-1
+    sidx = np.array([smap[int(x)] for x in slab], dtype=np.int64)  # compact 0..S-1
     S = len(present)
-    keys = ["ev" if s == 0 else "ma" for s in present]      # a/b are per-strength; fin/gsave pooled
-    Cctx = Cr.get("ctx")                                    # global block: season offsets + age curves
+    keys = ["ev" if s == 0 else "ma" for s in present]  # a/b are per-strength; fin/gsave pooled
+    Cctx = Cr.get("ctx")  # global block: season offsets + age curves
     kc = 0 if Cctx is None else Cctx.shape[1]
     if Cctx is None:
         Cctx = np.zeros((len(Cr["y"]), 0))
@@ -719,59 +925,96 @@ def fit_conversion(Cr, P, warm=None, reuse=False, pids=None):
     nll = make_conversion_nll(lay, lf, lg)
 
     x0 = np.zeros(lay.n_theta)
-    x0[lay.a] = 1.0                                         # start each strength's slope at 1
+    x0[lay.a] = 1.0  # start each strength's slope at 1
     if reuse:
         th = _reuse_theta_conv(warm, len(x0), pids, Cr, keys)
         converged, gnorm, nit = bool(warm["converged"]), float(warm["grad_norm"]), 0
     else:
         if warm is not None and pids is not None:
             try:
-                hits = _warm_conv_x0(x0, warm, pids, Cr["goalies"], keys, Cr.get("ctx_names"), S, kc, P)
+                hits = _warm_conv_x0(
+                    x0, warm, pids, Cr["goalies"], keys, Cr.get("ctx_names"), S, kc, P
+                )
                 print(f"    conversion warm start: {hits}/{P} shooters carried from checkpoint")
-            except Exception as e:                          # a stale checkpoint must never kill a fit
+            except Exception as e:  # a stale checkpoint must never kill a fit
                 print(f"    conversion warm start skipped ({e}) — cold init")
-                x0 = np.zeros_like(x0); x0[lay.a] = 1.0
-        res = _optimize(nll, x0, sidx, Cr["shooter_idx"], Cr["goalie_idx"], Cr["logit_xg"], Cctx, Cr["y"])
+                x0 = np.zeros_like(x0)
+                x0[lay.a] = 1.0
+        res = _optimize(
+            nll, x0, sidx, Cr["shooter_idx"], Cr["goalie_idx"], Cr["logit_xg"], Cctx, Cr["y"]
+        )
         th, converged = res.x, bool(res.success)
         gnorm, nit = float(np.max(np.abs(res.jac))), int(res.nit)
     a_v, b_v, c_v, fin, gsave = (th[lay.a], th[lay.b], th[lay.ctx], th[lay.fin], th[lay.gsave])
 
-    eta = (a_v[sidx] * Cr["logit_xg"] + b_v[sidx] + Cctx @ c_v
-           + fin[Cr["shooter_idx"]] + gsave[Cr["goalie_idx"]])
+    eta = (
+        a_v[sidx] * Cr["logit_xg"]
+        + b_v[sidx]
+        + Cctx @ c_v
+        + fin[Cr["shooter_idx"]]
+        + gsave[Cr["goalie_idx"]]
+    )
     p = _sigmoid(eta)
-    if reuse:                                               # same fit ⇒ SEs come from the checkpoint
+    if reuse:  # same fit ⇒ SEs come from the checkpoint
         se_fin = np.asarray(warm["se_fin"], dtype=np.float64)
         se_gsave = np.asarray(warm["se_gsave"], dtype=np.float64)
     else:
         W = p * (1 - p)
-        X = _build_conv_X(Cr["logit_xg"], sidx, Cr["shooter_idx"], Cr["goalie_idx"], lay,
-                          Cctx if kc else None)
-        pen = np.zeros(lay.n_theta); pen[lay.fin] = lf; pen[lay.gsave] = lg
+        X = _build_conv_X(
+            Cr["logit_xg"], sidx, Cr["shooter_idx"], Cr["goalie_idx"], lay, Cctx if kc else None
+        )
+        pen = np.zeros(lay.n_theta)
+        pen[lay.fin] = lf
+        pen[lay.gsave] = lg
         H = (X.T @ X.multiply(W[:, None])).toarray() + np.diag(pen)
         se = _se_from_hessian(H)
         se_fin, se_gsave = se[lay.fin], se[lay.gsave]
     a = {k: float(v) for k, v in zip(keys, a_v)}
     b = {k: float(v) for k, v in zip(keys, b_v)}
-    recon = "  ".join(f"{k}:Σp={p[sidx == i].sum():.0f}/Σy={Cr['y'][sidx == i].sum():.0f}"
-                      for i, k in enumerate(keys))
-    print(f"  conversion pre-calc EB prior SDs (per-fit): fin={prior_sd_fin:.3f} gsave={prior_sd_gsave:.3f} (logit)")
-    print(f"  conversion (logit) fit: a={a} b={ {k: round(v,3) for k,v in b.items()} }  reconcile {recon}"
-          f"  ({len(p):,} shots, {G} goalies, iters={nit})")
-    out = {"a": a, "b": b, "fin": fin, "gsave": gsave, "goalies": Cr["goalies"],
-           "beta": c_v, "ctx_names": Cr.get("ctx_names", []),
-           "se_fin": se_fin, "se_gsave": se_gsave,
-           "prior_sd_fin": prior_sd_fin, "prior_sd_gsave": prior_sd_gsave,
-           "sum_p": float(p.sum()), "sum_y": float(Cr["y"].sum()), "n": int(len(p)),
-           "converged": converged, "grad_norm": gnorm, "nit": nit,
-           "theta": np.asarray(th, dtype=np.float64).copy()}
-    if "season" in Cr:                                      # F6: per-season reconciliation (unpenalized
-        out["recon_season"] = {int(s): [float(p[Cr["season"] == s].sum()),      # season offsets ⇒ exact)
-                                        float(Cr["y"][Cr["season"] == s].sum())]
-                               for s in np.unique(Cr["season"])}
+    recon = "  ".join(
+        f"{k}:Σp={p[sidx == i].sum():.0f}/Σy={Cr['y'][sidx == i].sum():.0f}"
+        for i, k in enumerate(keys)
+    )
+    print(
+        f"  conversion pre-calc EB prior SDs (per-fit): fin={prior_sd_fin:.3f} gsave={prior_sd_gsave:.3f} (logit)"
+    )
+    print(
+        f"  conversion (logit) fit: a={a} b={ {k: round(v,3) for k,v in b.items()} }  reconcile {recon}"
+        f"  ({len(p):,} shots, {G} goalies, iters={nit})"
+    )
+    out = {
+        "a": a,
+        "b": b,
+        "fin": fin,
+        "gsave": gsave,
+        "goalies": Cr["goalies"],
+        "beta": c_v,
+        "ctx_names": Cr.get("ctx_names", []),
+        "se_fin": se_fin,
+        "se_gsave": se_gsave,
+        "prior_sd_fin": prior_sd_fin,
+        "prior_sd_gsave": prior_sd_gsave,
+        "sum_p": float(p.sum()),
+        "sum_y": float(Cr["y"].sum()),
+        "n": int(len(p)),
+        "converged": converged,
+        "grad_norm": gnorm,
+        "nit": nit,
+        "theta": np.asarray(th, dtype=np.float64).copy(),
+    }
+    if "season" in Cr:  # F6: per-season reconciliation (unpenalized
+        out["recon_season"] = {
+            int(s): [
+                float(p[Cr["season"] == s].sum()),  # season offsets ⇒ exact)
+                float(Cr["y"][Cr["season"] == s].sum()),
+            ]
+            for s in np.unique(Cr["season"])
+        }
     return out
 
 
 # ── effective parameters: state + position offset + aging curve, per player ───────────────────────
+
 
 def _coef_map(ctx_names, beta):
     """Named context coefficients (curve/offset extraction by column name; empty if unnamed)."""
@@ -781,8 +1024,12 @@ def _coef_map(ctx_names, beta):
 def _block_curve(cm, blk, z, d, off_name=None):
     """One block's aging-curve + position-offset contribution at age-z and position d (0=F, 1=D):
     curve = F/D-split quadratic in z (coeffs `{blk}_zF … {blk}_z2D`), offset = `{blk}_D` (A2)."""
-    w = [cm.get(f"{blk}_zF", 0.0), cm.get(f"{blk}_z2F", 0.0),
-         cm.get(f"{blk}_zD", 0.0), cm.get(f"{blk}_z2D", 0.0)]
+    w = [
+        cm.get(f"{blk}_zF", 0.0),
+        cm.get(f"{blk}_z2F", 0.0),
+        cm.get(f"{blk}_zD", 0.0),
+        cm.get(f"{blk}_z2D", 0.0),
+    ]
     return _curve_val(w, z, d) + d * cm.get(off_name or f"{blk}_D", 0.0)
 
 
@@ -808,7 +1055,8 @@ def effective_params(rates, qual, conv, players, agepos, last_season, target=Non
     for key, rate in rates.items():
         cm = _coef_map(rate.get("ctx_names"), rate["beta"])
         rates_eff[key] = {
-            "intercept": rate["intercept"], "psi0": rate["psi0"],
+            "intercept": rate["intercept"],
+            "psi0": rate["psi0"],
             "value_env": rate.get("value_env"),
             "shoot": rate["shoot_last"] + _block_curve(cm, "shoot", z, isD),
             "create": rate["create_last"] + _block_curve(cm, "create", z, isD),
@@ -816,14 +1064,20 @@ def effective_params(rates, qual, conv, players, agepos, last_season, target=Non
         }
     qcm = _coef_map(qual.get("ctx_names"), qual["beta"])
     qc = np.asarray(qual["qcreate"])
-    qual_eff = {"mu_qual": qual["mu_qual"], "beta_s": qual.get("beta_s"),
-                "qshoot": qual["qshoot"] + isD * qcm.get("shooter_D", 0.0),
-                "qcreate": qc[isD.astype(np.int64)] if qc.shape == (2,) else qc,   # A1: position pair
-                "qcreate_pos": qc if qc.shape == (2,) else None,   # the [F, D] pair (creator classes)
-                "qdef": qual["qdef"] + isD * qcm.get("def_D", 0.0)}
+    qual_eff = {
+        "mu_qual": qual["mu_qual"],
+        "beta_s": qual.get("beta_s"),
+        "qshoot": qual["qshoot"] + isD * qcm.get("shooter_D", 0.0),
+        "qcreate": qc[isD.astype(np.int64)] if qc.shape == (2,) else qc,  # A1: position pair
+        "qcreate_pos": qc if qc.shape == (2,) else None,  # the [F, D] pair (creator classes)
+        "qdef": qual["qdef"] + isD * qcm.get("def_D", 0.0),
+    }
     ccm = _coef_map(conv.get("ctx_names"), conv.get("beta", []))
-    conv_eff = {"a": conv["a"], "b": conv["b"],
-                "fin": conv["fin"] + _block_curve(ccm, "fin", z, isD, off_name="shooter_D")}
+    conv_eff = {
+        "a": conv["a"],
+        "b": conv["b"],
+        "fin": conv["fin"] + _block_curve(ccm, "fin", z, isD, off_name="shooter_D"),
+    }
     return rates_eff, qual_eff, conv_eff
 
 
@@ -837,11 +1091,14 @@ def unit_effective(rate, agepos):
     for s in sorted(agepos["z"].keys()):
         m = us == s
         z[m] = agepos["z"][s][up[m]]
-    return {blk: rate[key] + _block_curve(cm, blk, z, d)
-            for blk, key in (("shoot", "shoot"), ("create", "create"), ("def", "def"))}
+    return {
+        blk: rate[key] + _block_curve(cm, blk, z, d)
+        for blk, key in (("shoot", "shoot"), ("create", "create"), ("def", "def"))
+    }
 
 
 # ── environment factor: the average-lineup multiplier the exported card values scale by ────────────
+
 
 def value_environment(rate, season=None):
     """TOI-weighted mean ENVIRONMENT multiplier over the fit's own rows: everything in a row's
@@ -898,16 +1155,29 @@ def _curve_report(cm, blk):
     for pos in ("F", "D"):
         w1, w2 = cm.get(f"{blk}_z{pos}", 0.0), cm.get(f"{blk}_z2{pos}", 0.0)
         pk = AGE_PEAK - AGE_SCALE * w1 / (2 * w2) if w2 < -1e-9 else None
-        v = {a: w1 * (a - AGE_PEAK) / AGE_SCALE + w2 * ((a - AGE_PEAK) / AGE_SCALE) ** 2
-             for a in (22, 32)}
-        parts.append(f"{pos}: 22y {v[22]:+.3f} 32y {v[32]:+.3f}"
-                     + (f" peak {pk:.1f}" if pk is not None else ""))
+        v = {
+            a: w1 * (a - AGE_PEAK) / AGE_SCALE + w2 * ((a - AGE_PEAK) / AGE_SCALE) ** 2
+            for a in (22, 32)
+        }
+        parts.append(
+            f"{pos}: 22y {v[22]:+.3f} 32y {v[32]:+.3f}"
+            + (f" peak {pk:.1f}" if pk is not None else "")
+        )
     return "   ".join(parts)
 
 
-def fit_all(seasons, count_model="poisson", spg_scale=1.0, warm=False, reexport=False,
-            save_ckpt=False, ckpt_path=None, ma_anchor_scale=1.0, ma_create_prior_sd=None,
-            ma_def_prior_sd=None):
+def fit_all(
+    seasons,
+    count_model="poisson",
+    spg_scale=1.0,
+    warm=False,
+    reexport=False,
+    save_ckpt=False,
+    ckpt_path=None,
+    ma_anchor_scale=1.0,
+    ma_create_prior_sd=None,
+    ma_def_prior_sd=None,
+):
     """Fit every stage on `seasons` and return the raw fit objects — the shared engine behind run()
     (which adds leaderboards, values, PPC, projection, JSON) and the held-out predictive harness
     (generative_holdout, which needs the fits without the reporting tail). Returns a dict with
@@ -926,35 +1196,50 @@ def fit_all(seasons, count_model="poisson", spg_scale=1.0, warm=False, reexport=
     units the shot counts pin only the unit's total creation, so the assist anchor alone splits
     it, and assists on the PP reflect ROLE (who touches the puck last), not creation skill. The EV
     bucket is untouched (linemate mixing identifies its split; validated at full weight)."""
-    print(f"[generative_model:shooter-resolved] seasons {seasons} — count {count_model} — EV + PP/PK …")
+    print(
+        f"[generative_model:shooter-resolved] seasons {seasons} — count {count_model} — EV + PP/PK …"
+    )
     if ma_anchor_scale != 1.0 or ma_create_prior_sd or ma_def_prior_sd:
-        print(f"  MA bucket: anchor×{ma_anchor_scale:g}"
-              + (f", create prior sd {ma_create_prior_sd:g}" if ma_create_prior_sd else "")
-              + (f", def prior sd {ma_def_prior_sd:g}" if ma_def_prior_sd else ""))
+        print(
+            f"  MA bucket: anchor×{ma_anchor_scale:g}"
+            + (f", create prior sd {ma_create_prior_sd:g}" if ma_create_prior_sd else "")
+            + (f", def prior sd {ma_def_prior_sd:g}" if ma_def_prior_sd else "")
+        )
     ck = ckpt_load(ckpt_path) if (warm or reexport) else None
     if reexport:
         if ck is None:
             raise SystemExit("--reexport needs a θ̂ checkpoint from a prior full fit")
         ck_mas = float(ck.get("ma_anchor_scale", 1.0))
         ck_mcp = float(ck.get("ma_create_prior_sd", np.nan))
-        if (list(map(int, ck["seasons"])) != [int(s) for s in seasons]
-                or str(ck["count_model"]) != count_model
-                or float(ck["spg_scale"]) != float(spg_scale)
-                or ck_mas != float(ma_anchor_scale)
-                or not (np.isnan(ck_mcp) and ma_create_prior_sd is None
-                        or ck_mcp == float(ma_create_prior_sd or np.nan))):
-            raise SystemExit("--reexport: checkpoint signature (seasons/count/spg-scale/MA hypers) "
-                             "differs — run a full fit")
+        if (
+            list(map(int, ck["seasons"])) != [int(s) for s in seasons]
+            or str(ck["count_model"]) != count_model
+            or float(ck["spg_scale"]) != float(spg_scale)
+            or ck_mas != float(ma_anchor_scale)
+            or not (
+                np.isnan(ck_mcp)
+                and ma_create_prior_sd is None
+                or ck_mcp == float(ma_create_prior_sd or np.nan)
+            )
+        ):
+            raise SystemExit(
+                "--reexport: checkpoint signature (seasons/count/spg-scale/MA hypers) "
+                "differs — run a full fit"
+            )
     elif ck is not None:
-        print(f"  warm start ← checkpoint ({'+'.join(str(int(s)) for s in ck['seasons'])}, "
-              f"{ck['count_model']})")
+        print(
+            f"  warm start ← checkpoint ({'+'.join(str(int(s)) for s in ck['seasons'])}, "
+            f"{ck['count_model']})"
+        )
     players, idx = player_index(seasons)
     if not players:
         raise SystemExit("no stints")
     P = len(players)
     agepos = _age_position(players, seasons)
-    print(f"  ages/positions: {P} players, {agepos['missing']} missing birthdates, "
-          f"{int(agepos['isD'].sum())} D")
+    print(
+        f"  ages/positions: {P} players, {agepos['missing']} missing birthdates, "
+        f"{int(agepos['isD'].sum())} D"
+    )
 
     # pooled quality rows (EV+MA); its goal subset (split by strength) anchors each bucket's `create`
     Q = quality_creator_rows(seasons, idx, ALL_STRENGTHS, agepos)
@@ -965,55 +1250,78 @@ def fit_all(seasons, count_model="poisson", spg_scale=1.0, warm=False, reexport=
     for key, strengths, dual in [("ev", EV_STRENGTHS, True), ("ma", MA_STRENGTHS, False)]:
         R = rate_rows(seasons, strengths, dual, players, idx, agepos, states=dual)
         if R is None or len(R["count"]) == 0:
-            print(f"  [{key}] no stints — skipping"); continue
+            print(f"  [{key}] no stints — skipping")
+            continue
         slab = 0 if key == "ev" else 1
         gm = (Q["goal"] == 1) & (Q["strength"] == slab)
-        ngoal = int(gm.sum()); nun = int(((Q["creator"] == 4) & (Q["strength"] == slab)).sum())
-        aw = ma_anchor_scale if key == "ma" else 1.0         # per-bucket anchor weight (docs §7)
-        spg[key] = aw * spg_scale * float(R["count"].sum()) / max(ngoal, 1)  # IPW weight (×A3 scale)
-        anchor = gm & (Q["creator"] >= 0)                    # F4: off-ice-assister goals are latent
+        ngoal = int(gm.sum())
+        nun = int(((Q["creator"] == 4) & (Q["strength"] == slab)).sum())
+        aw = ma_anchor_scale if key == "ma" else 1.0  # per-bucket anchor weight (docs §7)
+        spg[key] = (
+            aw * spg_scale * float(R["count"].sum()) / max(ngoal, 1)
+        )  # IPW weight (×A3 scale)
+        anchor = gm & (Q["creator"] >= 0)  # F4: off-ice-assister goals are latent
         gt, gc = Q["team_idx"][anchor], cidx_all[anchor]
         sord = {s: i for i, s in enumerate(R["seasons"])}
         # A2 stage: goals with an on-ice A1 (a column to mask) AND an on-ice A2
-        anchor2 = (gm & (Q["creator"] >= 0) & (Q["creator"] <= 3)
-                   & (Q["creator2"] >= 0) & (Q["creator2"] != Q["creator"]))
+        anchor2 = (
+            gm
+            & (Q["creator"] >= 0)
+            & (Q["creator"] <= 3)
+            & (Q["creator2"] >= 0)
+            & (Q["creator2"] != Q["creator"])
+        )
         gt2, g1c, gc2 = Q["team_idx"][anchor2], Q["creator"][anchor2], Q["creator2"][anchor2]
-        if dual:                                             # anchor teammates → (player, season) units
+        if dual:  # anchor teammates → (player, season) units
             qs = np.array([sord[s] for s in Q["season"][anchor]], dtype=np.int64)
             gtu = R["unit_lut"][gt, qs[:, None]]
             ok = (gtu >= 0).all(1)
             if int((~ok).sum()):
-                print(f"  [{key}] {int((~ok).sum())} anchor goals dropped (teammate w/o rate exposure)")
+                print(
+                    f"  [{key}] {int((~ok).sum())} anchor goals dropped (teammate w/o rate exposure)"
+                )
             gt, gc = gtu[ok], gc[ok]
             qs2 = np.array([sord[s] for s in Q["season"][anchor2]], dtype=np.int64)
             gtu2 = R["unit_lut"][gt2, qs2[:, None]]
             ok2 = (gtu2 >= 0).all(1)
             gt2, g1c, gc2 = gtu2[ok2], g1c[ok2], gc2[ok2]
-        print(f"  [{key}] rate rows {len(R['count']):,}  shots {R['count'].sum():.0f}  goals {ngoal}  "
-              f"spg {spg[key]:.1f}  anchored {len(gc)} ({100 * nun / max(ngoal, 1):.0f}% unassisted, "
-              f"{len(gc2)} with A2)")
-        rate = fit_rate_create(R, gt, gc, spg[key], count_model=count_model, a2=(gt2, g1c, gc2),
-                               warm=_ck_stage(ck, key), reuse=reexport,
-                               create_prior_sd=(ma_create_prior_sd if key == "ma" else None),
-                               def_prior_sd=(ma_def_prior_sd if key == "ma" else None))
+        print(
+            f"  [{key}] rate rows {len(R['count']):,}  shots {R['count'].sum():.0f}  goals {ngoal}  "
+            f"spg {spg[key]:.1f}  anchored {len(gc)} ({100 * nun / max(ngoal, 1):.0f}% unassisted, "
+            f"{len(gc2)} with A2)"
+        )
+        rate = fit_rate_create(
+            R,
+            gt,
+            gc,
+            spg[key],
+            count_model=count_model,
+            a2=(gt2, g1c, gc2),
+            warm=_ck_stage(ck, key),
+            reuse=reexport,
+            create_prior_sd=(ma_create_prior_sd if key == "ma" else None),
+            def_prior_sd=(ma_def_prior_sd if key == "ma" else None),
+        )
         rate["R"] = R
         rates[key] = rate
         last_season = np.maximum(last_season, R["last_season"])
         rdesc = f" r={rate['r']:.2f}" if rate.get("r") else ""
         nu = f" units={R['n_units']:,}" if dual and "n_units" in R else ""
         qd = f" a2_q={rate['a2_q']:.3f}" if rate.get("a2_q") is not None else ""
-        print(f"    rate fit ({count_model}): converged={rate['converged']} |grad|={rate['grad_norm']:.1e}"
-              f"{rdesc} create_0={rate['psi0']:+.3f}{nu}{qd} iters={rate['nit']}")
+        print(
+            f"    rate fit ({count_model}): converged={rate['converged']} |grad|={rate['grad_norm']:.1e}"
+            f"{rdesc} create_0={rate['psi0']:+.3f}{nu}{qd} iters={rate['nit']}"
+        )
         cm = _coef_map(R["ctx_names"], rate["beta"])
         for blk in ("shoot", "create", "def"):
             print(f"    [{key}] {blk}-curve   {_curve_report(cm, blk)}")
         arep = _arena_report(rate)
         if arep:
             print(f"    [{key}] arena rate effects   {arep}")
-        if dual:                                             # stage-2 pi via per-season unit states
+        if dual:  # stage-2 pi via per-season unit states
             qs_all = np.array([sord[s] for s in Q["season"]], dtype=np.int64)
             tu_all = R["unit_lut"][Q["team_idx"], qs_all[:, None]]
-            cre = np.append(rate["create"], 0.0)             # sentinel for unmapped teammates (no bump)
+            cre = np.append(rate["create"], 0.0)  # sentinel for unmapped teammates (no bump)
             tu_all = np.where(tu_all >= 0, tu_all, len(rate["create"]))
             creates[slab] = (cre, rate["psi0"], tu_all)
         else:
@@ -1022,14 +1330,19 @@ def fit_all(seasons, count_model="poisson", spg_scale=1.0, warm=False, reexport=
         raise SystemExit("no EV stints")
 
     # pooled quality fit (shared loadings; per-strength intercept; per-row creator dist by strength)
-    qual = fit_quality_creator(Q, P, creates, isD=agepos["isD"], warm=_ck_stage(ck, "qual"),
-                               reuse=reexport, pids=players)
-    print(f"  quality fit (pooled EV+MA): converged={qual['converged']} |grad|={qual['grad_norm']:.1e} "
-          f"beta_s={qual['beta_s']:.1f} mu_qual={ {k: round(v, 3) for k, v in qual['mu_qual'].items()} } "
-          f"iters={qual['nit']}")
+    qual = fit_quality_creator(
+        Q, P, creates, isD=agepos["isD"], warm=_ck_stage(ck, "qual"), reuse=reexport, pids=players
+    )
+    print(
+        f"  quality fit (pooled EV+MA): converged={qual['converged']} |grad|={qual['grad_norm']:.1e} "
+        f"beta_s={qual['beta_s']:.1f} mu_qual={ {k: round(v, 3) for k, v in qual['mu_qual'].items()} } "
+        f"iters={qual['nit']}"
+    )
     qc, qse = qual["qcreate"], qual["se_qcreate"]
-    print(f"  qcreate (position-level, A1): F {qc[0]:+.4f} ±{1.96 * qse[0]:.4f}   "
-          f"D {qc[1]:+.4f} ±{1.96 * qse[1]:.4f}")
+    print(
+        f"  qcreate (position-level, A1): F {qc[0]:+.4f} ±{1.96 * qse[0]:.4f}   "
+        f"D {qc[1]:+.4f} ±{1.96 * qse[1]:.4f}"
+    )
     qarep = _arena_report(qual, pct=False)
     if qarep:
         print(f"  arena quality (logit-xG) effects   {qarep}")
@@ -1041,18 +1354,41 @@ def fit_all(seasons, count_model="poisson", spg_scale=1.0, warm=False, reexport=
     conv = fit_conversion(Cr, P, warm=_ck_stage(ck, "conv"), reuse=reexport, pids=players)
     ccm = _coef_map(conv.get("ctx_names"), conv.get("beta", []))
     if ccm:
-        print(f"    fin-curve   {_curve_report(ccm, 'fin')}   goalie-age: z {ccm.get('g_z', 0.0):+.3f} "
-              f"z² {ccm.get('g_z2', 0.0):+.3f}")
+        print(
+            f"    fin-curve   {_curve_report(ccm, 'fin')}   goalie-age: z {ccm.get('g_z', 0.0):+.3f} "
+            f"z² {ccm.get('g_z2', 0.0):+.3f}"
+        )
         if conv.get("recon_season"):
-            rc = "  ".join(f"{s}:{v[0]:.0f}/{v[1]:.0f}" for s, v in sorted(conv["recon_season"].items()))
+            rc = "  ".join(
+                f"{s}:{v[0]:.0f}/{v[1]:.0f}" for s, v in sorted(conv["recon_season"].items())
+            )
             print(f"    per-season Σp/Σy (F6): {rc}")
     if save_ckpt:
-        cp = ckpt_save(seasons, count_model, spg_scale, rates, qual, conv, players, path=ckpt_path,
-                       ma_anchor_scale=ma_anchor_scale, ma_create_prior_sd=ma_create_prior_sd,
-                       ma_def_prior_sd=ma_def_prior_sd)
+        cp = ckpt_save(
+            seasons,
+            count_model,
+            spg_scale,
+            rates,
+            qual,
+            conv,
+            players,
+            path=ckpt_path,
+            ma_anchor_scale=ma_anchor_scale,
+            ma_create_prior_sd=ma_create_prior_sd,
+            ma_def_prior_sd=ma_def_prior_sd,
+        )
         print(f"  θ̂ checkpoint → {cp} (warm starts / --reexport)")
-    return {"players": players, "idx": idx, "agepos": agepos, "Q": Q, "rates": rates, "spg": spg,
-            "qual": qual, "conv": conv, "last_season": last_season}
+    return {
+        "players": players,
+        "idx": idx,
+        "agepos": agepos,
+        "Q": Q,
+        "rates": rates,
+        "spg": spg,
+        "qual": qual,
+        "conv": conv,
+        "last_season": last_season,
+    }
 
 
 # The value/PPC/leaderboard/JSON post-processing and the CLI live in generative_export; `run`/`main`
@@ -1060,4 +1396,5 @@ def fit_all(seasons, count_model="poisson", spg_scale=1.0, warm=False, reexport=
 # drives the fit + export while the import graph stays acyclic (export imports fit_all from here).
 if __name__ == "__main__":
     from .generative_export import main
+
     main()

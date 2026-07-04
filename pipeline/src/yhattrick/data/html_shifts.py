@@ -11,6 +11,7 @@ trades and number changes). Output matches the JSON shift path: per-game
 `(player_id, name, team, team_id, period, start_g, end_g)`, which `clean.clean_shifts` merges,
 numbers, and writes identically.
 """
+
 from __future__ import annotations
 
 import json
@@ -22,7 +23,7 @@ from .. import config as C
 
 # td classes that make up a shift block: the player header + the 5 data columns
 _CELL_CLASSES = ["playerHeading + border", "lborder + bborder"]
-_PERIOD = {"1": 1, "2": 2, "3": 3, "OT": 4}   # shootout / 2OT+ rows are dropped
+_PERIOD = {"1": 1, "2": 2, "3": 3, "OT": 4}  # shootout / 2OT+ rows are dropped
 
 
 def _mmss(s: str) -> int | None:
@@ -53,17 +54,17 @@ def parse_report(html: str) -> list[tuple[int, str, int, int, int]]:
         if num is None:
             buf.clear()
             return
-        for k in range(0, len(buf) - 4, 5):              # [shift#, per, start, end, dur]
-            _, per, start, end, dur = (b.strip() for b in buf[k:k + 5])
+        for k in range(0, len(buf) - 4, 5):  # [shift#, per, start, end, dur]
+            _, per, start, end, dur = (b.strip() for b in buf[k : k + 5])
             period = _PERIOD.get(per)
-            if period is None:                            # SO / 2OT+ — skip
+            if period is None:  # SO / 2OT+ — skip
                 continue
             sg = _game_sec(period, start.split("/")[0])
             eg = _game_sec(period, end.split("/")[0])
             d = _mmss(dur.split("/")[0])
             if sg is None:
                 continue
-            if eg is None and d is not None:              # missing end time -> start + duration
+            if eg is None and d is not None:  # missing end time -> start + duration
                 eg = sg + d
             if eg is None or eg <= sg:
                 continue
@@ -72,9 +73,11 @@ def parse_report(html: str) -> list[tuple[int, str, int, int, int]]:
 
     for c in cells:
         text = c.get_text().replace("\xa0", " ").strip()
-        if "playerHeading" in (c.get("class") or []) or "playerHeading" in " ".join(c.get("class") or []):
+        if "playerHeading" in (c.get("class") or []) or "playerHeading" in " ".join(
+            c.get("class") or []
+        ):
             flush()
-            m = re.match(r"^(\d+)\s+(.*)$", text)         # "4 GOSTISBEHERE, SHAYNE"
+            m = re.match(r"^(\d+)\s+(.*)$", text)  # "4 GOSTISBEHERE, SHAYNE"
             num, name = (int(m.group(1)), m.group(2)) if m else (None, "")
         elif num is not None:
             buf.append(text)
@@ -90,8 +93,11 @@ def shifts_for_game(gid: int) -> list[tuple[int, str, str, int, int, int, int]]:
     out: list[tuple[int, str, str, int, int, int, int]] = []
     unresolved: list[tuple[str, int, str]] = []
     for hv, team in (("H", pbp["homeTeam"]), ("V", pbp["awayTeam"])):
-        nmap = {r["sweaterNumber"]: (r["playerId"], _pbp_name(r))
-                for r in pbp["rosterSpots"] if r["teamId"] == team["id"]}
+        nmap = {
+            r["sweaterNumber"]: (r["playerId"], _pbp_name(r))
+            for r in pbp["rosterSpots"]
+            if r["teamId"] == team["id"]
+        }
         path = C.RAW_HTMLSHIFTS / f"T{hv}{C.game6(gid)}.HTM"
         if not path.exists():
             continue

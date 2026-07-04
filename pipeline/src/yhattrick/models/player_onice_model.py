@@ -42,6 +42,7 @@ Usage:
   uv run python -m yhattrick.player_onice_model --model pp_pk         # just special teams (or 'ev')
   uv run python -m yhattrick.player_onice_model --family tweedie      # Tweedie GLM instead of Gaussian
 """
+
 from __future__ import annotations
 
 import argparse
@@ -57,23 +58,23 @@ from sklearn.model_selection import GroupKFold
 
 from .. import config as C
 
-MIN_STINT_S = 10         # drop sub-10s line-change stints (extreme per-60 rates, ~no signal)
+MIN_STINT_S = 10  # drop sub-10s line-change stints (extreme per-60 rates, ~no signal)
 # λ grid as multipliers of the median player-column curvature (median nonzero diag of ZᵀWZ).
 # Spans ~no shrinkage (0.003×) to heavy shrinkage (100×) so the CV curve can turn over inside it.
 LAMBDA_MULTS = (0.003, 0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0)
-TWEEDIE_POWER = 1.5      # compound Poisson–Gamma; 1<p<2 fits non-negative continuous xG with a 0 mass
+TWEEDIE_POWER = 1.5  # compound Poisson–Gamma; 1<p<2 fits non-negative continuous xG with a 0 mass
 IRLS_MAX_ITER = 60
 IRLS_TOL = 1e-7
 
 
 @dataclass(frozen=True)
 class Spec:
-    key: str               # model id / output filename stem
-    strengths: tuple       # stint strength states this model uses
-    dual: bool             # EV: both teams attack; special teams: only the power-play team
-    off: str               # offence coefficient name (attacking team)
-    deff: str              # defence coefficient name (defending team)
-    min_toi: float         # min role TOI (minutes) to appear in the sniff test
+    key: str  # model id / output filename stem
+    strengths: tuple  # stint strength states this model uses
+    dual: bool  # EV: both teams attack; special teams: only the power-play team
+    off: str  # offence coefficient name (attacking team)
+    deff: str  # defence coefficient name (defending team)
+    min_toi: float  # min role TOI (minutes) to appear in the sniff test
 
 
 SPECS = {
@@ -94,11 +95,13 @@ def load_stints(seasons: list[int], strengths: tuple) -> pd.DataFrame:
         if not p.exists():
             continue
         df = pd.read_parquet(p)
-        if "overload" not in df.columns:   # tolerate older processed files
+        if "overload" not in df.columns:  # tolerate older processed files
             df["overload"] = False
         # regular season only: rate stats shouldn't mix in the small, context-distorted playoffs
         reg = (df.nhl_game_id // 10000) % 100 == 2
-        df = df[reg & df.strength.isin(strengths) & (~df.overload) & (df.duration_s >= MIN_STINT_S)].copy()
+        df = df[
+            reg & df.strength.isin(strengths) & (~df.overload) & (df.duration_s >= MIN_STINT_S)
+        ].copy()
         df["season"] = s
         frames.append(df)
     if not frames:
@@ -124,7 +127,8 @@ def build_design(stints: pd.DataFrame, dual: bool):
     Columns: the 2*P player off/def indicators, then shared NON-per-player covariates oriented to
     the attacking team of each row (home ice, offensive/defensive zone start, trailing/leading
     score state, per-season indicators, 2nd/3rd period). The intercept is added by the solver, not
-    here. y is xG per 60 min; the caller normalizes the weights and penalizes only player columns."""
+    here. y is xG per 60 min; the caller normalizes the weights and penalizes only player columns.
+    """
     players = sorted(set().union(*stints.home_skaters, *stints.away_skaters))
     idx = {p: i for i, p in enumerate(players)}
     P = len(players)
@@ -148,14 +152,20 @@ def build_design(stints: pd.DataFrame, dual: bool):
     def emit(off_ids, def_ids, xgf, dur, atk_home, s):
         nonlocal r
         for p in off_ids:
-            rows.append(r); cols.append(idx[p]); vals.append(1.0)
+            rows.append(r)
+            cols.append(idx[p])
+            vals.append(1.0)
             off_toi[p] = off_toi.get(p, 0.0) + dur
         for p in def_ids:
-            rows.append(r); cols.append(P + idx[p]); vals.append(1.0)
+            rows.append(r)
+            cols.append(P + idx[p])
+            vals.append(1.0)
             def_toi[p] = def_toi.get(p, 0.0) + dur
 
         def put(name):
-            rows.append(r); cols.append(COV[name]); vals.append(1.0)
+            rows.append(r)
+            cols.append(COV[name])
+            vals.append(1.0)
 
         if atk_home:
             put("home")
@@ -199,6 +209,7 @@ def build_design(stints: pd.DataFrame, dual: bool):
 # with A = ZᵀW_g Z + diag(pen). Gaussian = one solve (W_g = obs weights, working response = y);
 # Tweedie = IRLS reusing the same step. The same A/B give effective dof and the SE sandwich.
 
+
 def _xtwx(Z, sw) -> np.ndarray:
     """Dense ZᵀWZ for diagonal weights sw (Z sparse)."""
     WZ = Z.multiply(sw[:, None]).tocsr()
@@ -234,9 +245,11 @@ def _edf_and_se(B, A, dispersion):
 def _tweedie_unit_dev(y, mu, p):
     y = np.clip(y, 0, None)
     mu = np.clip(mu, 1e-9, None)
-    return 2.0 * (np.power(y, 2 - p) / ((1 - p) * (2 - p))
-                  - y * np.power(mu, 1 - p) / (1 - p)
-                  + np.power(mu, 2 - p) / (2 - p))
+    return 2.0 * (
+        np.power(y, 2 - p) / ((1 - p) * (2 - p))
+        - y * np.power(mu, 1 - p) / (1 - p)
+        + np.power(mu, 2 - p) / (2 - p)
+    )
 
 
 def _deviance(y, mu, w, family, power) -> float:
@@ -254,9 +267,16 @@ def _fit_glm(Z, y, w, pen, family, power, B_full=None, c_full=None, beta_init=No
         c = _xtwy(Z, w, y) if c_full is None else c_full
         beta, A, _ = _solve_pen(B, c, pen)
         mu = Z @ beta
-        return {"beta": beta, "mu": mu, "B": B, "A": A, "n_iter": 1,
-                "converged": True, "max_step": 0.0,
-                "deviance": _deviance(y, mu, w, family, power)}
+        return {
+            "beta": beta,
+            "mu": mu,
+            "B": B,
+            "A": A,
+            "n_iter": 1,
+            "converged": True,
+            "max_step": 0.0,
+            "deviance": _deviance(y, mu, w, family, power),
+        }
 
     # Tweedie, log link: IRLS
     if beta_init is not None:
@@ -271,8 +291,8 @@ def _fit_glm(Z, y, w, pen, family, power, B_full=None, c_full=None, beta_init=No
     dev_old, converged, B, A, max_step = np.inf, False, None, None, 0.0
     n_iter = IRLS_MAX_ITER
     for it in range(1, IRLS_MAX_ITER + 1):
-        irls_w = w * np.power(mu, 2 - power)            # w·(dμ/dη)²/V(μ) = w·μ^(2-p) for log link
-        zwork = eta + (y - mu) / mu                      # working response
+        irls_w = w * np.power(mu, 2 - power)  # w·(dμ/dη)²/V(μ) = w·μ^(2-p) for log link
+        zwork = eta + (y - mu) / mu  # working response
         B = _xtwx(Z, irls_w)
         c = _xtwy(Z, irls_w, zwork)
         beta_new, A, _ = _solve_pen(B, c, pen)
@@ -285,13 +305,21 @@ def _fit_glm(Z, y, w, pen, family, power, B_full=None, c_full=None, beta_init=No
             converged, n_iter = True, it
             break
         dev_old = dev
-    return {"beta": beta, "mu": mu, "B": B, "A": A, "n_iter": n_iter,
-            "converged": converged, "max_step": max_step,
-            "deviance": _deviance(y, mu, w, family, power)}
+    return {
+        "beta": beta,
+        "mu": mu,
+        "B": B,
+        "A": A,
+        "n_iter": n_iter,
+        "converged": converged,
+        "max_step": max_step,
+        "deviance": _deviance(y, mu, w, family, power),
+    }
 
 
-def _lambda_sweep(Z, y, w, games, pen_unit, lambdas, family, power,
-                  B_full, c_full, null_dev, n_splits=5) -> dict:
+def _lambda_sweep(
+    Z, y, w, games, pen_unit, lambdas, family, power, B_full, c_full, null_dev, n_splits=5
+) -> dict:
     """For each λ: grouped-by-game CV (mean + per-fold) and full-data edf / train fit / explained
     deviance. The whole curve is logged so the λ-scale behavior is auditable after the fact."""
     n, m = Z.shape
@@ -310,8 +338,10 @@ def _lambda_sweep(Z, y, w, games, pen_unit, lambdas, family, power,
                     cv[lam].append(float(np.average((yva - pred) ** 2, weights=wva)))
             else:
                 beta_prev = None
-                for lam in lambdas:                      # ascending λ -> warm-start IRLS
-                    res = _fit_glm(Ztr, ytr, wtr, pen_unit * lam, family, power, beta_init=beta_prev)
+                for lam in lambdas:  # ascending λ -> warm-start IRLS
+                    res = _fit_glm(
+                        Ztr, ytr, wtr, pen_unit * lam, family, power, beta_init=beta_prev
+                    )
                     beta_prev = res["beta"]
                     pred = np.exp(np.clip(Zva @ res["beta"], -30, 30))
                     cv[lam].append(_deviance(yva, pred, wva, family, power) / float(wva.sum()))
@@ -341,37 +371,59 @@ def _lambda_sweep(Z, y, w, games, pen_unit, lambdas, family, power,
     return out
 
 
-def fit(stints: pd.DataFrame, names: dict, spec: Spec,
-        family: str = "gaussian", power: float = TWEEDIE_POWER) -> tuple[pd.DataFrame, dict]:
+def fit(
+    stints: pd.DataFrame,
+    names: dict,
+    spec: Spec,
+    family: str = "gaussian",
+    power: float = TWEEDIE_POWER,
+) -> tuple[pd.DataFrame, dict]:
     X, y, w_raw, players, games, off_toi, def_toi, cov = build_design(stints, spec.dual)
     P = len(players)
     n = len(y)
-    w = w_raw * (n / w_raw.sum())                         # normalize so Σw = n (scale-free λ)
+    w = w_raw * (n / w_raw.sum())  # normalize so Σw = n (scale-free λ)
     Z = sparse.hstack([X, sparse.csr_matrix(np.ones((n, 1)))], format="csr")
     m = Z.shape[1]
     icol = m - 1
     pen_unit = np.zeros(m)
-    pen_unit[:2 * P] = 1.0                                # penalize player columns only
+    pen_unit[: 2 * P] = 1.0  # penalize player columns only
 
-    B0 = _xtwx(Z, w)                                      # ZᵀWZ (Gaussian Fisher; reused below)
+    B0 = _xtwx(Z, w)  # ZᵀWZ (Gaussian Fisher; reused below)
     c0 = _xtwy(Z, w, y)
-    diagB = np.diag(B0)[:2 * P]
-    med_curv = float(np.median(diagB[diagB > 0]))         # data-scale anchor for λ
+    diagB = np.diag(B0)[: 2 * P]
+    med_curv = float(np.median(diagB[diagB > 0]))  # data-scale anchor for λ
     lambdas = tuple(med_curv * mlt for mlt in LAMBDA_MULTS)
 
     ybar = float(np.average(y, weights=w))
     null_dev = _deviance(y, np.full(n, max(ybar, 1e-9)), w, family, power)
 
-    sweep = _lambda_sweep(Z, y, w, games, pen_unit, lambdas, family, power,
-                          B_full=(B0 if family == "gaussian" else None),
-                          c_full=(c0 if family == "gaussian" else None), null_dev=null_dev)
+    sweep = _lambda_sweep(
+        Z,
+        y,
+        w,
+        games,
+        pen_unit,
+        lambdas,
+        family,
+        power,
+        B_full=(B0 if family == "gaussian" else None),
+        c_full=(c0 if family == "gaussian" else None),
+        null_dev=null_dev,
+    )
     scored = {lam: v["cv_mean"] for lam, v in sweep.items() if v["cv_mean"] is not None}
     lam = min(scored, key=scored.get) if scored else lambdas[len(lambdas) // 2]
     pinned = lam in (lambdas[0], lambdas[-1])
 
-    res = _fit_glm(Z, y, w, pen_unit * lam, family, power,
-                   B_full=(B0 if family == "gaussian" else None),
-                   c_full=(c0 if family == "gaussian" else None))
+    res = _fit_glm(
+        Z,
+        y,
+        w,
+        pen_unit * lam,
+        family,
+        power,
+        B_full=(B0 if family == "gaussian" else None),
+        c_full=(c0 if family == "gaussian" else None),
+    )
     beta, mu, B, A = res["beta"], res["mu"], res["B"], res["A"]
     edf, se = _edf_and_se(B, A, 1.0)
     dispersion = res["deviance"] / max(n - edf, 1.0)
@@ -394,19 +446,27 @@ def fit(stints: pd.DataFrame, names: dict, spec: Spec,
     rows = []
     for i, p in enumerate(players):
         info = names.get(int(p), {"name": f"#{p}", "pos": None})
-        rows.append({
-            "player_id": int(p), "name": info["name"], "pos": info["pos"],
-            spec.off: round(float(coef_d[i]), 4), f"{spec.off}_se": round(float(se_d[i]), 4),
-            f"{spec.off}_toi": round(off_toi.get(p, 0.0) / 60.0, 1),
-            spec.deff: round(float(coef_d[P + i]), 4), f"{spec.deff}_se": round(float(se_d[P + i]), 4),
-            f"{spec.deff}_toi": round(def_toi.get(p, 0.0) / 60.0, 1),
-            f"{spec.off}_base": round(base_rate, 4),
-        })
+        rows.append(
+            {
+                "player_id": int(p),
+                "name": info["name"],
+                "pos": info["pos"],
+                spec.off: round(float(coef_d[i]), 4),
+                f"{spec.off}_se": round(float(se_d[i]), 4),
+                f"{spec.off}_toi": round(off_toi.get(p, 0.0) / 60.0, 1),
+                spec.deff: round(float(coef_d[P + i]), 4),
+                f"{spec.deff}_se": round(float(se_d[P + i]), 4),
+                f"{spec.deff}_toi": round(def_toi.get(p, 0.0) / 60.0, 1),
+                f"{spec.off}_base": round(base_rate, 4),
+            }
+        )
 
     # covariates kept in natural-parameter units (xGF/60 for Gaussian, log-rate for Tweedie) for
     # debugging; `family` labels the interpretation.
-    covariates = {name: {"coef": round(float(beta[col]), 4), "se": round(float(se[col]), 4)}
-                  for name, col in cov.items()}
+    covariates = {
+        name: {"coef": round(float(beta[col]), 4), "se": round(float(se[col]), 4)}
+        for name, col in cov.items()
+    }
     resid = y - mu
     rq = {str(q): round(float(np.quantile(resid, q)), 4) for q in (0.05, 0.25, 0.5, 0.75, 0.95)}
     eig = np.linalg.eigvalsh(A)
@@ -459,7 +519,9 @@ def _write_meta(meta: dict) -> None:
     C.LOGS_MODEL.mkdir(parents=True, exist_ok=True)
     label = "+".join(map(str, meta["seasons"]))
     suffix = "" if meta["family"] == "gaussian" else f"_{meta['family']}"
-    (C.LOGS_MODEL / f"{meta['model']}_{label}{suffix}.meta.json").write_text(json.dumps(meta, indent=2))
+    (C.LOGS_MODEL / f"{meta['model']}_{label}{suffix}.meta.json").write_text(
+        json.dumps(meta, indent=2)
+    )
     record = {"ts": datetime.now().isoformat(timespec="seconds"), **meta}
     with (C.LOGS / "model_fits.jsonl").open("a") as f:
         f.write(json.dumps(record) + "\n")
@@ -481,14 +543,19 @@ def _cache_fresh(path, seasons: list[int]) -> bool:
     return True
 
 
-def fit_cached(seasons: list[int], spec: Spec, names: dict | None = None,
-               family: str = "gaussian", power: float = TWEEDIE_POWER) -> pd.DataFrame:
+def fit_cached(
+    seasons: list[int],
+    spec: Spec,
+    names: dict | None = None,
+    family: str = "gaussian",
+    power: float = TWEEDIE_POWER,
+) -> pd.DataFrame:
     """Fit (and cache) the impact coefficients for a season set + family. Reads the saved parquet
     if present and fresh, so per-season and pooled fits are computed once and reused by export."""
     path = _cache_path(spec, seasons, family)
     if path.exists() and _cache_fresh(path, seasons):
         cached = pd.read_parquet(path)
-        if f"{spec.off}_base" in cached.columns:   # else stale schema (pre-baseline) → re-fit
+        if f"{spec.off}_base" in cached.columns:  # else stale schema (pre-baseline) → re-fit
             return cached
     stints = load_stints(seasons, spec.strengths)
     if stints.empty:
@@ -505,17 +572,26 @@ def sniff(coef: pd.DataFrame, spec: Spec, label: str) -> None:
     o = coef[coef[f"{off}_toi"] >= spec.min_toi].sort_values(off, ascending=False).head(10)
     print(f"\n[{label}] top {off} (xGF/60 added, ±95% CI):")
     for r in o.itertuples():
-        print(f"    {getattr(r, off):+.3f} ±{1.96 * getattr(r, f'{off}_se'):.3f}  "
-              f"{r.name} ({r.pos}, {getattr(r, f'{off}_toi'):.0f} min)")
+        print(
+            f"    {getattr(r, off):+.3f} ±{1.96 * getattr(r, f'{off}_se'):.3f}  "
+            f"{r.name} ({r.pos}, {getattr(r, f'{off}_toi'):.0f} min)"
+        )
     d = coef[coef[f"{deff}_toi"] >= spec.min_toi].sort_values(deff).head(10)
     print(f"[{label}] best {deff} (xGA/60 suppressed, most negative, ±95% CI):")
     for r in d.itertuples():
-        print(f"    {getattr(r, deff):+.3f} ±{1.96 * getattr(r, f'{deff}_se'):.3f}  "
-              f"{r.name} ({r.pos}, {getattr(r, f'{deff}_toi'):.0f} min)")
+        print(
+            f"    {getattr(r, deff):+.3f} ±{1.96 * getattr(r, f'{deff}_se'):.3f}  "
+            f"{r.name} ({r.pos}, {getattr(r, f'{deff}_toi'):.0f} min)"
+        )
 
 
-def run(seasons: list[int], pool: bool, specs: list[Spec],
-        family: str = "gaussian", power: float = TWEEDIE_POWER) -> None:
+def run(
+    seasons: list[int],
+    pool: bool,
+    specs: list[Spec],
+    family: str = "gaussian",
+    power: float = TWEEDIE_POWER,
+) -> None:
     C.MODELS.mkdir(parents=True, exist_ok=True)
     names = roster_names(seasons)
     groups = [seasons] if pool else [[s] for s in seasons]
@@ -527,16 +603,20 @@ def run(seasons: list[int], pool: bool, specs: list[Spec],
                 print(f"\n[{spec.key} {label}] no stints for {spec.strengths} — skipping")
                 continue
             coef, meta = fit(stints, names, spec, family, power)
-            print(f"\n=== {spec.key} ({'/'.join(spec.strengths)}) — {family} — seasons {label} : "
-                  f"{len(stints):,} stints, {meta['n_obs']:,} obs, {meta['n_players']} players, "
-                  f"λ={meta['lambda']:.1f} (×{meta['lambda_mult']} curv), edf={meta['edf']}/"
-                  f"{meta['n_params']}, explained_dev={meta['explained_deviance']} ===")
+            print(
+                f"\n=== {spec.key} ({'/'.join(spec.strengths)}) — {family} — seasons {label} : "
+                f"{len(stints):,} stints, {meta['n_obs']:,} obs, {meta['n_players']} players, "
+                f"λ={meta['lambda']:.1f} (×{meta['lambda_mult']} curv), edf={meta['edf']}/"
+                f"{meta['n_params']}, explained_dev={meta['explained_deviance']} ==="
+            )
             out = _cache_path(spec, grp, family)
             coef.to_parquet(out, index=False)
             _write_meta(meta)
-            print(f"    -> {out.name} (+ logs/model/) cond={meta['cond_number']:.0f}"
-                  f"{'  ⚠ λ pinned at grid edge' if meta['lambda_pinned'] else ''}"
-                  f"{'  ⚠ IRLS not converged' if not meta['converged'] else ''}")
+            print(
+                f"    -> {out.name} (+ logs/model/) cond={meta['cond_number']:.0f}"
+                f"{'  ⚠ λ pinned at grid edge' if meta['lambda_pinned'] else ''}"
+                f"{'  ⚠ IRLS not converged' if not meta['converged'] else ''}"
+            )
             sniff(coef, spec, label)
 
 
@@ -545,9 +625,15 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--season", type=int, default=None, help="one season (default: all available)")
     p.add_argument("--pool", action="store_true", help="pool all available seasons into one fit")
     p.add_argument("--model", choices=[*SPECS, "all"], default="all")
-    p.add_argument("--family", choices=["gaussian", "tweedie"], default="gaussian",
-                   help="response family: gaussian (per-60 rate) or tweedie (log-link GLM)")
-    p.add_argument("--tweedie-power", type=float, default=TWEEDIE_POWER, help="Tweedie variance power (1<p<2)")
+    p.add_argument(
+        "--family",
+        choices=["gaussian", "tweedie"],
+        default="gaussian",
+        help="response family: gaussian (per-60 rate) or tweedie (log-link GLM)",
+    )
+    p.add_argument(
+        "--tweedie-power", type=float, default=TWEEDIE_POWER, help="Tweedie variance power (1<p<2)"
+    )
     args = p.parse_args(argv)
     seasons = [args.season] if args.season else available_seasons()
     if not seasons:

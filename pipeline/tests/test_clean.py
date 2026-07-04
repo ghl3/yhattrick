@@ -3,6 +3,7 @@
 Covers the pure pieces: the period-elapsed clock conversion, the season decoder, the duplicate/
 overlapping-shift merge (the fix that took illegal >6-skater stints from ~0.8% to ~0.01%), and the
 roster name builder."""
+
 from __future__ import annotations
 
 import pytest
@@ -17,12 +18,15 @@ def test_mmss_to_sec():
     assert clean._mmss_to_sec("20:00") == 1200
 
 
-@pytest.mark.parametrize("period,mmss,expected", [
-    (1, "00:00", 0),
-    (1, "00:30", 30),
-    (2, "00:00", 1200),       # start of P2 == one full period elapsed
-    (3, "10:00", 3000),       # 2*1200 + 600
-])
+@pytest.mark.parametrize(
+    "period,mmss,expected",
+    [
+        (1, "00:00", 0),
+        (1, "00:30", 30),
+        (2, "00:00", 1200),  # start of P2 == one full period elapsed
+        (3, "10:00", 3000),  # 2*1200 + 600
+    ],
+)
 def test_game_sec(period, mmss, expected):
     assert clean.game_sec(period, mmss) == expected
 

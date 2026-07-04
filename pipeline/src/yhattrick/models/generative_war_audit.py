@@ -14,6 +14,7 @@ artifact can't check itself:
 Run after `make generative-cards`:
   uv run --group experimental python -m yhattrick.models.generative_war_audit [--season 2025]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -28,8 +29,8 @@ from . import generative_cards as GC
 from .generative_likelihood import _sigmoid, EV_STRENGTHS, MA_STRENGTHS, AGE_SCALE
 from .generative_features import side_rows
 
-E_TOL = 0.02                # league ΣE vs actual: |residual| beyond this is a model finding
-SCALE_TOL = 0.15            # card units vs reality: model F-mean scoring vs actual F goals/60
+E_TOL = 0.02  # league ΣE vs actual: |residual| beyond this is a model finding
+SCALE_TOL = 0.15  # card units vs reality: model F-mean scoring vs actual F goals/60
 
 
 def rows_with_teams(season, key, strengths, dual, idx, gteam):
@@ -48,12 +49,15 @@ def run_audit(season=None, fit_path=None):
     kap = GC.kappa(fit)
 
     # values → GA/60 → replacement archetypes, exactly as build() derives them
-    sc, pm, dfv = GC.values_at(fit, t, "ev", t["ev_shoot"], t["ev_create"], t["ev_def"],
-                               t["fin_eff"], n_def=5)
-    pp_sc, pp_pm, _ = GC.values_at(fit, t, "ma", t["pp_shoot"], t["pp_create"], t["pp_def"],
-                                   t["fin_eff"], n_def=4)
-    _, _, pk_df = GC.values_at(fit, t, "ma", t["pp_shoot"], t["pp_create"], t["pp_def"],
-                               t["fin_eff"], n_def=4)
+    sc, pm, dfv = GC.values_at(
+        fit, t, "ev", t["ev_shoot"], t["ev_create"], t["ev_def"], t["fin_eff"], n_def=5
+    )
+    pp_sc, pp_pm, _ = GC.values_at(
+        fit, t, "ma", t["pp_shoot"], t["pp_create"], t["pp_def"], t["fin_eff"], n_def=4
+    )
+    _, _, pk_df = GC.values_at(
+        fit, t, "ma", t["pp_shoot"], t["pp_create"], t["pp_def"], t["fin_eff"], n_def=4
+    )
     vals = {"sc": sc, "pm": pm, "df": dfv, "pp_sc": pp_sc, "pp_pm": pp_pm, "pk_df": pk_df}
     base = GC.baselines(t, vals, kap)
     ga60 = GC.ga60_of(t, base, sc, pm, dfv, kap)
@@ -70,23 +74,26 @@ def run_audit(season=None, fit_path=None):
     pk_pct = GC.pct_within(pk_ga60, pk_el, t["isD"])
     repl = {}
     for blk, arr, toi, elig, pct in (
-            ("sh", t["ev_shoot"], t["toi_ev"], ev_el, ga_pct),
-            ("cr", t["ev_create"], t["toi_ev"], ev_el, ga_pct),
-            ("df", t["ev_def"], t["toi_ev"], ev_el, ga_pct),
-            ("qs", t["qshoot_eff"], t["toi_ev"], ev_el, ga_pct),
-            ("qd", t["qdef_eff"], t["toi_ev"], ev_el, ga_pct),
-            ("fin", t["fin_eff"], t["toi_ev"], ev_el, ga_pct),
-            ("pp_sh", t["pp_shoot"], t["toi_pp"], pp_el, pp_pct),
-            ("pp_cr", t["pp_create"], t["toi_pp"], pp_el, pp_pct),
-            ("pp_qs", t["qshoot_eff"], t["toi_pp"], pp_el, pp_pct),
-            ("pp_fin", t["fin_eff"], t["toi_pp"], pp_el, pp_pct),
-            ("pk_df", t["pp_def"], t["toi_pk"], pk_el, pk_pct),
-            ("pk_qd", t["qdef_eff"], t["toi_pk"], pk_el, pk_pct)):
+        ("sh", t["ev_shoot"], t["toi_ev"], ev_el, ga_pct),
+        ("cr", t["ev_create"], t["toi_ev"], ev_el, ga_pct),
+        ("df", t["ev_def"], t["toi_ev"], ev_el, ga_pct),
+        ("qs", t["qshoot_eff"], t["toi_ev"], ev_el, ga_pct),
+        ("qd", t["qdef_eff"], t["toi_ev"], ev_el, ga_pct),
+        ("fin", t["fin_eff"], t["toi_ev"], ev_el, ga_pct),
+        ("pp_sh", t["pp_shoot"], t["toi_pp"], pp_el, pp_pct),
+        ("pp_cr", t["pp_create"], t["toi_pp"], pp_el, pp_pct),
+        ("pp_qs", t["qshoot_eff"], t["toi_pp"], pp_el, pp_pct),
+        ("pp_fin", t["fin_eff"], t["toi_pp"], pp_el, pp_pct),
+        ("pk_df", t["pp_def"], t["toi_pk"], pk_el, pk_pct),
+        ("pk_qd", t["qdef_eff"], t["toi_pk"], pk_el, pk_pct),
+    ):
         repl[blk], _m = GC.band_mean(arr, toi, elig, pct, t["isD"])
     print("── replacement GA/60 bands (position mean of band members; the 'freely available' zero)")
-    for lbl, metric, elig, pct, toi in (("ev", ga60, ev_el, ga_pct, t["toi_ev"]),
-                                        ("pp", pp_ga60, pp_el, pp_pct, t["toi_pp"]),
-                                        ("pk", pk_ga60, pk_el, pk_pct, t["toi_pk"])):
+    for lbl, metric, elig, pct, toi in (
+        ("ev", ga60, ev_el, ga_pct, t["toi_ev"]),
+        ("pp", pp_ga60, pp_el, pp_pct, t["toi_pp"]),
+        ("pk", pk_ga60, pk_el, pk_pct, t["toi_pk"]),
+    ):
         _v, m = GC.band_mean(metric, toi, elig, pct, t["isD"])
         print(f"   {lbl}: {m}")
 
@@ -98,7 +105,9 @@ def run_audit(season=None, fit_path=None):
             continue
         hs, as_ = g["home_score"], g["away_score"]
         for tm, us, them in ((g["home"], hs, as_), (g["away"], as_, hs)):
-            d = gd[tm]; d["gf"] += us; d["ga"] += them
+            d = gd[tm]
+            d["gf"] += us
+            d["ga"] += them
             d["pts"] += 2 if us > them else (1 if g.get("ot") else 0)
 
     gsave_map = {int(g["id"]): g["gsave"] for g in fit["goalies"]}
@@ -107,17 +116,19 @@ def run_audit(season=None, fit_path=None):
     joint = defaultdict(float)
     net_model = defaultdict(float)
     E_tot = {}
-    f_hours = 0.0                                            # F slot-hours (value-scale check)
+    f_hours = 0.0  # F slot-hours (value-scale check)
     for key, strengths, dual in (("ev", EV_STRENGTHS, True), ("ma", MA_STRENGTHS, False)):
         r = rows_with_teams(S, key, strengths, dual, idx, gteam)
         if r is None:
             continue
         rctx = fit["strengths"][key]["rate_ctx"]
         beta = np.array([rctx.get(c, 0.0) for c in ("home", "ozone", "dzone", "trail", "lead")])
-        cx = np.exp(fit["strengths"][key]["rate_intercept"] + r["ctx"] @ beta
-                    + rctx.get(f"season_{S}", 0.0))
-        r["gsave"] = np.array([gsave_map.get(int(g), 0.0) if g == g and g is not None else 0.0
-                               for g in r["goalie"]])
+        cx = np.exp(
+            fit["strengths"][key]["rate_intercept"] + r["ctx"] @ beta + rctx.get(f"season_{S}", 0.0)
+        )
+        r["gsave"] = np.array(
+            [gsave_map.get(int(g), 0.0) if g == g and g is not None else 0.0 for g in r["goalie"]]
+        )
         mq = fit["mu_qual"]["ev" if key == "ev" else "ma"]
         zs = t["z_last"] - (t["last_season"] - S) / AGE_SCALE
         fin_s = GC.fin_eff_at(fit, t, np.where(np.isnan(t["age"]), 0.0, zs))
@@ -138,8 +149,7 @@ def run_audit(season=None, fit_path=None):
         rp["g0"], rp["gF"], rp["gD"] = rgcl
         rp["kq"] = _sigmoid(mq + r_qd) / max(_sigmoid(mq), GC.EPS)
 
-        ga, gdd, E = GC.war_bucket(r, n, sh, cr, df_, gcl, kq, r["gsave"], cx, rp,
-                                   psi0, t["isD"])
+        ga, gdd, E = GC.war_bucket(r, n, sh, cr, df_, gcl, kq, r["gsave"], cx, rp, psi0, t["isD"])
         war_p += ga + gdd
         E_tot[key] = float(E.sum())
         if key == "ev":
@@ -167,13 +177,19 @@ def run_audit(season=None, fit_path=None):
     shots = pd.read_parquet(C.PROCESSED / "shots_onice" / f"{S}.parquet")
     ev5 = shots[shots.strength == "5v5"]
     isF_of = dict(zip(t["id"].tolist(), (t["isD"] < 0.5).tolist()))
-    gF = int(sum(1 for sid, gl in zip(ev5.shooter_id, ev5.goal) if gl == 1 and isF_of.get(int(sid), True)))
-    actual_f60 = gF / max(f_hours, 1e-9)                     # f_hours captured in the EV pass
+    gF = int(
+        sum(
+            1 for sid, gl in zip(ev5.shooter_id, ev5.goal) if gl == 1 and isF_of.get(int(sid), True)
+        )
+    )
+    actual_f60 = gF / max(f_hours, 1e-9)  # f_hours captured in the EV pass
     gate = (t["toi_ev"] >= GC.EV_GATE) & (t["isD"] < 0.5)
     model_f60 = float(np.average(sc[gate], weights=t["toi_ev"][gate]))
     ratio = model_f60 / max(actual_f60, 1e-9)
-    print(f"\n── A0. card value scale ({S}): model F-mean scoring {model_f60:.3f} vs actual "
-          f"F goals/60 {actual_f60:.3f}  (×{ratio:.2f}; tolerance ±{SCALE_TOL:.0%})")
+    print(
+        f"\n── A0. card value scale ({S}): model F-mean scoring {model_f60:.3f} vs actual "
+        f"F goals/60 {actual_f60:.3f}  (×{ratio:.2f}; tolerance ±{SCALE_TOL:.0%})"
+    )
     if abs(ratio - 1.0) > SCALE_TOL:
         print("   [FINDING] card units are off real-world scale — check value_env")
 
@@ -182,8 +198,10 @@ def run_audit(season=None, fit_path=None):
     rs = fit["conv"].get("recon_season", {})
     actual = (rs.get(str(S)) or rs.get(S) or [np.nan, np.nan])[1]
     resid = tot_E / actual - 1.0 if actual == actual else np.nan
-    print(f"   model ΣE[GF] {tot_E:.0f} vs actual (fitted shot set) {actual:.0f}  "
-          f"residual {resid:+.1%} (tolerance ±{E_TOL:.0%})")
+    print(
+        f"   model ΣE[GF] {tot_E:.0f} vs actual (fitted shot set) {actual:.0f}  "
+        f"residual {resid:+.1%} (tolerance ±{E_TOL:.0%})"
+    )
     if abs(resid) > E_TOL:
         print("   [FINDING] residual exceeds tolerance — a model gap, not a knob to tune")
 
@@ -197,15 +215,21 @@ def run_audit(season=None, fit_path=None):
         if tm == "…":
             print("   …")
             continue
-        print(f"   {tm:4s} joint {joint[tm]:7.1f}  E[GF-GA] {net_model[tm]:7.1f}  "
-              f"gdiff {gd[tm]['gf'] - gd[tm]['ga']:5d}  pts {gd[tm]['pts']:4d}")
+        print(
+            f"   {tm:4s} joint {joint[tm]:7.1f}  E[GF-GA] {net_model[tm]:7.1f}  "
+            f"gdiff {gd[tm]['gf'] - gd[tm]['ga']:5d}  pts {gd[tm]['pts']:4d}"
+        )
     cor = lambda x, y: float(np.corrcoef(x, y)[0, 1])
     marg_total = float(war_p.sum())
-    print(f"   league: Σjoint {jt.sum():.0f} goals ({jt.sum() / GC.GOALS_PER_WIN:.0f} WAR-equiv)  "
-          f"Σmarginal {marg_total:.0f} ({marg_total / GC.GOALS_PER_WIN:.0f} WAR)  "
-          f"synergy ×{marg_total / max(jt.sum(), 1e-9):.2f}")
-    print(f"   corr(E[GF-GA], gdiff) {cor(nm, gdv):.3f}   corr(joint, gdiff) {cor(jt, gdv):.3f}   "
-          f"corr(joint, pts) {cor(jt, pts):.3f}")
+    print(
+        f"   league: Σjoint {jt.sum():.0f} goals ({jt.sum() / GC.GOALS_PER_WIN:.0f} WAR-equiv)  "
+        f"Σmarginal {marg_total:.0f} ({marg_total / GC.GOALS_PER_WIN:.0f} WAR)  "
+        f"synergy ×{marg_total / max(jt.sum(), 1e-9):.2f}"
+    )
+    print(
+        f"   corr(E[GF-GA], gdiff) {cor(nm, gdv):.3f}   corr(joint, gdiff) {cor(jt, gdv):.3f}   "
+        f"corr(joint, pts) {cor(jt, pts):.3f}"
+    )
 
     print(f"\n── D. per-player ({S} marginal WAR = GAR/{GC.GOALS_PER_WIN:.0f})")
     war = war_p / GC.GOALS_PER_WIN
@@ -215,8 +239,10 @@ def run_audit(season=None, fit_path=None):
     full = toim >= 700
     for g, gm in (("F", t["isD"] < 0.5), ("D", t["isD"] > 0.5)):
         m = gm & full
-        print(f"   full-time {g} (n={int(m.sum())}): mean {war[m].mean():+.2f}  "
-              f"median {np.median(war[m]):+.2f}  p90 {np.percentile(war[m], 90):+.2f}")
+        print(
+            f"   full-time {g} (n={int(m.sum())}): mean {war[m].mean():+.2f}  "
+            f"median {np.median(war[m]):+.2f}  p90 {np.percentile(war[m], 90):+.2f}"
+        )
     name = {}
     try:
         rowsj = json.load(open(C.WEB_DATA / "players.json"))
@@ -226,13 +252,19 @@ def run_audit(season=None, fit_path=None):
     order = np.argsort(war)
     print("   bottom 6 / top 6:")
     for i in list(order[:6]) + list(order[-6:][::-1]):
-        print(f"     {war[i]:6.2f}  {name.get(int(t['id'][i]), int(t['id'][i]))!s:24s} "
-              f"{'D' if t['isD'][i] > 0 else 'F'}  {toim[i]:5.0f} EV min")
+        print(
+            f"     {war[i]:6.2f}  {name.get(int(t['id'][i]), int(t['id'][i]))!s:24s} "
+            f"{'D' if t['isD'][i] > 0 else 'F'}  {toim[i]:5.0f} EV min"
+        )
     el = full & ~np.isnan(ga60)
     rate = war[el] * GC.GOALS_PER_WIN / np.maximum(toim[el] / 60.0, 1e-9)
     print(f"   corr(WAR-per-hour, GA/60) full-time: {cor(rate, ga60[el]):.3f}")
-    return {"E_resid": resid, "joint": float(jt.sum()), "marginal": marg_total,
-            "corr_joint_gdiff": cor(jt, gdv)}
+    return {
+        "E_resid": resid,
+        "joint": float(jt.sum()),
+        "marginal": marg_total,
+        "corr_joint_gdiff": cor(jt, gdv),
+    }
 
 
 def main(argv=None):

@@ -24,6 +24,7 @@ Usage:
   uv run python -m yhattrick.goalie_aggregates                 # all seasons with data
   uv run python -m yhattrick.goalie_aggregates --season 2024
 """
+
 from __future__ import annotations
 
 import argparse
@@ -43,8 +44,18 @@ SITUATIONS = ("ev", "pk", "pp")
 def _facing_shots(season: int, goalie_ids: set[int]) -> pd.DataFrame:
     """Regular-season modeled shots with facing goalie, danger bucket and situation attached."""
     p = C.PROCESSED / "shots_onice" / f"{season}.parquet"
-    cols = ["nhl_game_id", "is_home", "home_goalie", "away_goalie", "xg", "goal", "event",
-            "shot_type", "sit_home_n", "sit_away_n"]
+    cols = [
+        "nhl_game_id",
+        "is_home",
+        "home_goalie",
+        "away_goalie",
+        "xg",
+        "goal",
+        "event",
+        "shot_type",
+        "sit_home_n",
+        "sit_away_n",
+    ]
     df = pd.read_parquet(p, columns=cols)
     df = df[df.nhl_game_id.map(C.is_regular_season)]
     df["goalie_id"] = np.where(df.is_home == 1, df.away_goalie, df.home_goalie)
@@ -54,18 +65,21 @@ def _facing_shots(season: int, goalie_ids: set[int]) -> pd.DataFrame:
     df["bucket"] = np.where(df.xg < MD_THRESH, "ld", np.where(df.xg < HD_THRESH, "md", "hd"))
     # situation from the shot's own situationCode skater counts (goalie's team vs the shooting team)
     dh, da = df.sit_home_n, df.sit_away_n
-    def_sk = np.where(df.is_home == 1, da, dh)            # goalie (defending) team skaters
-    opp_sk = np.where(df.is_home == 1, dh, da)            # shooting team skaters
+    def_sk = np.where(df.is_home == 1, da, dh)  # goalie (defending) team skaters
+    opp_sk = np.where(df.is_home == 1, dh, da)  # shooting team skaters
     sit = np.where(def_sk == opp_sk, "ev", np.where(def_sk < opp_sk, "pk", "pp"))
     valid = dh.notna().values & da.notna().values
-    df["sit"] = np.where(valid, sit, "ev")               # rare unverifiable strength -> even
+    df["sit"] = np.where(valid, sit, "ev")  # rare unverifiable strength -> even
     return df
 
 
 def _split_wide(df: pd.DataFrame, key: str, levels) -> pd.DataFrame:
     """Per goalie: Fenwick SA / xGA / GA and the SOG count within each level of `key`, wide."""
-    fen = df.groupby(["goalie_id", key]).agg(
-        sa=("event", "size"), xga=("xg", "sum"), ga=("goal", "sum")).reset_index()
+    fen = (
+        df.groupby(["goalie_id", key])
+        .agg(sa=("event", "size"), xga=("xg", "sum"), ga=("goal", "sum"))
+        .reset_index()
+    )
     sog = df[df.is_sog].groupby(["goalie_id", key]).size().rename("sog").reset_index()
     out = pd.DataFrame({"player_id": sorted(df.goalie_id.unique())}).set_index("player_id")
     for lv in levels:
@@ -81,8 +95,11 @@ def _split_wide(df: pd.DataFrame, key: str, levels) -> pd.DataFrame:
 def _shottype_long(df: pd.DataFrame, season: int) -> pd.DataFrame:
     """Long per (goalie, shot_type): Fenwick SA / xGA / GA and SOG count."""
     sub = df.dropna(subset=["shot_type"])
-    fen = sub.groupby(["goalie_id", "shot_type"]).agg(
-        sa=("event", "size"), xga=("xg", "sum"), ga=("goal", "sum")).reset_index()
+    fen = (
+        sub.groupby(["goalie_id", "shot_type"])
+        .agg(sa=("event", "size"), xga=("xg", "sum"), ga=("goal", "sum"))
+        .reset_index()
+    )
     sog = sub[sub.is_sog].groupby(["goalie_id", "shot_type"]).size().rename("sog").reset_index()
     g = fen.merge(sog, on=["goalie_id", "shot_type"], how="left").fillna({"sog": 0})
     g = g.rename(columns={"goalie_id": "player_id"})
@@ -105,35 +122,60 @@ def build_season(season: int) -> int:
     goalie_ids = set(int(p) for p in roster.loc[roster.position == "G", "player_id"])
 
     # games / starts / shutouts / QS / RBS / TOI come from the per-game log
-    overall = gl.groupby("player_id").agg(
-        gp=("game_id", "nunique"), starts=("started", "sum"), shutouts=("shutout", "sum"),
-        qs=("qs", "sum"), rbs=("rbs", "sum"), toi_s=("toi_s", "sum")).reset_index()
-    by_team = (gl.groupby(["player_id", "team"]).game_id.nunique()
-               .reset_index().sort_values("game_id", ascending=False))
+    overall = (
+        gl.groupby("player_id")
+        .agg(
+            gp=("game_id", "nunique"),
+            starts=("started", "sum"),
+            shutouts=("shutout", "sum"),
+            qs=("qs", "sum"),
+            rbs=("rbs", "sum"),
+            toi_s=("toi_s", "sum"),
+        )
+        .reset_index()
+    )
+    by_team = (
+        gl.groupby(["player_id", "team"])
+        .game_id.nunique()
+        .reset_index()
+        .sort_values("game_id", ascending=False)
+    )
     primary = by_team.groupby("player_id").team.first()
     teams = by_team.groupby("player_id").team.apply(list)
     overall = overall.merge(
-        pd.DataFrame({"team": primary, "teams": teams}).reset_index(), on="player_id", how="left")
+        pd.DataFrame({"team": primary, "teams": teams}).reset_index(), on="player_id", how="left"
+    )
 
     # shot-derived totals (Fenwick for xGA/GSAx, SOG for saves/Sv%) from the shot table
     df = _facing_shots(season, goalie_ids)
-    sa = df.groupby("goalie_id").agg(sa=("event", "size"), xga=("xg", "sum"),
-                                     ga=("goal", "sum")).reset_index()
-    sog = df[df.is_sog].groupby("goalie_id").agg(
-        sog_against=("event", "size"), xga_sog=("xg", "sum")).reset_index()
+    sa = (
+        df.groupby("goalie_id")
+        .agg(sa=("event", "size"), xga=("xg", "sum"), ga=("goal", "sum"))
+        .reset_index()
+    )
+    sog = (
+        df[df.is_sog]
+        .groupby("goalie_id")
+        .agg(sog_against=("event", "size"), xga_sog=("xg", "sum"))
+        .reset_index()
+    )
     shots = sa.merge(sog, on="goalie_id", how="left").rename(columns={"goalie_id": "player_id"})
     shots["saves"] = shots.sog_against - shots.ga
     shots["gsax"] = shots.xga - shots.ga
 
-    box = (overall.merge(shots, on="player_id", how="left")
-                  .merge(_split_wide(df, "bucket", DANGER), on="player_id", how="left")
-                  .merge(_split_wide(df, "sit", SITUATIONS), on="player_id", how="left"))
+    box = (
+        overall.merge(shots, on="player_id", how="left")
+        .merge(_split_wide(df, "bucket", DANGER), on="player_id", how="left")
+        .merge(_split_wide(df, "sit", SITUATIONS), on="player_id", how="left")
+    )
     names = roster.rename(columns={"player_name": "name", "position": "pos"})
     box = box.merge(names[["player_id", "name"]], on="player_id", how="left")
     box["season"] = season
-    fill = (["sa", "xga", "ga", "sog_against", "xga_sog", "saves", "gsax"]
-            + [f"{b}_{m}" for b in DANGER for m in ("sa", "xga", "ga", "sog")]
-            + [f"{s}_{m}" for s in SITUATIONS for m in ("sa", "xga", "ga", "sog")])
+    fill = (
+        ["sa", "xga", "ga", "sog_against", "xga_sog", "saves", "gsax"]
+        + [f"{b}_{m}" for b in DANGER for m in ("sa", "xga", "ga", "sog")]
+        + [f"{s}_{m}" for s in SITUATIONS for m in ("sa", "xga", "ga", "sog")]
+    )
     for c in fill:
         box[c] = box[c].fillna(0.0)
 
@@ -144,8 +186,10 @@ def build_season(season: int) -> int:
     st_out = C.PROCESSED / "goalie_shottype" / f"{season}.parquet"
     st_out.parent.mkdir(parents=True, exist_ok=True)
     st.to_parquet(st_out, index=False)
-    print(f"[goalie-box] {C.season_label(season)}: {len(box)} goalies, "
-          f"{int(box.gp.sum())} goalie-games -> {out.name} (+ goalie_shottype)")
+    print(
+        f"[goalie-box] {C.season_label(season)}: {len(box)} goalies, "
+        f"{int(box.gp.sum())} goalie-games -> {out.name} (+ goalie_shottype)"
+    )
     return len(box)
 
 
@@ -153,7 +197,7 @@ def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description="Per-goalie-season descriptive box + splits")
     p.add_argument("--season", type=int, default=None)
     args = p.parse_args(argv)
-    for s in ([args.season] if args.season else C.SEASONS):
+    for s in [args.season] if args.season else C.SEASONS:
         if (C.PROCESSED / "goalie_gamelog" / f"{s}.parquet").exists():
             build_season(s)
 

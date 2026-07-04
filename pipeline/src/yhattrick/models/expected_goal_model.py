@@ -36,6 +36,7 @@ Usage:
   uv run python -m yhattrick.models.expected_goal_model                 # all available seasons, pooled
   uv run python -m yhattrick.models.expected_goal_model --season 2024
 """
+
 from __future__ import annotations
 
 import argparse
@@ -52,14 +53,22 @@ from .. import config as C
 from ..data import shot_geom as G
 from ..data.shot_geom import GOAL_X
 
-ROYAL_ROAD_S = 4.0       # window for a cross-slot (royal-road) pass to count
-N_SPLITS = 5             # GroupKFold folds (grouped by game)
+ROYAL_ROAD_S = 4.0  # window for a cross-slot (royal-road) pass to count
+N_SPLITS = 5  # GroupKFold folds (grouped by game)
 
 # XGBoost hyperparameters (modest trees; the page can't retrain, so no live tuning)
 XGB_PARAMS = dict(
-    max_depth=6, learning_rate=0.04, subsample=0.8, colsample_bytree=0.8,
-    min_child_weight=5, gamma=0.0, reg_lambda=1.0, objective="binary:logistic",
-    eval_metric="logloss", tree_method="hist", n_estimators=4000,
+    max_depth=6,
+    learning_rate=0.04,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    min_child_weight=5,
+    gamma=0.0,
+    reg_lambda=1.0,
+    objective="binary:logistic",
+    eval_metric="logloss",
+    tree_method="hist",
+    n_estimators=4000,
 )
 EARLY_STOP = 50
 
@@ -69,19 +78,40 @@ CAT_FEATURES = ["shot_type", "zone", "last_event_type"]
 # pure chance-quality measure; player value is isolated downstream (RAPM / finishing) and would be
 # double-counted if it leaked in here.
 NUM_FEATURES = [
-    "distance", "abs_angle", "x_adj", "abs_y", "time_since_last", "time_since_shot",
-    "dist_from_last", "speed_from_last", "angle_change", "last_dist_to_net", "since_faceoff",
-    "attempts_15s", "strength_diff", "shooter_skaters", "def_skaters", "score_diff", "period", "time_g",
+    "distance",
+    "abs_angle",
+    "x_adj",
+    "abs_y",
+    "time_since_last",
+    "time_since_shot",
+    "dist_from_last",
+    "speed_from_last",
+    "angle_change",
+    "last_dist_to_net",
+    "since_faceoff",
+    "attempts_15s",
+    "strength_diff",
+    "shooter_skaters",
+    "def_skaters",
+    "score_diff",
+    "period",
+    "time_g",
     # boolean flags stored as int (off_wing may be NaN when handedness is unknown)
-    "is_home", "rebound", "rush", "same_team_last", "royal_road", "last_behind_net", "off_wing",
+    "is_home",
+    "rebound",
+    "rush",
+    "same_team_last",
+    "royal_road",
+    "last_behind_net",
+    "off_wing",
 ]
 FEATURES = NUM_FEATURES + CAT_FEATURES
 
 # heatmap grid for the exploration page (offensive zone, attacking net on the right at +89)
-HM_X = list(range(26, 90, 2))      # blue line-ish to the goal line
+HM_X = list(range(26, 90, 2))  # blue line-ish to the goal line
 HM_Y = list(range(-42, 43, 2))
 HM_SHOT_TYPES = ["wrist", "snap", "slap", "tip-in", "backhand", "deflected"]
-HM_STRENGTHS = {"PP": (5, 4), "EV": (5, 5), "PK": (4, 5)}   # shooter vs defending skaters
+HM_STRENGTHS = {"PP": (5, 4), "EV": (5, 5), "PK": (4, 5)}  # shooter vs defending skaters
 
 
 def available_seasons() -> list[int]:
@@ -123,7 +153,7 @@ def build_features(ev: pd.DataFrame, hand: dict[int, str]) -> pd.DataFrame:
     # time since the most recent shot ATTEMPT (rebounds/flurries beyond the immediate prior event)
     corsi = ev.type.isin(G.FENWICK + ["blocked-shot"])
     shot_t = ev.time_g.where(corsi).groupby(ev.nhl_game_id).ffill()
-    prev_shot_t = shot_t.groupby(ev.nhl_game_id).shift(1)   # previous attempt, excluding this one
+    prev_shot_t = shot_t.groupby(ev.nhl_game_id).shift(1)  # previous attempt, excluding this one
 
     # sustained pressure: attacking-team shot attempts in the prior 15s (cycle / scramble)
     attempts_15s = pd.Series(0.0, index=ev.index)
@@ -131,7 +161,7 @@ def build_features(ev: pd.DataFrame, hand: dict[int, str]) -> pd.DataFrame:
     for _, grp in cev.groupby(["nhl_game_id", "is_home"], sort=False):
         t = grp.time_g.to_numpy()
         lo = np.searchsorted(t, t - 15, side="left")
-        attempts_15s.loc[grp.index] = np.arange(len(t)) - lo   # earlier same-team attempts in window
+        attempts_15s.loc[grp.index] = np.arange(len(t)) - lo  # earlier same-team attempts in window
 
     # running score (strictly before each event) per team
     home_goal = ((ev.type == "goal") & ev.is_home).astype(int)
@@ -142,16 +172,24 @@ def build_features(ev: pd.DataFrame, hand: dict[int, str]) -> pd.DataFrame:
     sit = G.decode_situation(ev.situation_code)
 
     df = ev.assign(
-        prev_x=prev_x, prev_y=prev_y, prev_type=prev_type, prev_zone=prev_zone,
-        prev_home=prev_home, since_faceoff=(ev.time_g - last_fo),
-        time_since_last=(ev.time_g - prev_t), time_since_shot=(ev.time_g - prev_shot_t),
-        attempts_15s=attempts_15s, home_score=home_score, away_score=away_score, **sit,
+        prev_x=prev_x,
+        prev_y=prev_y,
+        prev_type=prev_type,
+        prev_zone=prev_zone,
+        prev_home=prev_home,
+        since_faceoff=(ev.time_g - last_fo),
+        time_since_last=(ev.time_g - prev_t),
+        time_since_shot=(ev.time_g - prev_shot_t),
+        attempts_15s=attempts_15s,
+        home_score=home_score,
+        away_score=away_score,
+        **sit,
     )
 
     # keep only modeled shots: unblocked, regular season, real strength, goalie in net
     df = df[df.type.isin(G.FENWICK)].copy()
     df = df[df.nhl_game_id.map(C.is_regular_season)]
-    df = df[df.period < 5]                                    # drop shootout (regular-season SO = P5)
+    df = df[df.period < 5]  # drop shootout (regular-season SO = P5)
     df = df[df.x.notna() & df.y.notna() & df.primary_player_id.notna()]
     df = df[df[["away_goalie", "away_skaters", "home_skaters", "home_goalie"]].notna().all(axis=1)]
 
@@ -168,8 +206,8 @@ def build_features(ev: pd.DataFrame, hand: dict[int, str]) -> pd.DataFrame:
     signed_angle = np.degrees(np.arctan2(y_adj, dx))
     prev_signed = np.degrees(np.arctan2(py_adj, GOAL_X - px_adj))
     df["angle_change"] = np.abs(signed_angle - prev_signed)
-    df["last_dist_to_net"] = np.sqrt((GOAL_X - px_adj) ** 2 + py_adj ** 2)
-    df["last_behind_net"] = (px_adj > GOAL_X).astype(int)   # shot off a cycle / wrap from behind
+    df["last_dist_to_net"] = np.sqrt((GOAL_X - px_adj) ** 2 + py_adj**2)
+    df["last_behind_net"] = (px_adj > GOAL_X).astype(int)  # shot off a cycle / wrap from behind
 
     tsl = df.time_since_last.to_numpy(float)
     dist_last = np.sqrt((x_adj - px_adj) ** 2 + (y_adj - py_adj) ** 2)
@@ -179,8 +217,12 @@ def build_features(ev: pd.DataFrame, hand: dict[int, str]) -> pd.DataFrame:
     df["rebound"] = G.rebound_flag(df.prev_type, tsl)
     df["rush"] = G.rush_flag(df.prev_zone, tsl)
     df["same_team_last"] = (df.prev_home.to_numpy() == is_home).astype(int)
-    df["royal_road"] = ((np.sign(py_adj) != np.sign(y_adj)) & (np.abs(py_adj) > 3)
-                        & (np.abs(y_adj) > 3) & (tsl <= ROYAL_ROAD_S)).astype(int)
+    df["royal_road"] = (
+        (np.sign(py_adj) != np.sign(y_adj))
+        & (np.abs(py_adj) > 3)
+        & (np.abs(y_adj) > 3)
+        & (tsl <= ROYAL_ROAD_S)
+    ).astype(int)
 
     shooter_sk = np.where(is_home, df.home_skaters, df.away_skaters)
     def_sk = np.where(is_home, df.away_skaters, df.home_skaters)
@@ -188,8 +230,9 @@ def build_features(ev: pd.DataFrame, hand: dict[int, str]) -> pd.DataFrame:
     df["shooter_skaters"] = shooter_sk
     df["def_skaters"] = def_sk
     df["strength_diff"] = shooter_sk - def_sk
-    df["score_diff"] = np.where(is_home, df.home_score - df.away_score,
-                                df.away_score - df.home_score)
+    df["score_diff"] = np.where(
+        is_home, df.home_score - df.away_score, df.away_score - df.home_score
+    )
     df["is_home"] = is_home.astype(int)
     # off-wing: shooting from the side opposite the stick hand (puck toward mid-ice / one-timer angle).
     # A handedness×shot-side partition, not a skill term; NaN where handedness is unknown.
@@ -209,7 +252,7 @@ def build_features(ev: pd.DataFrame, hand: dict[int, str]) -> pd.DataFrame:
     # exclude empty-net (defending goalie pulled) and penalty-shot / malformed strengths
     df = df[(def_goalie == 1)]
     df = df[(df.shooter_skaters >= 3) & (df.def_skaters >= 3)]
-    keep = ["nhl_game_id", "event_idx", "shooter_id", "goal", *FEATURES]   # time_g is in FEATURES
+    keep = ["nhl_game_id", "event_idx", "shooter_id", "goal", *FEATURES]  # time_g is in FEATURES
     return df[keep].reset_index(drop=True)
 
 
@@ -271,15 +314,35 @@ def fit(seasons: list[int]):
     final.fit(X, y, verbose=False)
     xg = iso.predict(final.predict_proba(X)[:, 1])
 
-    out = df[["nhl_game_id", "event_idx", "time_g", "shooter_id", "goal",
-              "distance", "abs_angle", "shot_type", "strength_diff", "rebound", "rush"]].copy()
+    out = df[
+        [
+            "nhl_game_id",
+            "event_idx",
+            "time_g",
+            "shooter_id",
+            "goal",
+            "distance",
+            "abs_angle",
+            "shot_type",
+            "strength_diff",
+            "rebound",
+            "rush",
+        ]
+    ].copy()
     out["xg"] = np.round(xg, 5)
 
     meta = {
-        "model": "xg", "seasons": sorted(int(s) for s in seasons), "n_shots": int(len(df)),
-        "n_goals": int(y.sum()), "n_games": int(df.nhl_game_id.nunique()),
-        "hyperparams": {**XGB_PARAMS, "n_estimators_final": n_final, "early_stopping": EARLY_STOP,
-                        "fold_best_iters": best_iters},
+        "model": "xg",
+        "seasons": sorted(int(s) for s in seasons),
+        "n_shots": int(len(df)),
+        "n_goals": int(y.sum()),
+        "n_games": int(df.nhl_game_id.nunique()),
+        "hyperparams": {
+            **XGB_PARAMS,
+            "n_estimators_final": n_final,
+            "early_stopping": EARLY_STOP,
+            "fold_best_iters": best_iters,
+        },
         "metrics": _metrics(y, oof_cal),
         "metrics_uncalibrated": _metrics(y, oof),
         "reliability": _reliability(y, oof_cal),
@@ -310,15 +373,21 @@ def _reliability(y: np.ndarray, p: np.ndarray) -> list[dict]:
         m = idx == b
         if m.sum() == 0:
             continue
-        rows.append({"p_lo": RELI_BINS[b], "p_hi": RELI_BINS[b + 1],
-                     "pred": round(float(p[m].mean()), 4), "obs": round(float(y[m].mean()), 4),
-                     "n": int(m.sum())})
+        rows.append(
+            {
+                "p_lo": RELI_BINS[b],
+                "p_hi": RELI_BINS[b + 1],
+                "pred": round(float(p[m].mean()), 4),
+                "obs": round(float(y[m].mean()), 4),
+                "n": int(m.sum()),
+            }
+        )
     return rows
 
 
 def _importances(model) -> list[dict]:
     booster = model.get_booster()
-    score = booster.get_score(importance_type="gain")   # keyed by feature name
+    score = booster.get_score(importance_type="gain")  # keyed by feature name
     total = sum(score.values()) or 1.0
     rows = [{"feature": f, "gain": round(v / total, 4)} for f, v in score.items()]
     return sorted(rows, key=lambda r: -r["gain"])
@@ -328,15 +397,23 @@ def _importances(model) -> list[dict]:
 def _heatmap(model, iso, categories: dict) -> dict:
     """Predicted xG over an offensive-zone grid for each (shot type x rebound x rush x strength)."""
     xs, ys = np.array(HM_X, float), np.array(HM_Y, float)
-    gx, gy = np.meshgrid(xs, ys, indexing="xy")        # shape (len(ys), len(xs))
+    gx, gy = np.meshgrid(xs, ys, indexing="xy")  # shape (len(ys), len(xs))
     flat_x, flat_y = gx.ravel(), gy.ravel()
     dx = GOAL_X - flat_x
     base = {
-        "distance": np.sqrt(dx ** 2 + flat_y ** 2),
+        "distance": np.sqrt(dx**2 + flat_y**2),
         "abs_angle": np.degrees(np.arctan2(np.abs(flat_y), dx)),
-        "x_adj": flat_x, "abs_y": np.abs(flat_y),
-        "since_faceoff": 25.0, "score_diff": 0.0, "period": 1.0, "time_g": 600.0,
-        "is_home": 1, "same_team_last": 1, "last_behind_net": 0, "off_wing": np.nan, "zone": "O",
+        "x_adj": flat_x,
+        "abs_y": np.abs(flat_y),
+        "since_faceoff": 25.0,
+        "score_diff": 0.0,
+        "period": 1.0,
+        "time_g": 600.0,
+        "is_home": 1,
+        "same_team_last": 1,
+        "last_behind_net": 0,
+        "off_wing": np.nan,
+        "zone": "O",
     }
     combos = {}
     for st in HM_SHOT_TYPES:
@@ -364,15 +441,23 @@ def _heatmap(model, iso, categories: dict) -> dict:
                     p = iso.predict(model.predict_proba(X)[:, 1])
                     cells = np.round(p.reshape(len(ys), len(xs)), 4)
                     combos[f"{st}|{reb}|{rush}|{sname}"] = cells.tolist()
-    return {"x": HM_X, "y": HM_Y, "combos": combos,
-            "shot_types": HM_SHOT_TYPES, "strengths": list(HM_STRENGTHS)}
+    return {
+        "x": HM_X,
+        "y": HM_Y,
+        "combos": combos,
+        "shot_types": HM_SHOT_TYPES,
+        "strengths": list(HM_STRENGTHS),
+    }
 
 
 def export_web(meta: dict, model, iso, categories: dict) -> None:
     C.WEB_DATA.mkdir(parents=True, exist_ok=True)
     payload = {
-        "seasons": meta["seasons"], "n_shots": meta["n_shots"], "n_goals": meta["n_goals"],
-        "metrics": meta["metrics"], "reliability": meta["reliability"],
+        "seasons": meta["seasons"],
+        "n_shots": meta["n_shots"],
+        "n_goals": meta["n_goals"],
+        "metrics": meta["metrics"],
+        "reliability": meta["reliability"],
         "importances": meta["importances"][:15],
         "heatmap": _heatmap(model, iso, categories),
     }
@@ -387,34 +472,55 @@ def _write_meta(meta: dict) -> None:
     slim = {k: v for k, v in meta.items() if k != "categories"}
     (C.LOGS_MODEL / f"xg_{label}.meta.json").write_text(json.dumps(slim, indent=2))
     with (C.LOGS / "model_fits.jsonl").open("a") as f:
-        f.write(json.dumps({"ts": datetime.now().isoformat(timespec="seconds"),
-                            "model": "xg", "seasons": meta["seasons"],
-                            "metrics": meta["metrics"]}) + "\n")
+        f.write(
+            json.dumps(
+                {
+                    "ts": datetime.now().isoformat(timespec="seconds"),
+                    "model": "xg",
+                    "seasons": meta["seasons"],
+                    "metrics": meta["metrics"],
+                }
+            )
+            + "\n"
+        )
 
 
 def _save_artifacts(model, iso) -> None:
     C.MODELS.mkdir(parents=True, exist_ok=True)
     model.get_booster().save_model(str(C.MODELS / "xg_booster.json"))
-    (C.MODELS / "xg_isotonic.json").write_text(json.dumps({
-        "x": [round(float(v), 6) for v in iso.X_thresholds_],
-        "y": [round(float(v), 6) for v in iso.y_thresholds_]}))
+    (C.MODELS / "xg_isotonic.json").write_text(
+        json.dumps(
+            {
+                "x": [round(float(v), 6) for v in iso.X_thresholds_],
+                "y": [round(float(v), 6) for v in iso.y_thresholds_],
+            }
+        )
+    )
 
 
 # --- reporting ---------------------------------------------------------------
 def sniff(out: pd.DataFrame, meta: dict) -> None:
     m = meta["metrics"]
-    print(f"    OOF: AUC={m['auc']}  logloss={m['logloss']}  Brier={m['brier']}  "
-          f"Σxg={m['total_xg']} vs goals={m['total_goals']}")
+    print(
+        f"    OOF: AUC={m['auc']}  logloss={m['logloss']}  Brier={m['brier']}  "
+        f"Σxg={m['total_xg']} vs goals={m['total_goals']}"
+    )
     u = meta["metrics_uncalibrated"]
     print(f"    (pre-isotonic Σxg={u['total_xg']}, logloss={u['logloss']})")
-    print("    top features (gain): " + ", ".join(
-        f"{r['feature']} {r['gain']:.2f}" for r in meta["importances"][:8]))
+    print(
+        "    top features (gain): "
+        + ", ".join(f"{r['feature']} {r['gain']:.2f}" for r in meta["importances"][:8])
+    )
     print("    reliability (pred -> obs):")
     for r in meta["reliability"]:
-        print(f"      {r['p_lo']:.2f}-{r['p_hi']:.2f}: pred {r['pred']:.3f}  obs {r['obs']:.3f}  (n={r['n']:,})")
+        print(
+            f"      {r['p_lo']:.2f}-{r['p_hi']:.2f}: pred {r['pred']:.3f}  obs {r['obs']:.3f}  (n={r['n']:,})"
+        )
     hi = out.sort_values("xg", ascending=False).head(3)
-    print(f"    highest-xG shots: " + ", ".join(
-        f"{r.xg:.2f}@{r.distance:.0f}ft" for r in hi.itertuples()))
+    print(
+        f"    highest-xG shots: "
+        + ", ".join(f"{r.xg:.2f}@{r.distance:.0f}ft" for r in hi.itertuples())
+    )
 
 
 def run(seasons: list[int], pool: bool) -> None:
@@ -425,7 +531,9 @@ def run(seasons: list[int], pool: bool) -> None:
         if out.empty:
             print(f"\n[xg {label}] no shots — skipping")
             continue
-        print(f"\n=== xg — seasons {label} : {meta['n_shots']:,} shots, {meta['n_goals']:,} goals ===")
+        print(
+            f"\n=== xg — seasons {label} : {meta['n_shots']:,} shots, {meta['n_goals']:,} goals ==="
+        )
         # per-season prediction parquets (keyed by nhl_game_id + event_idx for downstream joins)
         (C.PROCESSED / "xg").mkdir(parents=True, exist_ok=True)
         out = out.assign(season=(out.nhl_game_id // 1_000_000).astype(int))

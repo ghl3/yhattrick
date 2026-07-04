@@ -3,6 +3,7 @@
 The orientation math — the attacking-team zone flip and the lead sign — is load-bearing for every WAR
 row and easy to get subtly wrong, so these pure functions are locked directly.
 """
+
 from types import SimpleNamespace
 
 from yhattrick.models import generative_features as F
@@ -10,8 +11,8 @@ from yhattrick.models import generative_features as F
 
 def test_zone_flips_for_away_team():
     # Home O-zone faceoff: home attacker starts in O, away attacker starts in D.
-    assert F.zone(True, "faceoff", "O") == (1.0, 0.0)     # home attacks → offensive
-    assert F.zone(False, "faceoff", "O") == (0.0, 1.0)    # away attacks the same faceoff → defensive
+    assert F.zone(True, "faceoff", "O") == (1.0, 0.0)  # home attacks → offensive
+    assert F.zone(False, "faceoff", "O") == (0.0, 1.0)  # away attacks the same faceoff → defensive
     assert F.zone(True, "faceoff", "D") == (0.0, 1.0)
     assert F.zone(False, "faceoff", "D") == (1.0, 0.0)
     # Non-faceoff / neutral-zone starts carry no zone signal.

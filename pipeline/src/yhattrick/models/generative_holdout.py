@@ -40,6 +40,7 @@ data/models/holdout_fit_<train>.npz so scoring iterations don't repay the ~hours
   uv run --group experimental python -m yhattrick.models.generative_holdout --rescore  # reuse cache
 Output: printed tables + data/models/holdout_<target>.json.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -53,7 +54,7 @@ from . import generative_data as D
 from . import generative_likelihood as L
 from .generative_features import RATE_CTX
 
-MIN_TOI_EVAL = 12000.0      # ≥ 200 EV minutes in the target season to enter the player-level table
+MIN_TOI_EVAL = 12000.0  # ≥ 200 EV minutes in the target season to enter the player-level table
 CAND_ORDER = ("league-avg", "pooled-mean", "last-state", "projection")
 BLOCKS = ("shoot", "create", "def")
 
@@ -111,47 +112,68 @@ def _hyper_tag(ma_anchor_scale, ma_create_prior_sd, ma_def_prior_sd=None):
     return tag
 
 
-def _fit_train_side(train, train_through, target, count_model, spg_scale,
-                    ma_anchor_scale=1.0, ma_create_prior_sd=None, ma_def_prior_sd=None):
+def _fit_train_side(
+    train,
+    train_through,
+    target,
+    count_model,
+    spg_scale,
+    ma_anchor_scale=1.0,
+    ma_create_prior_sd=None,
+    ma_def_prior_sd=None,
+):
     """Run the training fit and reduce it to the slim scoring inputs; cached as an npz so scoring
     can iterate without re-fitting. The train side keeps its OWN θ̂ checkpoint chain
     (holdout_ckpt.npz): sweep candidates warm-start each other — never a fit that saw test data."""
-    M = G.fit_all(train, count_model=count_model, spg_scale=spg_scale,
-                  ma_anchor_scale=ma_anchor_scale, ma_create_prior_sd=ma_create_prior_sd,
-                  ma_def_prior_sd=ma_def_prior_sd,
-                  warm=True, save_ckpt=True, ckpt_path=C.MODELS / "holdout_ckpt.npz")
+    M = G.fit_all(
+        train,
+        count_model=count_model,
+        spg_scale=spg_scale,
+        ma_anchor_scale=ma_anchor_scale,
+        ma_create_prior_sd=ma_create_prior_sd,
+        ma_def_prior_sd=ma_def_prior_sd,
+        warm=True,
+        save_ckpt=True,
+        ckpt_path=C.MODELS / "holdout_ckpt.npz",
+    )
     evt = M["rates"]["ev"]
     Rt = evt["R"]
     P = len(M["players"])
-    mlast = Rt["season_row"] == train_through                # naive baseline: final-season raw rates
-    tm_last = np.zeros(P)                                    # teammate shots while on ice (create side)
+    mlast = Rt["season_row"] == train_through  # naive baseline: final-season raw rates
+    tm_last = np.zeros(P)  # teammate shots while on ice (create side)
     for t in range(Rt["team_idx"].shape[1]):
         np.add.at(tm_last, Rt["team_idx"][mlast, t], Rt["count"][mlast])
-    ts = {"players": np.array(M["players"], dtype=np.int64),
-          "intercept": np.float64(evt["intercept"]),
-          "ctx_names": np.array(evt["ctx_names"]), "beta": np.asarray(evt["beta"], dtype=np.float64),
-          "s_last": np.bincount(Rt["shooter_idx"][mlast], weights=Rt["count"][mlast], minlength=P),
-          "t_last": np.bincount(Rt["shooter_idx"][mlast], weights=Rt["dur"][mlast], minlength=P),
-          "tm_last": tm_last,
-          "a2_q": np.float64(evt.get("a2_q") if evt.get("a2_q") is not None else np.nan),
-          "train": np.array(train, dtype=np.int64),
-          "ma_anchor_scale": np.float64(ma_anchor_scale),
-          "ma_create_prior_sd": np.float64(ma_create_prior_sd if ma_create_prior_sd else np.nan),
-          "ma_def_prior_sd": np.float64(ma_def_prior_sd if ma_def_prior_sd else np.nan)}
+    ts = {
+        "players": np.array(M["players"], dtype=np.int64),
+        "intercept": np.float64(evt["intercept"]),
+        "ctx_names": np.array(evt["ctx_names"]),
+        "beta": np.asarray(evt["beta"], dtype=np.float64),
+        "s_last": np.bincount(Rt["shooter_idx"][mlast], weights=Rt["count"][mlast], minlength=P),
+        "t_last": np.bincount(Rt["shooter_idx"][mlast], weights=Rt["dur"][mlast], minlength=P),
+        "tm_last": tm_last,
+        "a2_q": np.float64(evt.get("a2_q") if evt.get("a2_q") is not None else np.nan),
+        "train": np.array(train, dtype=np.int64),
+        "ma_anchor_scale": np.float64(ma_anchor_scale),
+        "ma_create_prior_sd": np.float64(ma_create_prior_sd if ma_create_prior_sd else np.nan),
+        "ma_def_prior_sd": np.float64(ma_def_prior_sd if ma_def_prior_sd else np.nan),
+    }
     for name, c in candidates(M, target).items():
         for blk in BLOCKS:
             ts[f"cand_{name}_{blk}"] = c[blk]
     mat = M["rates"].get("ma")
-    if mat is not None:                                      # MA track: EFFECTIVE per-player params
-        re_last, _, _ = G.effective_params(M["rates"], M["qual"], M["conv"], M["players"],
-                                           M["agepos"], M["last_season"])
+    if mat is not None:  # MA track: EFFECTIVE per-player params
+        re_last, _, _ = G.effective_params(
+            M["rates"], M["qual"], M["conv"], M["players"], M["agepos"], M["last_season"]
+        )
         for blk in BLOCKS:
             ts[f"ma_{blk}"] = re_last["ma"][blk]
         ts["ma_intercept"] = np.float64(mat["intercept"])
         ts["ma_ctx_names"] = np.array(mat["ctx_names"])
         ts["ma_beta"] = np.asarray(mat["beta"], dtype=np.float64)
-    path = C.MODELS / (f"holdout_fit_{train_through}"
-                       f"{_hyper_tag(ma_anchor_scale, ma_create_prior_sd, ma_def_prior_sd)}.npz")
+    path = C.MODELS / (
+        f"holdout_fit_{train_through}"
+        f"{_hyper_tag(ma_anchor_scale, ma_create_prior_sd, ma_def_prior_sd)}.npz"
+    )
     C.MODELS.mkdir(parents=True, exist_ok=True)
     np.savez(path, **ts)
     print(f"[holdout] training side cached -> {path.name}")
@@ -174,8 +196,16 @@ def calibration_slope(N, offset, base, term, iters=40):
     return float(g)
 
 
-def evaluate(train_through, target=None, count_model="nb", spg_scale=1.0, rescore=False,
-             ma_anchor_scale=1.0, ma_create_prior_sd=None, ma_def_prior_sd=None):
+def evaluate(
+    train_through,
+    target=None,
+    count_model="nb",
+    spg_scale=1.0,
+    rescore=False,
+    ma_anchor_scale=1.0,
+    ma_create_prior_sd=None,
+    ma_def_prior_sd=None,
+):
     sd = C.PROCESSED / "shots_onice"
     avail = sorted(int(f.stem) for f in sd.glob("*.parquet")) if sd.exists() else []
     train = [s for s in avail if s <= train_through]
@@ -190,20 +220,30 @@ def evaluate(train_through, target=None, count_model="nb", spg_scale=1.0, rescor
         ts = {k: z[k] for k in z.files}
     else:
         print(f"[holdout] train {train} → target {target} — fitting …")
-        ts = _fit_train_side(train, train_through, target, count_model, spg_scale,
-                             ma_anchor_scale=ma_anchor_scale, ma_create_prior_sd=ma_create_prior_sd,
-                             ma_def_prior_sd=ma_def_prior_sd)
+        ts = _fit_train_side(
+            train,
+            train_through,
+            target,
+            count_model,
+            spg_scale,
+            ma_anchor_scale=ma_anchor_scale,
+            ma_create_prior_sd=ma_create_prior_sd,
+            ma_def_prior_sd=ma_def_prior_sd,
+        )
     players_t = ts["players"]
     idx_t = {int(p): i for i, p in enumerate(players_t)}
 
     # held-out EV rows on the target season's own player index (rookies included, at the prior mean)
     players_h, idx_h = D.player_index([target])
     agepos_h = D._age_position(players_h, [target])
-    Rh = D.rate_rows([target], L.EV_STRENGTHS, True, players_h, idx_h, agepos_h,
-                     states=False, arenas=False)
+    Rh = D.rate_rows(
+        [target], L.EV_STRENGTHS, True, players_h, idx_h, agepos_h, states=False, arenas=False
+    )
     Ph = len(players_h)
     seen = np.array([p in idx_t for p in players_h])
-    print(f"[holdout] target rows {len(Rh['count']):,}  players {Ph} ({int(seen.sum())} seen in training)")
+    print(
+        f"[holdout] target rows {len(Rh['count']):,}  players {Ph} ({int(seen.sum())} seen in training)"
+    )
 
     # context by NAME: base columns for the skill candidates (their effective params already carry
     # curve + position offsets — see docstring); full columns for the no-skill league-avg floor
@@ -230,7 +270,7 @@ def evaluate(train_through, target=None, count_model="nb", spg_scale=1.0, rescor
     toi_h = Rh["toi_atk"]
     obs_shots = np.bincount(Rh["shooter_idx"], weights=N, minlength=Ph)
     obs_rate = np.where(toi_h > 0, obs_shots / np.maximum(toi_h, 1.0) * 3600.0, 0.0)
-    obs_tm = np.zeros(Ph)                                    # create side: teammate shots while on ice
+    obs_tm = np.zeros(Ph)  # create side: teammate shots while on ice
     for t in range(Rh["team_idx"].shape[1]):
         np.add.at(obs_tm, Rh["team_idx"][:, t], N)
     obs_tm_rate = np.where(toi_h > 0, obs_tm / np.maximum(toi_h, 1.0) * 3600.0, 0.0)
@@ -238,30 +278,45 @@ def evaluate(train_through, target=None, count_model="nb", spg_scale=1.0, rescor
     w = toi_h
     mu0 = float(ts["intercept"])
 
-    out = {"train": [int(s) for s in ts["train"]], "target": int(target), "count_model": count_model,
-           "n_rows": int(len(N)), "n_players": Ph, "n_seen": int(seen.sum()),
-           "n_eligible": int(elig.sum()),
-           "rw_sd": {"shoot": L.RW_SD_SHOOT, "create": L.RW_SD_CREATE, "def": L.RW_SD_DEF},
-           "candidates": {}}
+    out = {
+        "train": [int(s) for s in ts["train"]],
+        "target": int(target),
+        "count_model": count_model,
+        "n_rows": int(len(N)),
+        "n_players": Ph,
+        "n_seen": int(seen.sum()),
+        "n_eligible": int(elig.sum()),
+        "rw_sd": {"shoot": L.RW_SD_SHOOT, "create": L.RW_SD_CREATE, "def": L.RW_SD_DEF},
+        "candidates": {},
+    }
     if np.isfinite(float(ts.get("a2_q", np.nan))):
         out["a2_q"] = float(ts["a2_q"])
         print(f"[holdout] training fit A2 mixture q = {out['a2_q']:.3f}")
-    print(f"\n[holdout] eligible for the player table: {int(elig.sum())} "
-          f"(≥{MIN_TOI_EVAL / 60:.0f} EV min in {target} + trained)")
-    print(f"{'candidate':14s} {'row-dev/1k':>11s} {'Σμ/ΣN':>8s} {'corr':>7s} {'MAE/60':>7s} "
-          f"{'tm-corr':>8s} {'tm-MAE':>7s}")
+    print(
+        f"\n[holdout] eligible for the player table: {int(elig.sum())} "
+        f"(≥{MIN_TOI_EVAL / 60:.0f} EV min in {target} + trained)"
+    )
+    print(
+        f"{'candidate':14s} {'row-dev/1k':>11s} {'Σμ/ΣN':>8s} {'corr':>7s} {'MAE/60':>7s} "
+        f"{'tm-corr':>8s} {'tm-MAE':>7s}"
+    )
     for name in CAND_ORDER:
         sh = to_hold(ts[f"cand_{name}_shoot"])
         cr = to_hold(ts[f"cand_{name}_create"])
         df = to_hold(ts[f"cand_{name}_def"])
         ctx = ctx_full if name == "league-avg" else ctx_base
-        eta = (mu0 + sh[Rh["shooter_idx"]] + cr[Rh["team_idx"]].sum(1)
-               + (df[Rh["def_idx"]] * Rh["def_mask"]).sum(1) + ctx)
+        eta = (
+            mu0
+            + sh[Rh["shooter_idx"]]
+            + cr[Rh["team_idx"]].sum(1)
+            + (df[Rh["def_idx"]] * Rh["def_mask"]).sum(1)
+            + ctx
+        )
         mu = np.exp(eta + Rh["offset"])
         dev = poisson_deviance(N, mu)
         pred_shots = np.bincount(Rh["shooter_idx"], weights=mu, minlength=Ph)
         pred_rate = np.where(toi_h > 0, pred_shots / np.maximum(toi_h, 1.0) * 3600.0, 0.0)
-        pred_tm = np.zeros(Ph)                               # create side: predicted teammate shots
+        pred_tm = np.zeros(Ph)  # create side: predicted teammate shots
         for t in range(Rh["team_idx"].shape[1]):
             np.add.at(pred_tm, Rh["team_idx"][:, t], mu)
         pred_tm_rate = np.where(toi_h > 0, pred_tm / np.maximum(toi_h, 1.0) * 3600.0, 0.0)
@@ -269,14 +324,21 @@ def evaluate(train_through, target=None, count_model="nb", spg_scale=1.0, rescor
         mae = wmae(pred_rate[elig], obs_rate[elig], w[elig])
         tcorr = wpearson(pred_tm_rate[elig], obs_tm_rate[elig], w[elig])
         tmae = wmae(pred_tm_rate[elig], obs_tm_rate[elig], w[elig])
-        out["candidates"][name] = {"row_deviance_per_1k": dev / len(N) * 1000.0,
-                                   "sum_mu": float(mu.sum()), "sum_N": float(N.sum()),
-                                   "rate_corr": corr, "rate_mae60": mae,
-                                   "tm_corr": tcorr, "tm_mae60": tmae}
-        wm = w[seen] / max(w[seen].sum(), 1e-9)              # block-mean diagnostic (level-bug canary)
-        print(f"{name:14s} {dev / len(N) * 1000.0:11.3f} {mu.sum() / N.sum():8.3f} "
-              f"{corr:7.3f} {mae:7.3f} {tcorr:8.3f} {tmae:7.3f}   blocks sh {np.sum(wm * sh[seen]):+.2f} "
-              f"cr {np.sum(wm * cr[seen]):+.2f} df {np.sum(wm * df[seen]):+.2f}")
+        out["candidates"][name] = {
+            "row_deviance_per_1k": dev / len(N) * 1000.0,
+            "sum_mu": float(mu.sum()),
+            "sum_N": float(N.sum()),
+            "rate_corr": corr,
+            "rate_mae60": mae,
+            "tm_corr": tcorr,
+            "tm_mae60": tmae,
+        }
+        wm = w[seen] / max(w[seen].sum(), 1e-9)  # block-mean diagnostic (level-bug canary)
+        print(
+            f"{name:14s} {dev / len(N) * 1000.0:11.3f} {mu.sum() / N.sum():8.3f} "
+            f"{corr:7.3f} {mae:7.3f} {tcorr:8.3f} {tmae:7.3f}   blocks sh {np.sum(wm * sh[seen]):+.2f} "
+            f"cr {np.sum(wm * cr[seen]):+.2f} df {np.sum(wm * df[seen]):+.2f}"
+        )
 
     # naive baseline: the player's raw final-training-season rates predict his target rates
     naive_t = np.where(ts["t_last"] > 0, ts["s_last"] / np.maximum(ts["t_last"], 1.0) * 3600.0, 0.0)
@@ -287,14 +349,17 @@ def evaluate(train_through, target=None, count_model="nb", spg_scale=1.0, rescor
     out["naive_last_season"] = {"rate_corr": corr, "rate_mae60": mae, "n": int(en.sum())}
     tcorr = tmae = None
     if "tm_last" in ts:
-        naive_tm = to_hold(np.where(ts["t_last"] > 0,
-                                    ts["tm_last"] / np.maximum(ts["t_last"], 1.0) * 3600.0, 0.0))
+        naive_tm = to_hold(
+            np.where(ts["t_last"] > 0, ts["tm_last"] / np.maximum(ts["t_last"], 1.0) * 3600.0, 0.0)
+        )
         tcorr = wpearson(naive_tm[en], obs_tm_rate[en], w[en])
         tmae = wmae(naive_tm[en], obs_tm_rate[en], w[en])
         out["naive_last_season"].update(tm_corr=tcorr, tm_mae60=tmae)
     tstr = f" {tcorr:8.3f} {tmae:7.3f}" if tcorr is not None else ""
-    print(f"{'naive-' + str(train_through):14s} {'—':>11s} {'—':>8s} {corr:7.3f} {mae:7.3f}{tstr}"
-          f"   (n={int(en.sum())}, needs {train_through} TOI too)")
+    print(
+        f"{'naive-' + str(train_through):14s} {'—':>11s} {'—':>8s} {corr:7.3f} {mae:7.3f}{tstr}"
+        f"   (n={int(en.sum())}, needs {train_through} TOI too)"
+    )
     lm = float(np.sum(w[elig] * obs_rate[elig]) / w[elig].sum())
     out["league_mean_mae60"] = wmae(np.full(int(elig.sum()), lm), obs_rate[elig], w[elig])
     print(f"{'league-mean':14s} {'—':>11s} {'—':>8s} {'0.000':>7s} {out['league_mean_mae60']:7.3f}")
@@ -318,8 +383,9 @@ def evaluate(train_through, target=None, count_model="nb", spg_scale=1.0, rescor
     for blk, term in ev_terms.items():
         gamma["ev"][blk] = calibration_slope(N, Rh["offset"], mu0 + ctx_base + ev_all - term, term)
     if "ma_shoot" in ts:
-        Rm = D.rate_rows([target], L.MA_STRENGTHS, False, players_h, idx_h, agepos_h,
-                         states=False, arenas=False)
+        Rm = D.rate_rows(
+            [target], L.MA_STRENGTHS, False, players_h, idx_h, agepos_h, states=False, arenas=False
+        )
         cmm = G._coef_map([str(n) for n in ts["ma_ctx_names"]], ts["ma_beta"])
         ctx_ma = np.full(len(Rm["count"]), cmm.get(f"season_{train_through}", 0.0))
         for j, nm in enumerate(Rm["ctx_names"]):
@@ -334,24 +400,35 @@ def evaluate(train_through, target=None, count_model="nb", spg_scale=1.0, rescor
         mu0_ma = float(ts["ma_intercept"])
         Nm = Rm["count"]
         for blk, term in ma_terms.items():
-            gamma["ma"][blk] = calibration_slope(Nm, Rm["offset"],
-                                                 mu0_ma + ctx_ma + ma_all - term, term)
+            gamma["ma"][blk] = calibration_slope(
+                Nm, Rm["offset"], mu0_ma + ctx_ma + ma_all - term, term
+            )
         mu_ma = np.exp(mu0_ma + ctx_ma + ma_all + Rm["offset"])
-        out["ma_track"] = {"n_rows": int(len(Nm)),
-                           "row_deviance_per_1k": poisson_deviance(Nm, mu_ma) / len(Nm) * 1000.0,
-                           "sum_mu": float(mu_ma.sum()), "sum_N": float(Nm.sum())}
-        print(f"\n[MA track] rows {len(Nm):,}  Σμ/ΣN {mu_ma.sum() / max(Nm.sum(), 1.0):.3f}  "
-              f"dev/1k {out['ma_track']['row_deviance_per_1k']:.3f}")
+        out["ma_track"] = {
+            "n_rows": int(len(Nm)),
+            "row_deviance_per_1k": poisson_deviance(Nm, mu_ma) / len(Nm) * 1000.0,
+            "sum_mu": float(mu_ma.sum()),
+            "sum_N": float(Nm.sum()),
+        }
+        print(
+            f"\n[MA track] rows {len(Nm):,}  Σμ/ΣN {mu_ma.sum() / max(Nm.sum(), 1.0):.3f}  "
+            f"dev/1k {out['ma_track']['row_deviance_per_1k']:.3f}"
+        )
     else:
         print("\n[MA track] skipped — cache predates the MA params (re-run without --rescore)")
     out["gamma"] = gamma
     gs = "  ".join(f"{b}:{k} {v:+.3f}" for b in ("ev", "ma") for k, v in gamma[b].items())
     print(f"[γ] calibration slopes (1 = face value honest): {gs}")
-    cal = {"train_through": int(train_through), "target": int(target),
-           "count_model": count_model, "spg_scale": spg_scale,
-           "ma_anchor_scale": out["ma_anchor_scale"],
-           "ma_create_prior_sd": out["ma_create_prior_sd"],
-           "ma_def_prior_sd": out["ma_def_prior_sd"], "gamma": gamma}
+    cal = {
+        "train_through": int(train_through),
+        "target": int(target),
+        "count_model": count_model,
+        "spg_scale": spg_scale,
+        "ma_anchor_scale": out["ma_anchor_scale"],
+        "ma_create_prior_sd": out["ma_create_prior_sd"],
+        "ma_def_prior_sd": out["ma_def_prior_sd"],
+        "gamma": gamma,
+    }
     cpath = C.MODELS / f"holdout_calibration{tag}.json"
     cpath.write_text(json.dumps(cal, indent=1))
     print(f"  -> {cpath}")
@@ -368,19 +445,40 @@ def main(argv=None):
     p.add_argument("--target", type=int, default=None, help="held-out season (default: next)")
     p.add_argument("--count", choices=["poisson", "nb"], default="nb")
     p.add_argument("--spg-scale", type=float, default=1.0)
-    p.add_argument("--rescore", action="store_true",
-                   help="reuse the cached training side (holdout_fit_<train>.npz) — skip the fit")
-    p.add_argument("--ma-anchor-scale", type=float, default=1.0,
-                   help="sweep candidate: scale the MA bucket's assist-anchor weight")
-    p.add_argument("--ma-create-prior", type=float, default=None,
-                   help="sweep candidate: create prior SD for the MA bucket")
-    p.add_argument("--ma-def-prior", type=float, default=None,
-                   help="sweep candidate: def prior SD for the MA bucket")
+    p.add_argument(
+        "--rescore",
+        action="store_true",
+        help="reuse the cached training side (holdout_fit_<train>.npz) — skip the fit",
+    )
+    p.add_argument(
+        "--ma-anchor-scale",
+        type=float,
+        default=1.0,
+        help="sweep candidate: scale the MA bucket's assist-anchor weight",
+    )
+    p.add_argument(
+        "--ma-create-prior",
+        type=float,
+        default=None,
+        help="sweep candidate: create prior SD for the MA bucket",
+    )
+    p.add_argument(
+        "--ma-def-prior",
+        type=float,
+        default=None,
+        help="sweep candidate: def prior SD for the MA bucket",
+    )
     args = p.parse_args(argv)
-    evaluate(args.train_through, args.target, count_model=args.count,
-             spg_scale=args.spg_scale, rescore=args.rescore,
-             ma_anchor_scale=args.ma_anchor_scale, ma_create_prior_sd=args.ma_create_prior,
-             ma_def_prior_sd=args.ma_def_prior)
+    evaluate(
+        args.train_through,
+        args.target,
+        count_model=args.count,
+        spg_scale=args.spg_scale,
+        rescore=args.rescore,
+        ma_anchor_scale=args.ma_anchor_scale,
+        ma_create_prior_sd=args.ma_create_prior,
+        ma_def_prior_sd=args.ma_def_prior,
+    )
 
 
 if __name__ == "__main__":

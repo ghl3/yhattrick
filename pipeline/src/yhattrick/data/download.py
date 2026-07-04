@@ -14,6 +14,7 @@ Usage:
   uv run python -m yhattrick.download handedness           # player handedness json
   uv run python -m yhattrick.download all                  # everything, all seasons
 """
+
 from __future__ import annotations
 
 import argparse
@@ -55,7 +56,7 @@ def _teams_for_season(sess: requests.Session, season: int) -> list[str]:
     """Team abbreviations active in `season`, from the standings at a mid-season date.
 
     Using the standings (not a hardcoded list) auto-tracks relocations/expansion per season."""
-    date = f"{season + 1}-01-15"   # mid-season; every active team has a standings row
+    date = f"{season + 1}-01-15"  # mid-season; every active team has a standings row
     txt = _get(sess, C.NHL_STANDINGS_URL.format(date=date), binary=False)
     if not txt:
         raise RuntimeError(f"NHL standings unavailable for {date}")
@@ -68,8 +69,11 @@ def game_ids_for_season(season: int) -> list[int]:
     sess = _session()
     ids: set[int] = set()
     for team in _teams_for_season(sess, season):
-        txt = _get(sess, C.NHL_CLUB_SCHEDULE_URL.format(team=team, season8=C.nhl_season8(season)),
-                   binary=False)
+        txt = _get(
+            sess,
+            C.NHL_CLUB_SCHEDULE_URL.format(team=team, season8=C.nhl_season8(season)),
+            binary=False,
+        )
         if txt:
             for g in json.loads(txt).get("games", []):
                 if g.get("gameType") == 2 and C.is_regular_season(int(g["id"])):
@@ -109,8 +113,12 @@ def download_games(season: int, limit: int | None = None) -> None:
             fetched += 1
             time.sleep(C.THROTTLE_SECONDS)
         if i % 50 == 0:
-            print(f"    {i}/{len(game_ids)}  (fetched {fetched}, cached {skipped}, missing {missing})")
-    print(f"[games] {C.season_label(season)} done: fetched {fetched}, cached {skipped}, missing {missing}")
+            print(
+                f"    {i}/{len(game_ids)}  (fetched {fetched}, cached {skipped}, missing {missing})"
+            )
+    print(
+        f"[games] {C.season_label(season)} done: fetched {fetched}, cached {skipped}, missing {missing}"
+    )
 
 
 # --- NHL per-player landing (handedness) -------------------------------------
@@ -165,8 +173,11 @@ def download_html_shifts(season: int) -> None:
     feed stopped updating ~spring 2025). Resumable: skips reports already on disk."""
     C.ensure_dirs()
     sess = _session()
-    gids = sorted(int(p.stem) for p in C.RAW_PBP.glob("*.json")
-                  if int(str(p.stem)[:4]) == season and _json_shifts_empty(int(p.stem)))
+    gids = sorted(
+        int(p.stem)
+        for p in C.RAW_PBP.glob("*.json")
+        if int(str(p.stem)[:4]) == season and _json_shifts_empty(int(p.stem))
+    )
     print(f"[htmlshifts] {C.season_label(season)}: {len(gids)} games need HTML TOI reports")
     fetched = skipped = missing = 0
     for i, gid in enumerate(gids, 1):
@@ -175,8 +186,13 @@ def download_html_shifts(season: int) -> None:
             if path.exists() and path.stat().st_size > 1000:
                 skipped += 1
                 continue
-            txt = _get(sess, C.NHL_HTML_SHIFTS_URL.format(
-                season8=C.nhl_season8(season), hv=hv, game6=C.game6(gid)), binary=False)
+            txt = _get(
+                sess,
+                C.NHL_HTML_SHIFTS_URL.format(
+                    season8=C.nhl_season8(season), hv=hv, game6=C.game6(gid)
+                ),
+                binary=False,
+            )
             if txt is None:
                 missing += 1
                 continue
@@ -185,7 +201,9 @@ def download_html_shifts(season: int) -> None:
             time.sleep(C.THROTTLE_SECONDS)
         if i % 50 == 0:
             print(f"    {i}/{len(gids)}  (fetched {fetched}, cached {skipped}, missing {missing})")
-    print(f"[htmlshifts] {C.season_label(season)} done: fetched {fetched}, cached {skipped}, missing {missing}")
+    print(
+        f"[htmlshifts] {C.season_label(season)} done: fetched {fetched}, cached {skipped}, missing {missing}"
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -195,7 +213,9 @@ def main(argv: list[str] | None = None) -> None:
     g.add_argument("--season", type=int, required=True)
     g.add_argument("--limit", type=int, default=None)
     sub.add_parser("handedness", help="download NHL player landing json (handedness)")
-    hs = sub.add_parser("htmlshifts", help="download HTML TOI reports for games with an empty JSON shift feed")
+    hs = sub.add_parser(
+        "htmlshifts", help="download HTML TOI reports for games with an empty JSON shift feed"
+    )
     hs.add_argument("--season", type=int, default=None)
     sub.add_parser("all", help="games + HTML shift fallback + handedness, every configured season")
 
@@ -205,7 +225,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "handedness":
         download_handedness()
     elif args.cmd == "htmlshifts":
-        for season in ([args.season] if args.season else C.SEASONS):
+        for season in [args.season] if args.season else C.SEASONS:
             download_html_shifts(season)
     elif args.cmd == "all":
         for season in C.SEASONS:

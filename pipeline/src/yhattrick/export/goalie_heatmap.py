@@ -9,6 +9,7 @@ Against, Save% (1 − goals/shots) and average xGA — from these.
 Returned (embedded into goalie detail by export_goalies) per goalie:
   {"x": [...], "y": [...], "s": [[shots-against]...], "g": [[goals-against]...], "xg": [[xGA]...]}
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -18,9 +19,9 @@ from .. import config as C
 
 # offensive half: from just inside the blue line to the end boards; full ice width
 XLO, XHI, YLO, YHI = 25.0, 100.0, -42.5, 42.5
-BIN = 3.0                         # ft per cell
-MIN_SHOTS = 100                   # goalies with fewer shots faced get no map
-SMOOTH_SIGMA = 1.1               # gaussian smoothing, in cells
+BIN = 3.0  # ft per cell
+MIN_SHOTS = 100  # goalies with fewer shots faced get no map
+SMOOTH_SIGMA = 1.1  # gaussian smoothing, in cells
 
 _XEDGES = np.arange(XLO, XHI + BIN, BIN)
 _YEDGES = np.arange(YLO, YHI + BIN, BIN)
@@ -48,8 +49,11 @@ def build(seasons) -> dict[int, dict]:
     for s in seasons:
         p = C.PROCESSED / "shots_onice" / f"{s}.parquet"
         if p.exists():
-            frames.append(pd.read_parquet(
-                p, columns=["is_home", "home_goalie", "away_goalie", "x", "y", "goal", "xg"]))
+            frames.append(
+                pd.read_parquet(
+                    p, columns=["is_home", "home_goalie", "away_goalie", "x", "y", "goal", "xg"]
+                )
+            )
     if not frames:
         return {}
     df = pd.concat(frames, ignore_index=True)
@@ -64,12 +68,14 @@ def build(seasons) -> dict[int, dict]:
     iy = np.floor((yo - YLO) / BIN).astype(int)
     keep = (ix >= 0) & (ix < NX) & (iy >= 0) & (iy < NY)
 
-    d = pd.DataFrame({
-        "gid": df.goalie_id.values[keep].astype(np.int64),
-        "cell": (iy[keep] * NX + ix[keep]),
-        "goal": df.goal.values[keep].astype(float),
-        "xg": np.nan_to_num(df.xg.values[keep].astype(float)),
-    })
+    d = pd.DataFrame(
+        {
+            "gid": df.goalie_id.values[keep].astype(np.int64),
+            "cell": (iy[keep] * NX + ix[keep]),
+            "goal": df.goal.values[keep].astype(float),
+            "xg": np.nan_to_num(df.xg.values[keep].astype(float)),
+        }
+    )
     ncells = NX * NY
     out: dict[int, dict] = {}
     for gid, grp in d.groupby("gid"):

@@ -11,6 +11,7 @@ Usage:
   uv run python -m yhattrick.gamelog                # all seasons with data
   uv run python -m yhattrick.gamelog --season 2024
 """
+
 from __future__ import annotations
 
 import argparse
@@ -32,8 +33,11 @@ def _games_meta() -> dict[int, dict]:
     out = {}
     for g in json.loads(path.read_text()):
         out[int(g["game_id"])] = {
-            "date": g.get("date"), "home": g["home"], "away": g["away"],
-            "hs": g.get("home_score"), "as": g.get("away_score"),
+            "date": g.get("date"),
+            "home": g["home"],
+            "away": g["away"],
+            "hs": g.get("home_score"),
+            "as": g.get("away_score"),
         }
     return out
 
@@ -71,8 +75,11 @@ def build_season(season: int, meta: dict[int, dict]) -> int:
     sh = pd.read_parquet(sh_p)
 
     # one row per (game, player) for everyone who took a shift; counts left-joined (0 where none)
-    base = (sh.groupby(["nhl_game_id", "player_id"])
-              .agg(team=("team", "first"), toi_s=("duration_s", "sum")).reset_index())
+    base = (
+        sh.groupby(["nhl_game_id", "player_id"])
+        .agg(team=("team", "first"), toi_s=("duration_s", "sum"))
+        .reset_index()
+    )
     base["player_id"] = base.player_id.astype("int64")
     df = base.merge(_counts(ev), on=["nhl_game_id", "player_id"], how="left")
     for c in ("g", "a1", "a2", "sog", "pen"):
@@ -99,13 +106,26 @@ def build_season(season: int, meta: dict[int, dict]) -> int:
             result = "OTL" if int(r.nhl_game_id) in ot_games else "L"
         else:
             result = "T"
-        rows.append({
-            "player_id": int(r.player_id), "game_id": int(r.nhl_game_id), "season": season,
-            "date": m["date"], "team": r.team, "opp": m["away"] if is_home else m["home"],
-            "home": bool(is_home), "gf": gf, "ga": ga, "result": result,
-            "toi_s": int(r.toi_s), "g": int(r.g), "a": int(r.a), "p": int(r.p),
-            "sog": int(r.sog), "pen": int(r.pen),
-        })
+        rows.append(
+            {
+                "player_id": int(r.player_id),
+                "game_id": int(r.nhl_game_id),
+                "season": season,
+                "date": m["date"],
+                "team": r.team,
+                "opp": m["away"] if is_home else m["home"],
+                "home": bool(is_home),
+                "gf": gf,
+                "ga": ga,
+                "result": result,
+                "toi_s": int(r.toi_s),
+                "g": int(r.g),
+                "a": int(r.a),
+                "p": int(r.p),
+                "sog": int(r.sog),
+                "pen": int(r.pen),
+            }
+        )
     out = C.PROCESSED / "gamelog" / f"{season}.parquet"
     out.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_parquet(out, index=False)
@@ -118,7 +138,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--season", type=int, default=None)
     args = p.parse_args(argv)
     meta = _games_meta()
-    for s in ([args.season] if args.season else C.SEASONS):
+    for s in [args.season] if args.season else C.SEASONS:
         if (C.INTERIM / "events" / f"{s}.parquet").exists():
             build_season(s, meta)
 

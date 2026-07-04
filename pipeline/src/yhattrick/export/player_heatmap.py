@@ -9,6 +9,7 @@ Returned (embedded into player detail by export_players) per player:
   {"x": [cell-center x...], "y": [cell-center y...],
    "s": [[shots]...], "g": [[goals]...], "xg": [[xg-sum]...]}   (each grid is [yi][xi])
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -18,9 +19,9 @@ from .. import config as C
 
 # offensive half: from just inside the blue line to the end boards; full ice width
 XLO, XHI, YLO, YHI = 25.0, 100.0, -42.5, 42.5
-BIN = 3.0                         # ft per cell
-MIN_SHOTS = 25                    # players with fewer shots get no map
-SMOOTH_SIGMA = 1.1               # gaussian smoothing, in cells
+BIN = 3.0  # ft per cell
+MIN_SHOTS = 25  # players with fewer shots get no map
+SMOOTH_SIGMA = 1.1  # gaussian smoothing, in cells
 
 _XEDGES = np.arange(XLO, XHI + BIN, BIN)
 _YEDGES = np.arange(YLO, YHI + BIN, BIN)
@@ -62,12 +63,14 @@ def build(seasons) -> dict[int, dict]:
     iy = np.floor((yo - YLO) / BIN).astype(int)
     keep = (ix >= 0) & (ix < NX) & (iy >= 0) & (iy < NY)
 
-    d = pd.DataFrame({
-        "pid": df.shooter_id.values[keep].astype(np.int64),
-        "cell": (iy[keep] * NX + ix[keep]),
-        "goal": df.goal.values[keep].astype(float),
-        "xg": np.nan_to_num(df.xg.values[keep].astype(float)),
-    })
+    d = pd.DataFrame(
+        {
+            "pid": df.shooter_id.values[keep].astype(np.int64),
+            "cell": (iy[keep] * NX + ix[keep]),
+            "goal": df.goal.values[keep].astype(float),
+            "xg": np.nan_to_num(df.xg.values[keep].astype(float)),
+        }
+    )
     ncells = NX * NY
     out: dict[int, dict] = {}
     for pid, grp in d.groupby("pid"):

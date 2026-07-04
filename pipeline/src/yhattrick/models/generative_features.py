@@ -8,6 +8,7 @@ attacking-team zone flip and lead sign — is defined in one tested place.
 
 Low-level: imports only config + numpy/pandas, never the model modules (they import from here).
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -93,14 +94,21 @@ def side_rows(seasons, strengths, dual, idx, gteam=None):
                 emit(st.away_skaters, st.home_skaters, False, st, st.home_goalie, pair)
         elif hn != an and max(hn, an) == 5:
             home = hn > an
-            A, B = (st.home_skaters, st.away_skaters) if home else (st.away_skaters, st.home_skaters)
+            A, B = (
+                (st.home_skaters, st.away_skaters) if home else (st.away_skaters, st.home_skaters)
+            )
             emit(A, B, home, st, st.away_goalie if home else st.home_goalie, pair)
 
     if not atk:
         return None
-    out = {"atk": np.asarray(atk, dtype=np.int64), "def": np.asarray(dfd, dtype=np.int64),
-           "dmask": np.asarray(dmask), "goalie": np.asarray(gid, dtype=object),
-           "dur": np.asarray(dur, dtype=np.float64), "ctx": np.asarray(ctx, dtype=np.float64)}
+    out = {
+        "atk": np.asarray(atk, dtype=np.int64),
+        "def": np.asarray(dfd, dtype=np.int64),
+        "dmask": np.asarray(dmask),
+        "goalie": np.asarray(gid, dtype=object),
+        "dur": np.asarray(dur, dtype=np.float64),
+        "ctx": np.asarray(ctx, dtype=np.float64),
+    }
     if want_teams:
         out["ateam"] = np.asarray(ateam)
         out["dteam"] = np.asarray(dteam)

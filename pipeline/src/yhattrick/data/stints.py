@@ -24,6 +24,7 @@ Usage:
   uv run python -m yhattrick.stints                 # all seasons present in interim/
   uv run python -m yhattrick.stints --season 2021
 """
+
 from __future__ import annotations
 
 import argparse
@@ -47,6 +48,7 @@ _FLIP = {"O": "D", "D": "O", "N": "N"}  # zone from the other team's perspective
 
 # --- boundary attribution: ONE source of truth -----------------------------------------------
 # Scalar forms (used by export_games and as test oracles); vectorized forms used in the hot paths.
+
 
 def shot_stint_index(starts: list[int], t: int) -> int:
     """Stint index for a shot/goal at second ``t``: the stint ENDING at ``t`` if ``t`` is on a
@@ -85,6 +87,7 @@ def assign_other(bounds: np.ndarray, t) -> np.ndarray:
 
 # --- pure building blocks (unit-testable) ----------------------------------------------------
 
+
 def stint_bounds(shifts_g: pd.DataFrame) -> np.ndarray:
     """Sorted unique shift-edge times. Stint i is the open interval (bounds[i], bounds[i+1])."""
     return np.array(sorted(set(shifts_g.start_g) | set(shifts_g.end_g)), dtype=np.int64)
@@ -100,14 +103,16 @@ def teams_reconcile(shifts_g: pd.DataFrame, home_team: str, away_team: str | Non
     return home_team in teams and teams <= {home_team, away_team}
 
 
-def drop_foreign_shifts(shifts_g: pd.DataFrame, home_team: str,
-                        away_team: str | None) -> tuple[pd.DataFrame, set]:
+def drop_foreign_shifts(
+    shifts_g: pd.DataFrame, home_team: str, away_team: str | None
+) -> tuple[pd.DataFrame, set]:
     """Recover a corrupt shiftchart by keeping only the two teams the pbp says are playing.
 
     Some NHL shift feeds splice a second game's shifts in under one gameId (e.g. game 2025020565 had
     VGK/SJS shifts mixed into a BUF@NJD game). The pbp (events/shots) is unaffected, so we keep the
     home+away shifts and drop the foreign ones — recovering a clean game instead of discarding it.
-    Returns (cleaned_shifts, foreign_team_abbrevs). Away unknown => no-op (can't tell what's foreign)."""
+    Returns (cleaned_shifts, foreign_team_abbrevs). Away unknown => no-op (can't tell what's foreign).
+    """
     if away_team is None:
         return shifts_g, set()
     foreign = set(shifts_g.team.unique()) - {home_team, away_team}
@@ -116,8 +121,9 @@ def drop_foreign_shifts(shifts_g: pd.DataFrame, home_team: str,
     return shifts_g[shifts_g.team.isin({home_team, away_team})], foreign
 
 
-def personnel_per_stint(shifts_g: pd.DataFrame, bounds: np.ndarray, goalie_ids: set[int],
-                        home_team: str) -> tuple[list, list, list, list]:
+def personnel_per_stint(
+    shifts_g: pd.DataFrame, bounds: np.ndarray, goalie_ids: set[int], home_team: str
+) -> tuple[list, list, list, list]:
     """On-ice skaters + goalie for every stint. A shift [s,e] covers stint i iff s<=bounds[i] and
     e>=bounds[i+1]. Skater lists follow shift-table order (player_id-ascending), deduped."""
     starts = shifts_g.start_g.to_numpy()
@@ -187,13 +193,18 @@ def volume_per_stint(bounds: np.ndarray, events_g: pd.DataFrame) -> dict[str, np
 
     corsi, fen, sog = (np.isin(ev_type, _CORSI), np.isin(ev_type, _FENWICK), np.isin(ev_type, _SOG))
     return {
-        "home_corsi": counts(corsi, True), "away_corsi": counts(corsi, False),
-        "home_fen": counts(fen, True), "away_fen": counts(fen, False),
-        "home_sog": counts(sog, True), "away_sog": counts(sog, False),
+        "home_corsi": counts(corsi, True),
+        "away_corsi": counts(corsi, False),
+        "home_fen": counts(fen, True),
+        "away_fen": counts(fen, False),
+        "home_sog": counts(sog, True),
+        "away_sog": counts(sog, False),
     }
 
 
-def context_per_stint(bounds: np.ndarray, events_g: pd.DataFrame) -> tuple[np.ndarray, list, list, list]:
+def context_per_stint(
+    bounds: np.ndarray, events_g: pd.DataFrame
+) -> tuple[np.ndarray, list, list, list]:
     """Score state (home_lead) + faceoff zone/start_type per stint. home_lead holds for the whole
     stint: a goal at t0 ended the prior stint, so this stint plays at the post-goal score
     (searchsorted 'right' counts a goal exactly at t0; a goal at t1 ends this stint, excluded).
@@ -204,18 +215,26 @@ def context_per_stint(bounds: np.ndarray, events_g: pd.DataFrame) -> tuple[np.nd
     ev_t = events_g.time_g.to_numpy()
     ev_type = events_g.type.to_numpy()
     ev_home = events_g.is_home.to_numpy().astype(bool)
-    period = (events_g.period.to_numpy() if "period" in events_g.columns
-              else np.zeros(len(events_g), dtype=int))   # real events always carry period
+    period = (
+        events_g.period.to_numpy()
+        if "period" in events_g.columns
+        else np.zeros(len(events_g), dtype=int)
+    )  # real events always carry period
     is_goal = (ev_type == "goal") & (period < 5)
     home_goal_t = np.sort(ev_t[is_goal & ev_home])
     away_goal_t = np.sort(ev_t[is_goal & ~ev_home])
-    lead = (np.searchsorted(home_goal_t, bounds[:-1], side="right")
-            - np.searchsorted(away_goal_t, bounds[:-1], side="right")).astype(np.int64)
+    lead = (
+        np.searchsorted(home_goal_t, bounds[:-1], side="right")
+        - np.searchsorted(away_goal_t, bounds[:-1], side="right")
+    ).astype(np.int64)
     fo = ev_type == "faceoff"
     fo_times = {int(t) for t in ev_t[fo]}
     zone = events_g.zone.to_numpy()
-    fo_zone = {int(t): (z if h else _FLIP.get(z)) for t, z, h in
-               zip(ev_t[fo], zone[fo], ev_home[fo]) if z in _FLIP}
+    fo_zone = {
+        int(t): (z if h else _FLIP.get(z))
+        for t, z, h in zip(ev_t[fo], zone[fo], ev_home[fo])
+        if z in _FLIP
+    }
     szone = [fo_zone.get(int(bounds[i])) for i in range(n)]
     ezone = [fo_zone.get(int(bounds[i + 1])) for i in range(n)]
     stype = ["faceoff" if int(bounds[i]) in fo_times else "fly" for i in range(n)]
@@ -225,15 +244,20 @@ def context_per_stint(bounds: np.ndarray, events_g: pd.DataFrame) -> tuple[np.nd
 def classify_onice_match(home_n: int, away_n: int, sit_h, sit_a) -> str:
     """Compare reconstructed on-ice skater counts to the pbp situationCode counts on the shot."""
     if sit_h is None or sit_a is None:
-        return "large"                       # unverifiable strength (rare) — count as a mismatch
+        return "large"  # unverifiable strength (rare) — count as a mismatch
     dh, da = abs(home_n - sit_h), abs(away_n - sit_a)
     if dh == 0 and da == 0:
         return "exact"
     return "within1" if (dh <= 1 and da <= 1) else "large"
 
 
-def build_stints_for_game(shifts_g: pd.DataFrame, shots_g: pd.DataFrame, events_g: pd.DataFrame,
-                          goalie_ids: set[int], home_team: str) -> list[dict]:
+def build_stints_for_game(
+    shifts_g: pd.DataFrame,
+    shots_g: pd.DataFrame,
+    events_g: pd.DataFrame,
+    goalie_ids: set[int],
+    home_team: str,
+) -> list[dict]:
     """Ordered list of stint dicts for one game: on-ice personnel, model xGF, pbp shot-attempt
     volume (Corsi/Fenwick/SOG), score state and zone start. Orchestrates the pure builders above."""
     bounds = stint_bounds(shifts_g)
@@ -247,19 +271,33 @@ def build_stints_for_game(shifts_g: pd.DataFrame, shots_g: pd.DataFrame, events_
     out = []
     for i in range(n):
         hn, an = len(home_sk[i]), len(away_sk[i])
-        out.append({
-            "stint_idx": i, "start_g": int(bounds[i]), "end_g": int(bounds[i + 1]),
-            "duration_s": int(bounds[i + 1] - bounds[i]),
-            "home_skaters": home_sk[i], "away_skaters": away_sk[i],
-            "home_goalie": home_g[i], "away_goalie": away_g[i],
-            "home_n": hn, "away_n": an, "strength": f"{hn}v{an}",
-            "home_xgf": round(float(hxg[i]), 4), "away_xgf": round(float(axg[i]), 4),
-            "home_corsi": int(vol["home_corsi"][i]), "away_corsi": int(vol["away_corsi"][i]),
-            "home_fen": int(vol["home_fen"][i]), "away_fen": int(vol["away_fen"][i]),
-            "home_sog": int(vol["home_sog"][i]), "away_sog": int(vol["away_sog"][i]),
-            "home_lead": int(lead[i]), "start_zone": szone[i], "end_zone": ezone[i],
-            "start_type": stype[i],
-        })
+        out.append(
+            {
+                "stint_idx": i,
+                "start_g": int(bounds[i]),
+                "end_g": int(bounds[i + 1]),
+                "duration_s": int(bounds[i + 1] - bounds[i]),
+                "home_skaters": home_sk[i],
+                "away_skaters": away_sk[i],
+                "home_goalie": home_g[i],
+                "away_goalie": away_g[i],
+                "home_n": hn,
+                "away_n": an,
+                "strength": f"{hn}v{an}",
+                "home_xgf": round(float(hxg[i]), 4),
+                "away_xgf": round(float(axg[i]), 4),
+                "home_corsi": int(vol["home_corsi"][i]),
+                "away_corsi": int(vol["away_corsi"][i]),
+                "home_fen": int(vol["home_fen"][i]),
+                "away_fen": int(vol["away_fen"][i]),
+                "home_sog": int(vol["home_sog"][i]),
+                "away_sog": int(vol["away_sog"][i]),
+                "home_lead": int(lead[i]),
+                "start_zone": szone[i],
+                "end_zone": ezone[i],
+                "start_type": stype[i],
+            }
+        )
     return out
 
 
@@ -268,7 +306,9 @@ def _load(kind: str, season: int) -> pd.DataFrame | None:
     return pd.read_parquet(p) if p.exists() else None
 
 
-def _shot_onice_rows(gid: int, sho_g: pd.DataFrame, stints: list[dict], bounds: np.ndarray) -> tuple[list[dict], int]:
+def _shot_onice_rows(
+    gid: int, sho_g: pd.DataFrame, stints: list[dict], bounds: np.ndarray
+) -> tuple[list[dict], int]:
     """Attach each shot to the stint it was taken in and emit a shots_onice record + the QC class.
     Returns (rows, n_after_last) where n_after_last counts shots past the last stint (dropped)."""
     times = sho_g.time_g.to_numpy()
@@ -283,27 +323,42 @@ def _shot_onice_rows(gid: int, sho_g: pd.DataFrame, stints: list[dict], bounds: 
         st = stints[j]
         sit_h = int(shot.home_n) if pd.notna(shot.home_n) else None
         sit_a = int(shot.away_n) if pd.notna(shot.away_n) else None
-        rows.append({
-            "nhl_game_id": gid, "event_idx": int(shot.event_idx),
-            "game_seconds": int(shot.time_g), "period": int(shot.period),
-            "stint_idx": st["stint_idx"], "strength": st["strength"],
-            "shooter_id": int(shot.shooter_id) if pd.notna(shot.shooter_id) else None,
-            "shooter": shot.shooter if pd.notna(shot.shooter) else None,
-            "assist1_id": int(shot.assist1_player_id) if pd.notna(shot.assist1_player_id) else None,
-            "assist2_id": int(shot.assist2_player_id) if pd.notna(shot.assist2_player_id) else None,
-            "is_home": int(shot.is_home), "xg": float(shot.xg) if pd.notna(shot.xg) else None,
-            "event": shot.event, "goal": int(shot.goal),
-            "shot_type": shot.shot_type if pd.notna(shot.shot_type) else None,
-            "distance": float(shot.distance) if pd.notna(shot.distance) else None,
-            "angle": float(shot.angle) if pd.notna(shot.angle) else None,
-            "rebound": int(shot.rebound), "rush": int(shot.rush),
-            "x": int(shot.x) if pd.notna(shot.x) else None,
-            "y": int(shot.y) if pd.notna(shot.y) else None,
-            "home_skaters": st["home_skaters"], "away_skaters": st["away_skaters"],
-            "home_goalie": st["home_goalie"], "away_goalie": st["away_goalie"],
-            "sit_home_n": sit_h, "sit_away_n": sit_a,
-            "onice_match": classify_onice_match(st["home_n"], st["away_n"], sit_h, sit_a),
-        })
+        rows.append(
+            {
+                "nhl_game_id": gid,
+                "event_idx": int(shot.event_idx),
+                "game_seconds": int(shot.time_g),
+                "period": int(shot.period),
+                "stint_idx": st["stint_idx"],
+                "strength": st["strength"],
+                "shooter_id": int(shot.shooter_id) if pd.notna(shot.shooter_id) else None,
+                "shooter": shot.shooter if pd.notna(shot.shooter) else None,
+                "assist1_id": (
+                    int(shot.assist1_player_id) if pd.notna(shot.assist1_player_id) else None
+                ),
+                "assist2_id": (
+                    int(shot.assist2_player_id) if pd.notna(shot.assist2_player_id) else None
+                ),
+                "is_home": int(shot.is_home),
+                "xg": float(shot.xg) if pd.notna(shot.xg) else None,
+                "event": shot.event,
+                "goal": int(shot.goal),
+                "shot_type": shot.shot_type if pd.notna(shot.shot_type) else None,
+                "distance": float(shot.distance) if pd.notna(shot.distance) else None,
+                "angle": float(shot.angle) if pd.notna(shot.angle) else None,
+                "rebound": int(shot.rebound),
+                "rush": int(shot.rush),
+                "x": int(shot.x) if pd.notna(shot.x) else None,
+                "y": int(shot.y) if pd.notna(shot.y) else None,
+                "home_skaters": st["home_skaters"],
+                "away_skaters": st["away_skaters"],
+                "home_goalie": st["home_goalie"],
+                "away_goalie": st["away_goalie"],
+                "sit_home_n": sit_h,
+                "sit_away_n": sit_a,
+                "onice_match": classify_onice_match(st["home_n"], st["away_n"], sit_h, sit_a),
+            }
+        )
     return rows, after_last
 
 
@@ -326,8 +381,10 @@ def process_season(season: int, limit: int | None = None) -> dict:
 
     # attach goal assist IDs (creator labels): join by event_idx == pbp sortOrder, goals only.
     # Downstream (generative creator anchor) reads these columns instead of re-reading raw pbp.
-    ga = events.loc[events.type == "goal",
-                    ["nhl_game_id", "event_idx", "assist1_player_id", "assist2_player_id"]]
+    ga = events.loc[
+        events.type == "goal",
+        ["nhl_game_id", "event_idx", "assist1_player_id", "assist2_player_id"],
+    ]
     shots = shots.merge(ga, on=["nhl_game_id", "event_idx"], how="left")
 
     goalie_ids = set(roster.loc[roster.position == "G", "player_id"])
@@ -349,8 +406,10 @@ def process_season(season: int, limit: int | None = None) -> dict:
         sh_g, foreign = drop_foreign_shifts(shifts_by[gid], home_of[gid], away_of.get(gid))
         if foreign:
             salvaged += 1
-            print(f"    !! {gid}: corrupt shiftchart — dropped foreign-team shifts {sorted(foreign)}, "
-                  f"kept {home_of[gid]}/{away_of.get(gid)}")
+            print(
+                f"    !! {gid}: corrupt shiftchart — dropped foreign-team shifts {sorted(foreign)}, "
+                f"kept {home_of[gid]}/{away_of.get(gid)}"
+            )
         if home_of[gid] not in set(sh_g.team.unique()):
             skipped += 1
             print(f"    !! {gid}: home team {home_of[gid]} absent from shifts — skipping")
@@ -390,22 +449,40 @@ def process_season(season: int, limit: int | None = None) -> dict:
     exact = matched / total if total else 0.0
     near = (matched + within1) / total if total else 0.0
     large_rate = large / total if total else 0.0
-    print(f"[stints] {season}: {len(games)} games, {len(stints_df):,} stints, {total:,} shots placed"
-          f"{f' ({salvaged} corrupt shiftcharts cleaned)' if salvaged else ''}"
-          f"{f' ({skipped} games skipped)' if skipped else ''}"
-          f"{f' ({after_last} shots past last stint dropped)' if after_last else ''}")
-    print(f"    on-ice match: exact={exact:.2%}  within±1={near:.2%}  "
-          f"large-mismatch={large_rate:.3%}  illegal-stints={illegal} ({illegal_rate:.3%})")
+    print(
+        f"[stints] {season}: {len(games)} games, {len(stints_df):,} stints, {total:,} shots placed"
+        f"{f' ({salvaged} corrupt shiftcharts cleaned)' if salvaged else ''}"
+        f"{f' ({skipped} games skipped)' if skipped else ''}"
+        f"{f' ({after_last} shots past last stint dropped)' if after_last else ''}"
+    )
+    print(
+        f"    on-ice match: exact={exact:.2%}  within±1={near:.2%}  "
+        f"large-mismatch={large_rate:.3%}  illegal-stints={illegal} ({illegal_rate:.3%})"
+    )
     if total and (large_rate > (1 - ONICE_MATCH_FLOOR) or illegal_rate > 0.001):
-        print(f"    !! WARNING: large-mismatch {large_rate:.3%} or illegal-stint {illegal_rate:.3%} "
-              f"above tolerance -- investigate")
-    return {"season": season, "games": len(games), "stints": len(stints_df), "shots": total,
-            "exact": exact, "within1": near, "large": large, "illegal": illegal,
-            "salvaged_games": salvaged, "skipped_games": skipped, "shots_after_last": after_last}
+        print(
+            f"    !! WARNING: large-mismatch {large_rate:.3%} or illegal-stint {illegal_rate:.3%} "
+            f"above tolerance -- investigate"
+        )
+    return {
+        "season": season,
+        "games": len(games),
+        "stints": len(stints_df),
+        "shots": total,
+        "exact": exact,
+        "within1": near,
+        "large": large,
+        "illegal": illegal,
+        "salvaged_games": salvaged,
+        "skipped_games": skipped,
+        "shots_after_last": after_last,
+    }
 
 
 def main(argv: list[str] | None = None) -> None:
-    p = argparse.ArgumentParser(description="Build stints + shot on-ice sets (interim -> processed)")
+    p = argparse.ArgumentParser(
+        description="Build stints + shot on-ice sets (interim -> processed)"
+    )
     p.add_argument("--season", type=int, default=None)
     p.add_argument("--limit", type=int, default=None, help="process only the first N games (dev)")
     args = p.parse_args(argv)

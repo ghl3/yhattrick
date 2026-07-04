@@ -3,6 +3,7 @@
 `decompose` attaches the per-shot identity goal ≈ xg + μ + finishing + goalie. It's the exact
 arithmetic the league reconciliation and the validator both rely on, so we check it directly here
 (the real fit's reconciliation is data-gated in test_shooting_model)."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -13,12 +14,14 @@ from yhattrick.models.goal_accounting import decompose
 
 
 def _shots():
-    return pd.DataFrame({
-        "shooter_id": [1, 1, 2, 3],
-        "goalie_id": [10, 11, 10, 11],
-        "xg": [0.10, 0.20, 0.30, 0.05],
-        "goal": [0, 1, 0, 0],
-    })
+    return pd.DataFrame(
+        {
+            "shooter_id": [1, 1, 2, 3],
+            "goalie_id": [10, 11, 10, 11],
+            "xg": [0.10, 0.20, 0.30, 0.05],
+            "goal": [0, 1, 0, 0],
+        }
+    )
 
 
 def test_decompose_is_elementwise_additive():
@@ -28,13 +31,13 @@ def test_decompose_is_elementwise_additive():
     s = decompose(_shots(), mu, alpha, gamma)
     assert np.allclose(s.fin, [0.05, 0.05, -0.02, 0.0])
     assert np.allclose(s.gol, [-0.01, 0.02, -0.01, 0.02])
-    assert np.allclose(s.recon, s.xg + s.mu + s.fin + s.gol)   # recon is exactly the sum of pieces
+    assert np.allclose(s.recon, s.xg + s.mu + s.fin + s.gol)  # recon is exactly the sum of pieces
 
 
 def test_decompose_does_not_mutate_input():
     shots = _shots()
     decompose(shots, 0.0, {1: 0.0, 2: 0.0, 3: 0.0}, {10: 0.0, 11: 0.0})
-    assert "recon" not in shots.columns                        # operates on a copy
+    assert "recon" not in shots.columns  # operates on a copy
 
 
 def test_free_intercept_closes_the_league_identity():
@@ -47,7 +50,7 @@ def test_free_intercept_closes_the_league_identity():
     gol = shots.goalie_id.map(gamma)
     mu = float((shots.goal - shots.xg - fin - gol).mean())
     s = decompose(shots, mu, alpha, gamma)
-    assert s.recon.sum() == pytest.approx(s.goal.sum())        # books balance to the penny
+    assert s.recon.sum() == pytest.approx(s.goal.sum())  # books balance to the penny
 
 
 def test_team_rollup_components_sum_to_reconstruction():

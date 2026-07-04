@@ -57,6 +57,7 @@ Usage:
   uv run python -m yhattrick.models.shooting_model                 # all seasons, pooled
   uv run python -m yhattrick.models.shooting_model --season 2024
 """
+
 from __future__ import annotations
 
 import argparse
@@ -70,11 +71,15 @@ from scipy import sparse
 from .. import config as C
 from .player_onice_model import roster_names, _xtwx, _xtwy, _solve_pen, _edf_and_se
 
-MIN_SHOTS_FIN_EST = 200      # min shots for a shooter to enter the finishing talent-variance (k) estimate
-MIN_SHOTS_GOALIE_EST = 1000  # min shots faced for a goalie to enter the save talent-variance (k) estimate
-TAU2_FLOOR = 1e-6            # floor on per-shot talent variance (-> heavy shrinkage if flat)
-SNIFF_FIN_SHOTS = 300        # min shots to appear in the finishing leaderboard
-SNIFF_GOALIE_SHOTS = 1500    # min shots faced to appear in the goalie leaderboard
+MIN_SHOTS_FIN_EST = (
+    200  # min shots for a shooter to enter the finishing talent-variance (k) estimate
+)
+MIN_SHOTS_GOALIE_EST = (
+    1000  # min shots faced for a goalie to enter the save talent-variance (k) estimate
+)
+TAU2_FLOOR = 1e-6  # floor on per-shot talent variance (-> heavy shrinkage if flat)
+SNIFF_FIN_SHOTS = 300  # min shots to appear in the finishing leaderboard
+SNIFF_GOALIE_SHOTS = 1500  # min shots faced to appear in the goalie leaderboard
 
 
 def available_seasons() -> list[int]:
@@ -95,16 +100,21 @@ def load_shots(seasons: list[int]) -> pd.DataFrame:
         p = C.PROCESSED / "shots_onice" / f"{s}.parquet"
         if not p.exists():
             continue
-        df = pd.read_parquet(p, columns=["is_home", "home_goalie", "away_goalie",
-                                         "shooter_id", "xg", "goal"])
+        df = pd.read_parquet(
+            p, columns=["is_home", "home_goalie", "away_goalie", "shooter_id", "xg", "goal"]
+        )
         df["goalie_id"] = np.where(df.is_home == 1, df.away_goalie, df.home_goalie)
         df = df[df.shooter_id.notna() & df.goalie_id.notna() & df.xg.notna()]
-        frames.append(df[["shooter_id", "goalie_id", "xg", "goal"]].astype(
-            {"shooter_id": int, "goalie_id": int, "xg": float, "goal": int}))
+        frames.append(
+            df[["shooter_id", "goalie_id", "xg", "goal"]].astype(
+                {"shooter_id": int, "goalie_id": int, "xg": float, "goal": int}
+            )
+        )
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
 # --- shrinkage: method-of-moments k per block (the ridge penalty) --------------------------------
+
 
 def _estimate_k(F, ixg, made, V, min_shots) -> tuple[float, dict]:
     """Empirical-Bayes shrinkage constant k (in shots) = sigbar2/tau2 from high-volume entities.
@@ -112,45 +122,67 @@ def _estimate_k(F, ixg, made, V, min_shots) -> tuple[float, dict]:
     Volume-weighted variance of the per-shot residual rate = true-talent variance tau2 + mean
     sampling variance; subtract the latter (method of moments) to isolate tau2. Identical machinery
     to the old finishing.estimate_k / goalie.estimate_k (the sign of the residual is irrelevant to
-    its variance, so one helper serves both blocks). Used directly as the ridge penalty: lambda = k."""
+    its variance, so one helper serves both blocks). Used directly as the ridge penalty: lambda = k.
+    """
     m = F >= min_shots
-    F, ixg, made, V = F[m].astype(float), ixg[m].astype(float), made[m].astype(float), V[m].astype(float)
-    r = (made - ixg) / F                       # per-shot residual rate
+    F, ixg, made, V = (
+        F[m].astype(float),
+        ixg[m].astype(float),
+        made[m].astype(float),
+        V[m].astype(float),
+    )
+    r = (made - ixg) / F  # per-shot residual rate
     W = F / F.sum()
-    sigbar2 = float(V.sum() / F.sum())         # mean per-shot Bernoulli variance
+    sigbar2 = float(V.sum() / F.sum())  # mean per-shot Bernoulli variance
     wmean = float(np.sum(W * r))
     wvar = float(np.sum(W * (r - wmean) ** 2))
-    mean_sampling = float(np.sum(W * (V / F ** 2)))
+    mean_sampling = float(np.sum(W * (V / F**2)))
     tau2 = max(wvar - mean_sampling, TAU2_FLOOR)
     k = sigbar2 / tau2
-    return k, {"k": round(k, 1), "tau2": float(tau2), "sigma2_bar": round(sigbar2, 5),
-               "n_entities_est": int(m.sum())}
+    return k, {
+        "k": round(k, 1),
+        "tau2": float(tau2),
+        "sigma2_bar": round(sigbar2, 5),
+        "n_entities_est": int(m.sum()),
+    }
 
 
 def _block_agg(shots: pd.DataFrame, key: str) -> pd.DataFrame:
     s = shots.assign(_v=shots.xg * (1.0 - shots.xg))
-    return s.groupby(key).agg(F=("xg", "size"), ixg=("xg", "sum"),
-                              made=("goal", "sum"), V=("_v", "sum")).reset_index()
+    return (
+        s.groupby(key)
+        .agg(F=("xg", "size"), ixg=("xg", "sum"), made=("goal", "sum"), V=("_v", "sum"))
+        .reset_index()
+    )
 
 
 def lambdas(shots: pd.DataFrame) -> tuple[float, float, dict]:
     """Ridge penalties (lambda_shooter, lambda_goalie) = the EB shot-count constants k. With an
-    unweighted design, lambda = k reproduces the finishing/goalie shrinkage weight n/(n+k) exactly."""
+    unweighted design, lambda = k reproduces the finishing/goalie shrinkage weight n/(n+k) exactly.
+    """
     sg = _block_agg(shots, "shooter_id")
     gg = _block_agg(shots, "goalie_id")
-    k_s, ds = _estimate_k(sg.F.values, sg.ixg.values, sg.made.values, sg.V.values, MIN_SHOTS_FIN_EST)
-    k_g, dg = _estimate_k(gg.F.values, gg.ixg.values, gg.made.values, gg.V.values, MIN_SHOTS_GOALIE_EST)
-    return k_s, k_g, {"shooter": {**ds, "lambda": round(k_s, 1)},
-                      "goalie": {**dg, "lambda": round(k_g, 1)}}
+    k_s, ds = _estimate_k(
+        sg.F.values, sg.ixg.values, sg.made.values, sg.V.values, MIN_SHOTS_FIN_EST
+    )
+    k_g, dg = _estimate_k(
+        gg.F.values, gg.ixg.values, gg.made.values, gg.V.values, MIN_SHOTS_GOALIE_EST
+    )
+    return (
+        k_s,
+        k_g,
+        {"shooter": {**ds, "lambda": round(k_s, 1)}, "goalie": {**dg, "lambda": round(k_g, 1)}},
+    )
 
 
 # --- the crossed penalized-ridge fit (linear, additive in goals) ---------------------------------
+
 
 def _design(shots, shooters, goalies):
     si = {p: i for i, p in enumerate(shooters)}
     gi = {p: len(shooters) + i for i, p in enumerate(goalies)}
     n, Ps, Pg = len(shots), len(shooters), len(goalies)
-    m = Ps + Pg + 1                                          # + intercept (last column)
+    m = Ps + Pg + 1  # + intercept (last column)
     s_col = shots.shooter_id.map(si).to_numpy()
     g_col = shots.goalie_id.map(gi).to_numpy()
     rows = np.repeat(np.arange(n), 3)
@@ -178,8 +210,11 @@ def fit_shots(shots: pd.DataFrame, names, lams=None) -> tuple[pd.DataFrame, pd.D
         lam_s, lam_g, ldiag = lambdas(shots)
     else:
         lam_s, lam_g = lams
-        ldiag = {"source": "pooled", "shooter": {"lambda": round(lam_s, 1)},
-                 "goalie": {"lambda": round(lam_g, 1)}}
+        ldiag = {
+            "source": "pooled",
+            "shooter": {"lambda": round(lam_s, 1)},
+            "goalie": {"lambda": round(lam_g, 1)},
+        }
 
     shooters = sorted(shots.shooter_id.unique())
     goalies = sorted(shots.goalie_id.unique())
@@ -188,14 +223,14 @@ def fit_shots(shots: pd.DataFrame, names, lams=None) -> tuple[pd.DataFrame, pd.D
 
     xg = shots.xg.to_numpy(float)
     y = shots.goal.to_numpy(float)
-    target = y - xg                                          # goals above expected, the thing we split
-    w = np.ones(len(y))                                      # unweighted -> lambda=k reproduces EB exactly
+    target = y - xg  # goals above expected, the thing we split
+    w = np.ones(len(y))  # unweighted -> lambda=k reproduces EB exactly
 
     B = _xtwx(Z, w)
     c = _xtwy(Z, w, target)
     pen = np.zeros(m)
     pen[:Ps] = lam_s
-    pen[Ps:Ps + Pg] = lam_g                                  # intercept (last col) stays free
+    pen[Ps : Ps + Pg] = lam_g  # intercept (last col) stays free
     beta, A, _ = _solve_pen(B, c, pen)
 
     fit_resid = np.asarray(Z @ beta)
@@ -205,15 +240,20 @@ def fit_shots(shots: pd.DataFrame, names, lams=None) -> tuple[pd.DataFrame, pd.D
     _, se = _edf_and_se(B, A, dispersion)
 
     intercept = float(beta[-1])
-    alpha = beta[:Ps]; gamma = beta[Ps:Ps + Pg]
-    se_a = se[:Ps]; se_g = se[Ps:Ps + Pg]
+    alpha = beta[:Ps]
+    gamma = beta[Ps : Ps + Pg]
+    se_a = se[:Ps]
+    se_g = se[Ps : Ps + Pg]
     ai = {p: i for i, p in enumerate(shooters)}
     gj = {p: i for i, p in enumerate(goalies)}
 
     # per-shooter: finishing_i = alpha (constant per shot) -> fin_goals = alpha*shots
     sdf = pd.DataFrame({"player_id": shots.shooter_id.values, "xg": xg, "goal": y})
-    fin = sdf.groupby("player_id").agg(shots=("goal", "size"), ixg=("xg", "sum"),
-                                       goals=("goal", "sum")).reset_index()
+    fin = (
+        sdf.groupby("player_id")
+        .agg(shots=("goal", "size"), ixg=("xg", "sum"), goals=("goal", "sum"))
+        .reset_index()
+    )
     fa = fin.player_id.map(lambda p: alpha[ai[p]])
     fse = fin.player_id.map(lambda p: se_a[ai[p]])
     fin["fin_per100"] = np.round(fa * 100.0, 3)
@@ -223,13 +263,26 @@ def fit_shots(shots: pd.DataFrame, names, lams=None) -> tuple[pd.DataFrame, pd.D
     fin["ixg"] = fin.ixg.round(2)
     fin["name"] = [names.get(int(p), {}).get("name", f"#{p}") for p in fin.player_id]
     fin["pos"] = [names.get(int(p), {}).get("pos") for p in fin.player_id]
-    fin_cols = ["player_id", "name", "pos", "shots", "ixg", "goals",
-                "fin_per100", "fin_per100_se", "fin_goals", "fin_goals_se"]
+    fin_cols = [
+        "player_id",
+        "name",
+        "pos",
+        "shots",
+        "ixg",
+        "goals",
+        "fin_per100",
+        "fin_per100_se",
+        "fin_goals",
+        "fin_goals_se",
+    ]
 
     # per-goalie: goalie_i = gamma -> gsax_saved = -gamma*sa (+ = good)
     gdf = pd.DataFrame({"player_id": shots.goalie_id.values, "xg": xg, "goal": y})
-    gl = gdf.groupby("player_id").agg(sa=("goal", "size"), xga=("xg", "sum"),
-                                      ga=("goal", "sum")).reset_index()
+    gl = (
+        gdf.groupby("player_id")
+        .agg(sa=("goal", "size"), xga=("xg", "sum"), ga=("goal", "sum"))
+        .reset_index()
+    )
     gg_ = gl.player_id.map(lambda p: gamma[gj[p]])
     gse = gl.player_id.map(lambda p: se_g[gj[p]])
     gl["gsax_per100"] = np.round(-gg_ * 100.0, 3)
@@ -239,34 +292,61 @@ def fit_shots(shots: pd.DataFrame, names, lams=None) -> tuple[pd.DataFrame, pd.D
     gl["xga"] = gl.xga.round(2)
     gl["name"] = [names.get(int(p), {}).get("name", f"#{p}") for p in gl.player_id]
     gl["pos"] = [names.get(int(p), {}).get("pos") for p in gl.player_id]
-    gl_cols = ["player_id", "name", "pos", "sa", "xga", "ga",
-               "gsax_per100", "gsax_per100_se", "gsax_saved", "gsax_saved_se"]
+    gl_cols = [
+        "player_id",
+        "name",
+        "pos",
+        "sa",
+        "xga",
+        "ga",
+        "gsax_per100",
+        "gsax_per100_se",
+        "gsax_saved",
+        "gsax_saved_se",
+    ]
 
     # reconciliation (exact, free intercept -> residuals sum to zero):
     #   actual goals = sum(xG) + sum(mu) + sum(finishing) + sum(goalie_effect)
-    sum_fin = float(beta[s_col].sum())      # s_col / g_col are global column indices into beta
+    sum_fin = float(beta[s_col].sum())  # s_col / g_col are global column indices into beta
     sum_gol = float(beta[g_col].sum())
     recon = {
-        "n_shots": int(len(shots)), "n_shooters": Ps, "n_goalies": Pg,
-        "goals": int(y.sum()), "xg": round(float(xg.sum()), 1),
+        "n_shots": int(len(shots)),
+        "n_shooters": Ps,
+        "n_goalies": Pg,
+        "goals": int(y.sum()),
+        "xg": round(float(xg.sum()), 1),
         "residual_above_xg": round(float(target.sum()), 1),
-        "sum_intercept": round(intercept * len(y), 1), "intercept_per_shot": round(intercept, 6),
-        "sum_finishing": round(sum_fin, 1), "sum_goalie_effect": round(sum_gol, 1),
+        "sum_intercept": round(intercept * len(y), 1),
+        "intercept_per_shot": round(intercept, 6),
+        "sum_finishing": round(sum_fin, 1),
+        "sum_goalie_effect": round(sum_gol, 1),
         "sum_gsax_saved": round(-sum_gol, 1),
-        "identity_resid": round(float(y.sum() - xg.sum() - intercept * len(y) - sum_fin - sum_gol), 4),
-        "edf": round(edf, 1), "dispersion": round(dispersion, 5),
+        "identity_resid": round(
+            float(y.sum() - xg.sum() - intercept * len(y) - sum_fin - sum_gol), 4
+        ),
+        "edf": round(edf, 1),
+        "dispersion": round(dispersion, 5),
     }
-    meta = {"model": "shooting_model", "engine": "linear_crossed_ridge",
-            "seasons": [], "shrinkage": ldiag, "reconciliation": recon}
+    meta = {
+        "model": "shooting_model",
+        "engine": "linear_crossed_ridge",
+        "seasons": [],
+        "shrinkage": ldiag,
+        "reconciliation": recon,
+    }
     return fin[fin_cols], gl[gl_cols], meta
 
 
 # --- caching + public API (drop-in for the old finishing / goalie surfaces) ----------------------
 
+
 def _paths(seasons):
     label = "+".join(map(str, seasons))
-    return (C.MODELS / f"shooting_finishing_{label}.parquet",
-            C.MODELS / f"shooting_goalie_{label}.parquet", label)
+    return (
+        C.MODELS / f"shooting_finishing_{label}.parquet",
+        C.MODELS / f"shooting_goalie_{label}.parquet",
+        label,
+    )
 
 
 def _fresh(path, seasons) -> bool:
@@ -321,17 +401,25 @@ def season_goalie(season: int, names: dict, lams) -> pd.DataFrame:
 
 def sniff(fin: pd.DataFrame, gl: pd.DataFrame, label: str) -> None:
     f = fin[fin.shots >= SNIFF_FIN_SHOTS].sort_values("fin_per100", ascending=False).head(10)
-    print(f"\n[{label}] best finishers (goals above expected /100 shots, goalie-adjusted, "
-          f">={SNIFF_FIN_SHOTS} sh):")
+    print(
+        f"\n[{label}] best finishers (goals above expected /100 shots, goalie-adjusted, "
+        f">={SNIFF_FIN_SHOTS} sh):"
+    )
     for r in f.itertuples():
-        print(f"    {r.fin_per100:+.2f} ±{1.96 * r.fin_per100_se:.2f}  {r.name} ({r.pos}, "
-              f"{int(r.shots)} sh, {r.fin_goals:+.1f} G)")
+        print(
+            f"    {r.fin_per100:+.2f} ±{1.96 * r.fin_per100_se:.2f}  {r.name} ({r.pos}, "
+            f"{int(r.shots)} sh, {r.fin_goals:+.1f} G)"
+        )
     g = gl[gl.sa >= SNIFF_GOALIE_SHOTS].sort_values("gsax_per100", ascending=False).head(10)
-    print(f"[{label}] best goalies (goals saved above expected /100 shots, shooter-adjusted, "
-          f">={SNIFF_GOALIE_SHOTS} sh):")
+    print(
+        f"[{label}] best goalies (goals saved above expected /100 shots, shooter-adjusted, "
+        f">={SNIFF_GOALIE_SHOTS} sh):"
+    )
     for r in g.itertuples():
-        print(f"    {r.gsax_per100:+.2f} ±{1.96 * r.gsax_per100_se:.2f}  {r.name} "
-              f"({int(r.sa)} sh, {r.gsax_saved:+.1f} G saved)")
+        print(
+            f"    {r.gsax_per100:+.2f} ±{1.96 * r.gsax_per100_se:.2f}  {r.name} "
+            f"({int(r.sa)} sh, {r.gsax_saved:+.1f} G saved)"
+        )
 
 
 def run(seasons, pool: bool) -> None:
@@ -345,12 +433,16 @@ def run(seasons, pool: bool) -> None:
             print(f"\n[shooting_model {label}] no shots — skipping")
             continue
         rc = meta["reconciliation"]
-        print(f"\n=== shooting_model (linear) — seasons {label} : {rc['n_shots']:,} shots, "
-              f"{rc['n_shooters']} shooters × {rc['n_goalies']} goalies, "
-              f"λ_s={meta['shrinkage']['shooter']['lambda']}, λ_g={meta['shrinkage']['goalie']['lambda']} ===")
-        print(f"    reconcile: goals={rc['goals']} = xG={rc['xg']} + μ={rc['sum_intercept']:+.1f} "
-              f"+ finishing={rc['sum_finishing']:+.1f} + goalie={rc['sum_goalie_effect']:+.1f} "
-              f"→ resid={rc['identity_resid']:+.3f}")
+        print(
+            f"\n=== shooting_model (linear) — seasons {label} : {rc['n_shots']:,} shots, "
+            f"{rc['n_shooters']} shooters × {rc['n_goalies']} goalies, "
+            f"λ_s={meta['shrinkage']['shooter']['lambda']}, λ_g={meta['shrinkage']['goalie']['lambda']} ==="
+        )
+        print(
+            f"    reconcile: goals={rc['goals']} = xG={rc['xg']} + μ={rc['sum_intercept']:+.1f} "
+            f"+ finishing={rc['sum_finishing']:+.1f} + goalie={rc['sum_goalie_effect']:+.1f} "
+            f"→ resid={rc['identity_resid']:+.3f}"
+        )
         fp, gp, _ = _paths(grp)
         fin.to_parquet(fp, index=False)
         gl.to_parquet(gp, index=False)

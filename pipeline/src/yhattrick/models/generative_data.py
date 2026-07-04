@@ -9,6 +9,7 @@ the conversion pre-calculation (the empirical-Bayes prior SDs for finishing and 
 Nothing here evaluates the likelihood or touches the optimizer — the fit engine (`generative_model`)
 calls these builders once per fit and hands the arrays to the objective from `generative_likelihood`.
 """
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -20,12 +21,21 @@ from .. import config as C
 from .player_onice_model import roster_names
 from .generative_features import RATE_CTX, base_ctx, load_stints as _load_stints
 from .generative_likelihood import (
-    _sigmoid, AGE_PEAK, AGE_SCALE, EPS, MAX_DEF, ALL_STRENGTHS,
-    PRIOR_SD_FIN, PRIOR_SD_GSAVE, PRIOR_SD_FLOOR, MIN_SHOTS_FIN_EST, MIN_SHOTS_GSAVE_EST,
+    _sigmoid,
+    AGE_PEAK,
+    AGE_SCALE,
+    EPS,
+    MAX_DEF,
+    ALL_STRENGTHS,
+    PRIOR_SD_FIN,
+    PRIOR_SD_GSAVE,
+    PRIOR_SD_FLOOR,
+    MIN_SHOTS_FIN_EST,
+    MIN_SHOTS_GSAVE_EST,
 )
 
-
 # ── data loaders (5v5) ──────────────────────────────────────────────────────────────────────────
+
 
 def player_index(seasons):
     """Shared player index across ALL modeled strengths (EV+MA), so the per-strength rate fits align to
@@ -45,6 +55,7 @@ def _season_cols(seasons):
 
 # ── game venues (the arena recording-bias offsets) ──────────────────────────────────────────────
 
+
 def _game_venues(seasons):
     """{nhl_game_id: canonical venue name} for the seasons, from the games + arenas DIMENSIONS
     (`make dims`). NHL scorekeeping varies by building (shot counts AND recorded locations), so the
@@ -63,8 +74,8 @@ def _game_venues(seasons):
     return {int(gid): vid2name.get(int(vid)) for gid, vid in zip(g.nhl_game_id, g.venue_id)}
 
 
-ARENA_MIN_GAMES = 20        # venues with fewer games in the fit window (outdoor/neutral sites)
-                            #   get no offset — too few games to estimate one
+ARENA_MIN_GAMES = 20  # venues with fewer games in the fit window (outdoor/neutral sites)
+#   get no offset — too few games to estimate one
 
 
 def _arena_index(seasons, min_games=ARENA_MIN_GAMES):
@@ -80,8 +91,9 @@ def _arena_index(seasons, min_games=ARENA_MIN_GAMES):
     counts = pd.Series(list(ven.values())).value_counts()
     majors = {v for v, c in counts.items() if c >= min_games}
     sset = set(int(s) for s in seasons)
-    pairs = sorted({(v, int(str(g)[:4])) for g, v in ven.items()
-                    if v in majors and int(str(g)[:4]) in sset})
+    pairs = sorted(
+        {(v, int(str(g)[:4])) for g, v in ven.items() if v in majors and int(str(g)[:4]) in sset}
+    )
     if not pairs:
         return ven, {}, None
     pmap = {p: i for i, p in enumerate(pairs)}
@@ -90,12 +102,18 @@ def _arena_index(seasons, min_games=ARENA_MIN_GAMES):
     same = np.array([pv[i + 1] == pv[i] for i in range(len(pv) - 1)], dtype=bool)
     e_prev = np.nonzero(same)[0].astype(np.int64)
     e_next = e_prev + 1
-    mach = {"venue": pv, "season": ps, "e_prev": e_prev, "e_next": e_next,
-            "e_gap": (ps[e_next] - ps[e_prev]).astype(np.float64)}
+    mach = {
+        "venue": pv,
+        "season": ps,
+        "e_prev": e_prev,
+        "e_next": e_next,
+        "e_gap": (ps[e_next] - ps[e_prev]).astype(np.float64),
+    }
     return ven, pmap, mach
 
 
 # ── age & position (the shared aging-curve inputs) ──────────────────────────────────────────────
+
 
 def _birthdates(ids):
     """Birthdates for a list of player/goalie ids from the players DIMENSION (`make dims`), aligned to
@@ -163,10 +181,23 @@ def _shooter_counts(seasons, strengths):
     return out
 
 
-AGE_CTX = ["shoot_D", "create_D", "def_D",
-           "shoot_zF", "shoot_z2F", "shoot_zD", "shoot_z2D",
-           "create_zF", "create_z2F", "create_zD", "create_z2D",
-           "def_zF", "def_z2F", "def_zD", "def_z2D"]
+AGE_CTX = [
+    "shoot_D",
+    "create_D",
+    "def_D",
+    "shoot_zF",
+    "shoot_z2F",
+    "shoot_zD",
+    "shoot_z2D",
+    "create_zF",
+    "create_z2F",
+    "create_zD",
+    "create_z2D",
+    "def_zF",
+    "def_z2F",
+    "def_zD",
+    "def_z2D",
+]
 
 
 def rate_rows(seasons, strengths, dual, players, idx, agepos=None, states=False, arenas=True):
@@ -196,17 +227,28 @@ def rate_rows(seasons, strengths, dual, players, idx, agepos=None, states=False,
     isD = agepos["isD"] if agepos else None
     ven, acol_of, amach = _arena_index(seasons) if arenas else ({}, {}, None)
 
-    shooter, team, dff, dmask, ctx, cnt, off_t, gid, seas_row, arena = [], [], [], [], [], [], [], [], [], []
+    shooter, team, dff, dmask, ctx, cnt, off_t, gid, seas_row, arena = (
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+    )
     toi_atk, toi_def = np.zeros(P), np.zeros(P)
     last_season = np.full(P, -1, dtype=np.int64)
 
     def emit_side(atk, dfd, atk_home, s, def_goalie):
-        ac_i = acol_of.get((ven.get(int(s.nhl_game_id)), s.season), -1)   # −1 = rare/unknown venue
+        ac_i = acol_of.get((ven.get(int(s.nhl_game_id)), s.season), -1)  # −1 = rare/unknown venue
         c = counts.get((int(s.nhl_game_id), int(s.stint_idx)), {})
         ai = [idx[p] for p in atk]
         di = [idx[p] for p in dfd]
         nd = len(di)
-        di_pad = di + [0] * (MAX_DEF - nd)                     # pad to width 5 (masked slots point at 0)
+        di_pad = di + [0] * (MAX_DEF - nd)  # pad to width 5 (masked slots point at 0)
         mrow = [1.0] * nd + [0.0] * (MAX_DEF - nd)
         base = base_ctx(atk_home, s)
         seas = [0.0] * nseas
@@ -214,7 +256,7 @@ def rate_rows(seasons, strengths, dual, players, idx, agepos=None, states=False,
             seas[scol[s.season]] = 1.0
         if AC is not None:
             ac = AC[s.season]
-            a_ac = ac[ai]                                      # (5, 4) attacker age-basis rows
+            a_ac = ac[ai]  # (5, 4) attacker age-basis rows
             a_sum = a_ac.sum(0)
             d_cols = list(ac[di].sum(0)) if nd else [0.0] * 4  # defender age-basis sum (all real)
             a_d = isD[ai]
@@ -222,13 +264,24 @@ def rate_rows(seasons, strengths, dual, players, idx, agepos=None, states=False,
             d_dsum = float(isD[di].sum()) if nd else 0.0
         for t_i, j in enumerate(atk):
             row = base + seas
-            if AC is not None:                                 # AGE_CTX: [D-offsets | shoot|create|def basis]
-                row = row + [float(a_d[t_i]), a_dsum - float(a_d[t_i]), d_dsum] \
-                          + list(a_ac[t_i]) + list(a_sum - a_ac[t_i]) + d_cols
-            shooter.append(idx[j]); team.append([idx[p] for p in atk if p != j])
-            dff.append(di_pad); dmask.append(mrow); ctx.append(row)
-            cnt.append(float(c.get(int(j), 0))); off_t.append(s.duration_s); gid.append(def_goalie)
-            seas_row.append(s.season); arena.append(ac_i)
+            if AC is not None:  # AGE_CTX: [D-offsets | shoot|create|def basis]
+                row = (
+                    row
+                    + [float(a_d[t_i]), a_dsum - float(a_d[t_i]), d_dsum]
+                    + list(a_ac[t_i])
+                    + list(a_sum - a_ac[t_i])
+                    + d_cols
+                )
+            shooter.append(idx[j])
+            team.append([idx[p] for p in atk if p != j])
+            dff.append(di_pad)
+            dmask.append(mrow)
+            ctx.append(row)
+            cnt.append(float(c.get(int(j), 0)))
+            off_t.append(s.duration_s)
+            gid.append(def_goalie)
+            seas_row.append(s.season)
+            arena.append(ac_i)
 
     for s in df.itertuples():
         hn, an = len(s.home_skaters), len(s.away_skaters)
@@ -239,25 +292,30 @@ def rate_rows(seasons, strengths, dual, players, idx, agepos=None, states=False,
             emit_side(s.home_skaters, s.away_skaters, True, s, s.away_goalie)
             emit_side(s.away_skaters, s.home_skaters, False, s, s.home_goalie)
             for p in (*s.home_skaters, *s.away_skaters):
-                toi_atk[idx[p]] += dur; toi_def[idx[p]] += dur
+                toi_atk[idx[p]] += dur
+                toi_def[idx[p]] += dur
                 last_season[idx[p]] = max(last_season[idx[p]], s.season)
         else:
             if hn == an:
-                continue                                       # no man-advantage
+                continue  # no man-advantage
             atk_home = hn > an
-            atk, dfd = (s.home_skaters, s.away_skaters) if atk_home else (s.away_skaters, s.home_skaters)
+            atk, dfd = (
+                (s.home_skaters, s.away_skaters) if atk_home else (s.away_skaters, s.home_skaters)
+            )
             emit_side(atk, dfd, atk_home, s, s.away_goalie if atk_home else s.home_goalie)
             for p in atk:
-                toi_atk[idx[p]] += dur                         # PP-attacker time
+                toi_atk[idx[p]] += dur  # PP-attacker time
                 last_season[idx[p]] = max(last_season[idx[p]], s.season)
             for p in dfd:
-                toi_def[idx[p]] += dur                         # PK-defender time
+                toi_def[idx[p]] += dur  # PK-defender time
                 last_season[idx[p]] = max(last_season[idx[p]], s.season)
 
     dur = np.asarray(off_t, dtype=np.float64)
     ctx_names = RATE_CTX + [f"season_{s}" for s in slist[1:]] + (AGE_CTX if AC is not None else [])
     out = {
-        "players": players, "idx": idx, "dual": dual,
+        "players": players,
+        "idx": idx,
+        "dual": dual,
         "shooter_idx": np.asarray(shooter, dtype=np.int64),
         "team_idx": np.asarray(team, dtype=np.int64),
         "def_idx": np.asarray(dff, dtype=np.int64),
@@ -265,16 +323,24 @@ def rate_rows(seasons, strengths, dual, players, idx, agepos=None, states=False,
         "Xctx": np.asarray(ctx, dtype=np.float64),
         "count": np.asarray(cnt, dtype=np.float64),
         "offset": np.log(np.clip(dur / 3600.0, 1e-9, None)),
-        "dur": dur, "def_goalie": np.asarray(gid, dtype=object),
-        "toi_atk": toi_atk, "toi_def": toi_def, "toi": toi_atk, "n_season_cols": nseas,
-        "season_row": np.asarray(seas_row, dtype=np.int64), "seasons": slist,
-        "ctx_names": ctx_names, "last_season": last_season,
+        "dur": dur,
+        "def_goalie": np.asarray(gid, dtype=object),
+        "toi_atk": toi_atk,
+        "toi_def": toi_def,
+        "toi": toi_atk,
+        "n_season_cols": nseas,
+        "season_row": np.asarray(seas_row, dtype=np.int64),
+        "seasons": slist,
+        "ctx_names": ctx_names,
+        "last_season": last_season,
     }
     if acol_of:
         out["arena_col"] = np.asarray(arena, dtype=np.int32)
         out["n_arenas"] = len(acol_of)
-        out["arena_venue"] = amach["venue"]; out["arena_season"] = amach["season"]
-        out["arena_e_prev"] = amach["e_prev"]; out["arena_e_next"] = amach["e_next"]
+        out["arena_venue"] = amach["venue"]
+        out["arena_season"] = amach["season"]
+        out["arena_e_prev"] = amach["e_prev"]
+        out["arena_e_next"] = amach["e_next"]
         out["arena_e_gap"] = amach["e_gap"]
     if states:
         out.update(_unit_machinery(out, P, slist))
@@ -298,30 +364,35 @@ def _unit_machinery(R, P, slist):
     for j in range(dfi.shape[1]):
         m = dmk[:, j] > 0
         active[dfi[m, j], srow[m]] = True
-    up, us = np.nonzero(active)                                # sorted by player, then season
+    up, us = np.nonzero(active)  # sorted by player, then season
     lut = np.full((P, nS), -1, dtype=np.int64)
     lut[up, us] = np.arange(len(up))
-    same = up[1:] == up[:-1]                                   # consecutive units of the same player
+    same = up[1:] == up[:-1]  # consecutive units of the same player
     e_prev = np.nonzero(same)[0].astype(np.int64)
     e_next = e_prev + 1
     seas_arr = np.array(slist, dtype=np.int64)
     first_mask = np.ones(len(up))
-    first_mask[e_next] = 0.0                                   # only each player's first state is ridged
+    first_mask[e_next] = 0.0  # only each player's first state is ridged
     toi_unit = np.zeros(len(up))
     np.add.at(toi_unit, lut[sh, srow], R["dur"])
     return {
-        "unit_player": up.astype(np.int64), "unit_season": seas_arr[us],
-        "unit_lut": lut, "n_units": int(len(up)),
+        "unit_player": up.astype(np.int64),
+        "unit_season": seas_arr[us],
+        "unit_lut": lut,
+        "n_units": int(len(up)),
         "shooter_unit": lut[sh, srow].astype(np.int32),
         "team_unit": lut[tm, srow[:, None]].astype(np.int32),
         "def_unit": np.where(dmk > 0, lut[dfi, srow[:, None]], 0).astype(np.int32),
-        "e_prev": e_prev, "e_next": e_next,
+        "e_prev": e_prev,
+        "e_next": e_next,
         "e_gap": (seas_arr[us[e_next]] - seas_arr[us[e_prev]]).astype(np.float64),
-        "first_mask": first_mask, "toi_unit": toi_unit,
+        "first_mask": first_mask,
+        "toi_unit": toi_unit,
     }
 
 
 # ── quality data: each shot + (for goals) the observed primary creator ────────────────────────────
+
 
 def quality_creator_rows(seasons, idx, strengths, agepos=None, arenas=True):
     """Per Fenwick shot in the given strengths (POOLED across EV+MA): shooter, 4 teammates, ≤5 defenders
@@ -332,83 +403,132 @@ def quality_creator_rows(seasons, idx, strengths, agepos=None, arenas=True):
     Creator: for goals, which teammate (0–3) got the primary assist, 4=unassisted, or −1 when the
     credited assister is not an on-ice teammate (data glitch / goalie assist — latent, and excluded
     from the assist-credit anchor; F4). Non-goals −1 (latent).
-    Creator labels come from `shots_onice.assist1_id`/`assist2_id` (event_idx == pbp goal sortOrder)."""
+    Creator labels come from `shots_onice.assist1_id`/`assist2_id` (event_idx == pbp goal sortOrder).
+    """
     scol, nseas = _season_cols(seasons)
     isD = agepos["isD"] if agepos else None
     ven, acol_of, amach = _arena_index(seasons) if arenas else ({}, {}, None)
-    shooter, team, dff, dmask, ctx, y, goal, creator, creator2, slab, seas_row, arena = \
-        [], [], [], [], [], [], [], [], [], [], [], []
+    shooter, team, dff, dmask, ctx, y, goal, creator, creator2, slab, seas_row, arena = (
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+    )
     for s in seasons:
         p = C.PROCESSED / "shots_onice" / f"{s}.parquet"
         if not p.exists():
             continue
-        d = pd.read_parquet(p, columns=["nhl_game_id", "strength", "is_home", "xg", "goal",
-                                        "shooter_id", "assist1_id", "assist2_id",
-                                        "home_skaters", "away_skaters"])
+        d = pd.read_parquet(
+            p,
+            columns=[
+                "nhl_game_id",
+                "strength",
+                "is_home",
+                "xg",
+                "goal",
+                "shooter_id",
+                "assist1_id",
+                "assist2_id",
+                "home_skaters",
+                "away_skaters",
+            ],
+        )
         d = d[d.strength.isin(strengths) & d.xg.notna() & d.shooter_id.notna()]
         for gid, sub in d.groupby("nhl_game_id"):
-            ac_i = acol_of.get((ven.get(int(gid)), s), -1)    # −1 = rare/unknown venue
+            ac_i = acol_of.get((ven.get(int(gid)), s), -1)  # −1 = rare/unknown venue
             for r in sub.itertuples():
                 hs, as_ = list(r.home_skaters), list(r.away_skaters)
                 atk, dfd = (hs, as_) if r.is_home == 1 else (as_, hs)
                 is_ev = r.strength == "5v5"
-                if len(atk) != 5:                        # EV: 5v5; MA: shooter must be on the 5 (PP) side
+                if len(atk) != 5:  # EV: 5v5; MA: shooter must be on the 5 (PP) side
                     continue
                 if is_ev and len(dfd) != 5:
                     continue
                 sid = int(r.shooter_id)
-                if sid not in atk or any(q not in idx for q in atk) or any(q not in idx for q in dfd):
+                if (
+                    sid not in atk
+                    or any(q not in idx for q in atk)
+                    or any(q not in idx for q in dfd)
+                ):
                     continue
-                mates = [q for q in atk if q != sid]                     # 4 teammates
+                mates = [q for q in atk if q != sid]  # 4 teammates
                 nd = len(dfd)
                 di = [idx[q] for q in dfd] + [0] * (MAX_DEF - nd)
                 mrow = [1.0] * nd + [0.0] * (MAX_DEF - nd)
                 seas = [0.0] * nseas
                 if s in scol:
                     seas[scol[s]] = 1.0
-                shooter.append(idx[sid]); team.append([idx[q] for q in mates])
-                dff.append(di); dmask.append(mrow)
+                shooter.append(idx[sid])
+                team.append([idx[q] for q in mates])
+                dff.append(di)
+                dmask.append(mrow)
                 row = [1.0 if r.is_home == 1 else 0.0, 0.0 if is_ev else 1.0] + seas
-                if isD is not None:                          # A2: position offsets (appended last so
-                    row += [float(isD[idx[sid]]),            #   the pp column stays at index 1)
-                            float(sum(isD[idx[q]] for q in dfd))]
+                if isD is not None:  # A2: position offsets (appended last so
+                    row += [
+                        float(isD[idx[sid]]),  #   the pp column stays at index 1)
+                        float(sum(isD[idx[q]] for q in dfd)),
+                    ]
                 ctx.append(row)
-                xg = float(np.clip(r.xg, EPS, 1 - EPS)); y.append(np.log(xg / (1 - xg)))
-                goal.append(int(r.goal)); slab.append(0 if is_ev else 1); seas_row.append(s)
+                xg = float(np.clip(r.xg, EPS, 1 - EPS))
+                y.append(np.log(xg / (1 - xg)))
+                goal.append(int(r.goal))
+                slab.append(0 if is_ev else 1)
+                seas_row.append(s)
                 arena.append(ac_i)
                 if r.goal == 1:
                     ap = r.assist1_id
                     if pd.isna(ap):
-                        creator.append(4)                    # genuinely unassisted
+                        creator.append(4)  # genuinely unassisted
                     elif int(ap) in mates:
                         creator.append(mates.index(int(ap)))
                     else:
-                        creator.append(-1)                   # assister not an on-ice teammate (data
-                    ap2 = r.assist2_id                       # glitch / goalie assist): latent, and
-                    creator2.append(mates.index(int(ap2))    # excluded from the assist-credit anchor
-                                    if pd.notna(ap2) and int(ap2) in mates else -1)
+                        creator.append(-1)  # assister not an on-ice teammate (data
+                    ap2 = r.assist2_id  # glitch / goalie assist): latent, and
+                    creator2.append(
+                        mates.index(int(ap2))  # excluded from the assist-credit anchor
+                        if pd.notna(ap2) and int(ap2) in mates
+                        else -1
+                    )
                 else:
                     creator.append(-1)
                     creator2.append(-1)
-    out = {"shooter_idx": np.asarray(shooter, dtype=np.int64), "team_idx": np.asarray(team, dtype=np.int64),
-           "def_idx": np.asarray(dff, dtype=np.int64), "def_mask": np.asarray(dmask, dtype=np.float64),
-           "Xctx": np.asarray(ctx, dtype=np.float64),
-           "y": np.asarray(y, dtype=np.float64), "goal": np.asarray(goal, dtype=np.int64),
-           "creator": np.asarray(creator, dtype=np.int64), "strength": np.asarray(slab, dtype=np.int64),
-           "creator2": np.asarray(creator2, dtype=np.int64),
-           "season": np.asarray(seas_row, dtype=np.int64),
-           "ctx_names": ["home", "pp"] + [f"season_{s}" for s in sorted(set(seasons))[1:]]
-                        + (["shooter_D", "def_D"] if isD is not None else [])}
+    out = {
+        "shooter_idx": np.asarray(shooter, dtype=np.int64),
+        "team_idx": np.asarray(team, dtype=np.int64),
+        "def_idx": np.asarray(dff, dtype=np.int64),
+        "def_mask": np.asarray(dmask, dtype=np.float64),
+        "Xctx": np.asarray(ctx, dtype=np.float64),
+        "y": np.asarray(y, dtype=np.float64),
+        "goal": np.asarray(goal, dtype=np.int64),
+        "creator": np.asarray(creator, dtype=np.int64),
+        "strength": np.asarray(slab, dtype=np.int64),
+        "creator2": np.asarray(creator2, dtype=np.int64),
+        "season": np.asarray(seas_row, dtype=np.int64),
+        "ctx_names": ["home", "pp"]
+        + [f"season_{s}" for s in sorted(set(seasons))[1:]]
+        + (["shooter_D", "def_D"] if isD is not None else []),
+    }
     if acol_of:
         out["arena_col"] = np.asarray(arena, dtype=np.int32)
         out["n_arenas"] = len(acol_of)
-        out["arena_venue"] = amach["venue"]; out["arena_season"] = amach["season"]
-        out["arena_e_prev"] = amach["e_prev"]; out["arena_e_next"] = amach["e_next"]
+        out["arena_venue"] = amach["venue"]
+        out["arena_season"] = amach["season"]
+        out["arena_e_prev"] = amach["e_prev"]
+        out["arena_e_next"] = amach["e_next"]
         out["arena_e_gap"] = amach["e_gap"]
     return out
 
 
 # ── conversion data: each shot's shooter, facing goalie, observed xG, goal flag ────────────────────
+
 
 def conversion_rows(seasons, idx, strengths, agepos=None):
     """Per Fenwick shot (POOLED across the given strengths) for the CONVERSION fit: shooter index,
@@ -425,8 +545,18 @@ def conversion_rows(seasons, idx, strengths, agepos=None):
         p = C.PROCESSED / "shots_onice" / f"{s}.parquet"
         if not p.exists():
             continue
-        d = pd.read_parquet(p, columns=["strength", "is_home", "xg", "goal",
-                                        "shooter_id", "home_goalie", "away_goalie"])
+        d = pd.read_parquet(
+            p,
+            columns=[
+                "strength",
+                "is_home",
+                "xg",
+                "goal",
+                "shooter_id",
+                "home_goalie",
+                "away_goalie",
+            ],
+        )
         d = d[d.strength.isin(strengths) & d.xg.notna() & d.shooter_id.notna()].copy()
         # skater counts from the "HvA" strength string; shooter's own count vs the defenders'
         hn = d.strength.str.slice(0, 1).astype(int).to_numpy()
@@ -434,9 +564,11 @@ def conversion_rows(seasons, idx, strengths, agepos=None):
         is_home = d.is_home.to_numpy() == 1
         shooter_n = np.where(is_home, hn, an)
         def_n = np.where(is_home, an, hn)
-        d["slab"] = np.where(shooter_n == def_n, 0, 1)         # 0 = EV (equal), 1 = MA (man-advantage)
-        d = d[shooter_n >= def_n]                              # EV, or PP-side shots only (drop shorthanded)
-        d["goalie_id"] = np.where(d.is_home.to_numpy() == 1, d.away_goalie.to_numpy(), d.home_goalie.to_numpy())
+        d["slab"] = np.where(shooter_n == def_n, 0, 1)  # 0 = EV (equal), 1 = MA (man-advantage)
+        d = d[shooter_n >= def_n]  # EV, or PP-side shots only (drop shorthanded)
+        d["goalie_id"] = np.where(
+            d.is_home.to_numpy() == 1, d.away_goalie.to_numpy(), d.home_goalie.to_numpy()
+        )
         d = d[d.goalie_id.notna()]
         d["sidx"] = d.shooter_id.astype(int).map(idx)
         d = d[d.sidx.notna()]
@@ -451,16 +583,21 @@ def conversion_rows(seasons, idx, strengths, agepos=None):
     sidx = D.sidx.astype(int).to_numpy(np.int64)
     gidx = D.goalie_id.astype(int).map(gmap).to_numpy(np.int64)
     srow = D.season.to_numpy(np.int64)
-    out = {"shooter_idx": sidx, "goalie_idx": gidx,
-           "logit_xg": np.log(xg / (1 - xg)),
-           "y": D.goal.to_numpy(np.float64),
-           "strength": D.slab.to_numpy(np.int64),
-           "season": srow, "goalies": goalies}
+    out = {
+        "shooter_idx": sidx,
+        "goalie_idx": gidx,
+        "logit_xg": np.log(xg / (1 - xg)),
+        "y": D.goal.to_numpy(np.float64),
+        "strength": D.slab.to_numpy(np.int64),
+        "season": srow,
+        "goalies": goalies,
+    }
     if agepos is not None:
         slist = sorted(set(seasons))
-        cols = [(srow == s).astype(np.float64) for s in slist[1:]]      # per-season offsets (F6)
+        cols = [(srow == s).astype(np.float64) for s in slist[1:]]  # per-season offsets (F6)
         names = [f"season_{s}" for s in slist[1:]]
-        zsh = np.zeros(len(D)); dsh = agepos["isD"][sidx]
+        zsh = np.zeros(len(D))
+        dsh = agepos["isD"][sidx]
         gborn = _birthdates(goalies)
         zg = np.zeros(len(D))
         for s in slist:
@@ -477,6 +614,7 @@ def conversion_rows(seasons, idx, strengths, agepos=None):
 
 # ── conversion PRE-CALCULATION: empirical-Bayes prior SDs (recomputed each fit, then held fixed) ─────
 
+
 def _eb_prior_sd(count, exp_goals, made, var, min_shots, vbar, fallback):
     """Empirical-Bayes prior SD for one conversion offset block (finishing OR goalie) — the ridge
     analogue of shooting_model._estimate_k. For each entity aggregate its shots: N, expected goals
@@ -491,13 +629,13 @@ def _eb_prior_sd(count, exp_goals, made, var, min_shots, vbar, fallback):
     if int(m.sum()) < 2:
         return fallback
     N, E, M, V = count[m].astype(float), exp_goals[m], made[m], var[m]
-    r = (M - E) / N                                         # per-shot residual rate (goals/shot above xG)
+    r = (M - E) / N  # per-shot residual rate (goals/shot above xG)
     W = N / N.sum()
     rbar = float(np.sum(W * r))
-    wvar = float(np.sum(W * (r - rbar) ** 2))               # observed spread of r
-    msamp = float(np.sum(W * (V / N ** 2)))                 # mean sampling variance of r
-    tau2_prob = max(wvar - msamp, 0.0)                      # talent variance (goals/shot), floored at 0
-    sd_logit = np.sqrt(tau2_prob) / max(vbar, 1e-9)         # map goals/shot → logit scale
+    wvar = float(np.sum(W * (r - rbar) ** 2))  # observed spread of r
+    msamp = float(np.sum(W * (V / N**2)))  # mean sampling variance of r
+    tau2_prob = max(wvar - msamp, 0.0)  # talent variance (goals/shot), floored at 0
+    sd_logit = np.sqrt(tau2_prob) / max(vbar, 1e-9)  # map goals/shot → logit scale
     return float(max(sd_logit, PRIOR_SD_FLOOR))
 
 
@@ -505,17 +643,20 @@ def estimate_conversion_prior_sds(Cr, P):
     """Pre-calculation stage for the conversion fit: estimate the finishing and goalie prior SDs from
     THIS fit's data (empirical Bayes), so the ridge shrinkage is data-calibrated rather than hand-set.
     Recomputed each fit and then held FIXED during the fit. Returns (sd_fin, sd_gsave) on the logit
-    scale. Talent SD is estimated only from high-volume entities (MIN_SHOTS_*), then applied to all."""
+    scale. Talent SD is estimated only from high-volume entities (MIN_SHOTS_*), then applied to all.
+    """
     G = len(Cr["goalies"])
-    xg = _sigmoid(Cr["logit_xg"])                           # recover observed xg from its logit
+    xg = _sigmoid(Cr["logit_xg"])  # recover observed xg from its logit
     v = xg * (1.0 - xg)
-    vbar = float(v.mean()) if len(v) else 1e-9              # mean per-shot Bernoulli variance p(1−p)
+    vbar = float(v.mean()) if len(v) else 1e-9  # mean per-shot Bernoulli variance p(1−p)
 
     def blocks(idx, n):
-        return (np.bincount(idx, minlength=n).astype(float),      # N
-                np.bincount(idx, weights=xg, minlength=n),         # Σxg
-                np.bincount(idx, weights=Cr["y"], minlength=n),    # goals
-                np.bincount(idx, weights=v, minlength=n))          # ΣV
+        return (
+            np.bincount(idx, minlength=n).astype(float),  # N
+            np.bincount(idx, weights=xg, minlength=n),  # Σxg
+            np.bincount(idx, weights=Cr["y"], minlength=n),  # goals
+            np.bincount(idx, weights=v, minlength=n),
+        )  # ΣV
 
     sc, se_, sm, sv = blocks(Cr["shooter_idx"], P)
     gc, ge, gm, gv = blocks(Cr["goalie_idx"], G)

@@ -3,15 +3,20 @@
 Both the shot table (clean.py) and the xG features (xg.py) orient coordinates and flag
 rebound/rush the same way; keeping that here stops the two from drifting apart.
 """
+
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
-GOAL_X = 89.0                                   # goal line distance from center (NHL coords)
-FENWICK = ["shot-on-goal", "missed-shot", "goal"]   # unblocked shot events (carry a shooter + can score)
-REBOUND_S = 3.0                                 # a shot within this many seconds of a prior shot is a rebound
-RUSH_S = 4.0                                    # a shot this soon after a neutral/defensive-zone event is a rush
+GOAL_X = 89.0  # goal line distance from center (NHL coords)
+FENWICK = [
+    "shot-on-goal",
+    "missed-shot",
+    "goal",
+]  # unblocked shot events (carry a shooter + can score)
+REBOUND_S = 3.0  # a shot within this many seconds of a prior shot is a rebound
+RUSH_S = 4.0  # a shot this soon after a neutral/defensive-zone event is a rush
 
 
 def attack_sign(is_home, home_defending_side) -> np.ndarray:
@@ -30,7 +35,7 @@ def oriented(x, y, sign) -> tuple[np.ndarray, np.ndarray]:
 def distance_angle(x_adj, y_adj) -> tuple[np.ndarray, np.ndarray]:
     """Distance to the net and absolute shot angle (degrees) from oriented coordinates."""
     dx = GOAL_X - x_adj
-    return np.sqrt(dx ** 2 + y_adj ** 2), np.degrees(np.arctan2(np.abs(y_adj), dx))
+    return np.sqrt(dx**2 + y_adj**2), np.degrees(np.arctan2(np.abs(y_adj), dx))
 
 
 def rebound_flag(prev_type, time_since_last) -> np.ndarray:

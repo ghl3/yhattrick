@@ -21,6 +21,7 @@ Usage:
   uv run python -m yhattrick.goalie_gamelog                # all seasons with data
   uv run python -m yhattrick.goalie_gamelog --season 2024
 """
+
 from __future__ import annotations
 
 import argparse
@@ -47,8 +48,12 @@ def _games_meta() -> dict[int, dict]:
     out = {}
     for g in json.loads(path.read_text()):
         out[int(g["game_id"])] = {
-            "date": g.get("date"), "home": g["home"], "away": g["away"],
-            "hs": g.get("home_score"), "as": g.get("away_score"), "ot": bool(g.get("ot")),
+            "date": g.get("date"),
+            "home": g["home"],
+            "away": g["away"],
+            "hs": g.get("home_score"),
+            "as": g.get("away_score"),
+            "ot": bool(g.get("ot")),
         }
     return out
 
@@ -63,9 +68,16 @@ def _shot_lines(season: int, goalie_ids: set[int]) -> pd.DataFrame:
     df = df[df.goalie_id.notna() & df.xg.notna()].copy()
     df["goalie_id"] = df.goalie_id.astype("int64")
     df["is_sog"] = df.event.isin(_SOG)
-    g = df.groupby(["nhl_game_id", "goalie_id"]).agg(
-        sa=("event", "size"), xga=("xg", "sum"), ga=("goal", "sum"),
-        sog_against=("is_sog", "sum")).reset_index()
+    g = (
+        df.groupby(["nhl_game_id", "goalie_id"])
+        .agg(
+            sa=("event", "size"),
+            xga=("xg", "sum"),
+            ga=("goal", "sum"),
+            sog_against=("is_sog", "sum"),
+        )
+        .reset_index()
+    )
     g = g.rename(columns={"goalie_id": "player_id"})
     g["saves"] = g.sog_against - g.ga
     g["gsax"] = g.xga - g.ga
@@ -85,9 +97,11 @@ def build_season(season: int, meta: dict[int, dict]) -> int:
     sh = sh[sh.player_id.isin(goalie_ids) & sh.nhl_game_id.map(C.is_regular_season)]
 
     # goalie-games from shifts: ice time, team, first shift (for start detection)
-    base = (sh.groupby(["nhl_game_id", "player_id"])
-              .agg(team=("team", "first"), toi_s=("duration_s", "sum"),
-                   first_start=("start_g", "min")).reset_index())
+    base = (
+        sh.groupby(["nhl_game_id", "player_id"])
+        .agg(team=("team", "first"), toi_s=("duration_s", "sum"), first_start=("start_g", "min"))
+        .reset_index()
+    )
     base["player_id"] = base.player_id.astype("int64")
     # starter per (game, team) = earliest first shift; count goalies per team for shutout eligibility
     base = base.sort_values(["nhl_game_id", "team", "first_start"])
@@ -107,7 +121,7 @@ def build_season(season: int, meta: dict[int, dict]) -> int:
             continue
         is_home = r.team == m["home"]
         gf = m["hs"] if is_home else m["as"]
-        team_ga = m["as"] if is_home else m["hs"]            # goals the team allowed all game
+        team_ga = m["as"] if is_home else m["hs"]  # goals the team allowed all game
         if gf is None or team_ga is None:
             result = None
         elif gf > team_ga:
@@ -119,18 +133,36 @@ def build_season(season: int, meta: dict[int, dict]) -> int:
         sog, ga, saves = int(r.sog_against), int(r.ga), int(r.saves)
         game_sv = saves / sog if sog > 0 else None
         started = bool(r.started)
-        qs = bool(started and game_sv is not None and (
-            game_sv >= QS_SVPCT or (sog < QS_LOWVOL_SHOTS and ga <= QS_LOWVOL_GA)))
+        qs = bool(
+            started
+            and game_sv is not None
+            and (game_sv >= QS_SVPCT or (sog < QS_LOWVOL_SHOTS and ga <= QS_LOWVOL_GA))
+        )
         rbs = bool(started and game_sv is not None and game_sv < RBS_SVPCT)
         shutout = bool(started and r.sole_goalie and team_ga == 0)
-        rows.append({
-            "player_id": int(r.player_id), "game_id": int(r.nhl_game_id), "season": season,
-            "date": m["date"], "team": r.team, "opp": m["away"] if is_home else m["home"],
-            "home": bool(is_home), "decision": result if started else None,
-            "toi_s": int(r.toi_s), "sa": int(r.sa), "sog_against": sog, "saves": saves, "ga": ga,
-            "xga": round(float(r.xga), 3), "gsax": round(float(r.gsax), 3),
-            "started": started, "shutout": shutout, "qs": qs, "rbs": rbs,
-        })
+        rows.append(
+            {
+                "player_id": int(r.player_id),
+                "game_id": int(r.nhl_game_id),
+                "season": season,
+                "date": m["date"],
+                "team": r.team,
+                "opp": m["away"] if is_home else m["home"],
+                "home": bool(is_home),
+                "decision": result if started else None,
+                "toi_s": int(r.toi_s),
+                "sa": int(r.sa),
+                "sog_against": sog,
+                "saves": saves,
+                "ga": ga,
+                "xga": round(float(r.xga), 3),
+                "gsax": round(float(r.gsax), 3),
+                "started": started,
+                "shutout": shutout,
+                "qs": qs,
+                "rbs": rbs,
+            }
+        )
     out = C.PROCESSED / "goalie_gamelog" / f"{season}.parquet"
     out.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_parquet(out, index=False)
@@ -143,7 +175,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--season", type=int, default=None)
     args = p.parse_args(argv)
     meta = _games_meta()
-    for s in ([args.season] if args.season else C.SEASONS):
+    for s in [args.season] if args.season else C.SEASONS:
         if (C.PROCESSED / "shots_onice" / f"{s}.parquet").exists():
             build_season(s, meta)
 

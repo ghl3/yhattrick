@@ -2,6 +2,7 @@
 produced and yields `Check`s classified EXACT (algebraic identity / partition / join — a failure is a
 bug) or APPROX (calibration / shrinkage / luck — holds at scale, warn-only). See `docs/modeling.md`
 and `docs/metrics.md` for the invariants; nothing here refits a model."""
+
 from __future__ import annotations
 
 import json
@@ -11,7 +12,7 @@ import pandas as pd
 
 from .. import config as C
 from ..models.player_onice_model import MIN_STINT_S
-from .core import (KNOWN_GAP_SEASONS, Check, approx, cell_len, exact, json_clean, label, pq, skip)
+from .core import KNOWN_GAP_SEASONS, Check, approx, cell_len, exact, json_clean, label, pq, skip
 
 
 # ===============================================================================================
@@ -20,8 +21,10 @@ from .core import (KNOWN_GAP_SEASONS, Check, approx, cell_len, exact, json_clean
 def check_interim(seasons: list[int]) -> Iterator[Check]:
     st = "interim"
     for s in seasons:
-        sh = pq(C.INTERIM / "shifts" / f"{s}.parquet",
-                columns=["nhl_game_id", "player_id", "start_g", "end_g", "duration_s"])
+        sh = pq(
+            C.INTERIM / "shifts" / f"{s}.parquet",
+            columns=["nhl_game_id", "player_id", "start_g", "end_g", "duration_s"],
+        )
         if sh is None:
             yield skip(f"shifts {s}", st, "EXACT", "no interim/shifts")
             continue
@@ -57,14 +60,22 @@ def check_stints(seasons: list[int]) -> Iterator[Check]:
         gaps = int(((nxt_start.notna()) & (df.end_g.values != nxt_start.values)).sum())
         idx_ok = bool((df.groupby("nhl_game_id").cumcount().values == df.stint_idx.values).all())
         yield exact(f"stint duration = end−start ({s})", st, bad_dur == 0, bad_dur, 0)
-        yield exact(f"stints partition the game, no gaps ({s})", st, gaps == 0, gaps, 0,
-                    "end_g[i] == start_g[i+1] within each game")
+        yield exact(
+            f"stints partition the game, no gaps ({s})",
+            st,
+            gaps == 0,
+            gaps,
+            0,
+            "end_g[i] == start_g[i+1] within each game",
+        )
         yield exact(f"stint_idx contiguous 0..n−1 ({s})", st, idx_ok, None, None)
 
         # E2 personnel ↔ strength
         hn_ok = int((df.home_n != df.home_skaters.map(cell_len)).sum())
         an_ok = int((df.away_n != df.away_skaters.map(cell_len)).sum())
-        strength_bad = int((df.strength != (df.home_n.astype(str) + "v" + df.away_n.astype(str))).sum())
+        strength_bad = int(
+            (df.strength != (df.home_n.astype(str) + "v" + df.away_n.astype(str))).sum()
+        )
         yield exact(f"home_n == len(home_skaters) ({s})", st, hn_ok == 0, hn_ok, 0)
         yield exact(f"away_n == len(away_skaters) ({s})", st, an_ok == 0, an_ok, 0)
         yield exact(f"strength == 'home_n v away_n' ({s})", st, strength_bad == 0, strength_bad, 0)
@@ -72,19 +83,33 @@ def check_stints(seasons: list[int]) -> Iterator[Check]:
         # A4 overload rate
         if "overload" in df.columns and len(df):
             rate = float(df.overload.mean())
-            yield approx(f"overload-stint rate ({s})", st, rate, None, 0.001,
-                         f"{int(df.overload.sum())} illegal (>6-skater) stints")
+            yield approx(
+                f"overload-stint rate ({s})",
+                st,
+                rate,
+                None,
+                0.001,
+                f"{int(df.overload.sum())} illegal (>6-skater) stints",
+            )
 
         # E3 xGF partition: Σ stint xGF == Σ modeled-shot xg, per game (no double-count, no leak)
-        so = pq(C.PROCESSED / "shots_onice" / f"{s}.parquet",
-                columns=["nhl_game_id", "stint_idx", "xg", "goal"])
+        so = pq(
+            C.PROCESSED / "shots_onice" / f"{s}.parquet",
+            columns=["nhl_game_id", "stint_idx", "xg", "goal"],
+        )
         if so is not None:
             stint_xgf = df.assign(t=df.home_xgf + df.away_xgf).groupby("nhl_game_id").t.sum()
             shot_xg = so[so.xg.notna()].groupby("nhl_game_id").xg.sum()
             j = pd.concat([stint_xgf.rename("stint"), shot_xg.rename("shot")], axis=1).fillna(0.0)
             max_diff = float((j.stint - j.shot).abs().max()) if len(j) else 0.0
-            yield exact(f"Σ stint xGF == Σ shot xg ({s})", st, max_diff < 0.02, round(max_diff, 4), 0.0,
-                        "per-game; tolerance = 4-dp stint rounding")
+            yield exact(
+                f"Σ stint xGF == Σ shot xg ({s})",
+                st,
+                max_diff < 0.02,
+                round(max_diff, 4),
+                0.0,
+                "per-game; tolerance = 4-dp stint rounding",
+            )
 
             # E5 every shot's stint_idx is valid (in range for its game), goal is binary
             nst = df.groupby("nhl_game_id").size()
@@ -97,8 +122,10 @@ def check_stints(seasons: list[int]) -> Iterator[Check]:
 
 
 def _onice_quality(season: int, stage: str) -> Iterator[Check]:
-    so = pq(C.PROCESSED / "shots_onice" / f"{season}.parquet",
-            columns=["onice_match", "event", "goal", "strength", "sit_home_n", "sit_away_n"])
+    so = pq(
+        C.PROCESSED / "shots_onice" / f"{season}.parquet",
+        columns=["onice_match", "event", "goal", "strength", "sit_home_n", "sit_away_n"],
+    )
     if so is None or not len(so):
         return
     if "onice_match" in so.columns:
@@ -112,8 +139,14 @@ def _onice_quality(season: int, stage: str) -> Iterator[Check]:
         stint_even = pd.to_numeric(parts[0]) == pd.to_numeric(parts[1])
         sit_even = g.sit_home_n == g.sit_away_n
         mism = float((stint_even.values != sit_even.values).mean())
-        yield approx(f"goal strength vs situationCode mismatch ({season})", stage, mism, None, 0.03,
-                     "boundary rule files PP goals on the right stint")
+        yield approx(
+            f"goal strength vs situationCode mismatch ({season})",
+            stage,
+            mism,
+            None,
+            0.03,
+            "boundary rule files PP goals on the right stint",
+        )
 
 
 # ===============================================================================================
@@ -133,11 +166,19 @@ def check_xg(seasons: list[int]) -> Iterator[Check]:
         rel = abs(xg - goals) / goals if goals else 0.0
         note = "known-gap season" if s in KNOWN_GAP_SEASONS else ""
         # per-season drift from a pooled isotonic fit is expected; the pooled total is the tight one
-        yield approx(f"Σxg ≈ Σgoals ({s})", st, rel, None, 0.04, f"Σxg={xg:.0f} Σg={goals:.0f} {note}")
+        yield approx(
+            f"Σxg ≈ Σgoals ({s})", st, rel, None, 0.04, f"Σxg={xg:.0f} Σg={goals:.0f} {note}"
+        )
     if pooled_g:
         rel = abs(pooled_xg - pooled_g) / pooled_g
-        yield approx("Σxg ≈ Σgoals (pooled, isotonic-calibrated)", st, rel, None, 0.005,
-                     f"Σxg={pooled_xg:.0f} Σg={pooled_g:.0f}")
+        yield approx(
+            "Σxg ≈ Σgoals (pooled, isotonic-calibrated)",
+            st,
+            rel,
+            None,
+            0.005,
+            f"Σxg={pooled_xg:.0f} Σg={pooled_g:.0f}",
+        )
 
 
 # ===============================================================================================
@@ -153,9 +194,19 @@ def check_models(seasons: list[int]) -> Iterator[Check]:
     fin = pq(C.MODELS / f"shooting_finishing_{lab}.parquet")
     if fin is not None and {"fin_per100", "fin_goals", "shots"} <= set(fin.columns):
         resid = float((fin.fin_goals - fin.fin_per100 / 100.0 * fin.shots).abs().max())
-        yield exact("fin_goals == (fin_per100/100)·shots", st, resid < 0.05, round(resid, 5), 0.0,
-                    "to stored fin_per100 precision")
-        mx = float(fin.loc[fin.shots >= 150, "fin_per100"].abs().max()) if (fin.shots >= 150).any() else 0.0
+        yield exact(
+            "fin_goals == (fin_per100/100)·shots",
+            st,
+            resid < 0.05,
+            round(resid, 5),
+            0.0,
+            "to stored fin_per100 precision",
+        )
+        mx = (
+            float(fin.loc[fin.shots >= 150, "fin_per100"].abs().max())
+            if (fin.shots >= 150).any()
+            else 0.0
+        )
         yield approx("|finishing/100| within sane range (≥150 shots)", st, mx, None, 6.0)
     else:
         yield skip("finishing parquet", st, "EXACT", f"no shooting_finishing_{lab}.parquet")
@@ -163,8 +214,14 @@ def check_models(seasons: list[int]) -> Iterator[Check]:
     gl = pq(C.MODELS / f"shooting_goalie_{lab}.parquet")
     if gl is not None and {"gsax_per100", "gsax_saved", "sa"} <= set(gl.columns):
         resid = float((gl.gsax_saved - gl.gsax_per100 / 100.0 * gl.sa).abs().max())
-        yield exact("gsax_saved == (gsax_per100/100)·sa", st, resid < 0.1, round(resid, 5), 0.0,
-                    "to stored gsax_per100 precision")
+        yield exact(
+            "gsax_saved == (gsax_per100/100)·sa",
+            st,
+            resid < 0.1,
+            round(resid, 5),
+            0.0,
+            "to stored gsax_per100 precision",
+        )
         mx = float(gl.loc[gl.sa >= 200, "gsax_per100"].abs().max()) if (gl.sa >= 200).any() else 0.0
         yield approx("|GSAx/100| within sane range (≥200 SA)", st, mx, None, 2.0)
 
@@ -173,13 +230,27 @@ def check_models(seasons: list[int]) -> Iterator[Check]:
     if meta_p.exists():
         L = json.loads(meta_p.read_text())
         resid = abs(float(L.get("league_identity_resid", 1.0)))
-        yield exact("league identity: goals = Σxg+Σμ+Σfin+Σgoalie", st, resid < 0.5, round(resid, 4), 0.0,
-                    f"goals={L.get('goals')} reconstructed={L.get('reconstructed')}")
+        yield exact(
+            "league identity: goals = Σxg+Σμ+Σfin+Σgoalie",
+            st,
+            resid < 0.5,
+            round(resid, 4),
+            0.0,
+            f"goals={L.get('goals')} reconstructed={L.get('reconstructed')}",
+        )
         n = max(int(L.get("n_shots", 1)), 1)
         mu = float(L.get("mu_total", 0.0)) / n
-        yield approx("μ (intercept/shot) is tiny", st, abs(mu), None, 0.002, f"μ={mu:.5f} goals/shot")
-        yield approx("team-season GF luck gap (mean %)", st, float(L.get("team_gf_gap_pct_mean", 0.0)),
-                     None, 12.0, "single-season finishing variance vs multi-year effects")
+        yield approx(
+            "μ (intercept/shot) is tiny", st, abs(mu), None, 0.002, f"μ={mu:.5f} goals/shot"
+        )
+        yield approx(
+            "team-season GF luck gap (mean %)",
+            st,
+            float(L.get("team_gf_gap_pct_mean", 0.0)),
+            None,
+            12.0,
+            "single-season finishing variance vs multi-year effects",
+        )
     else:
         yield skip("goal-accounting meta", st, "EXACT", f"no goal_accounting_{lab}.meta.json")
 
@@ -192,15 +263,35 @@ def check_models(seasons: list[int]) -> Iterator[Check]:
 
     # E9 goal-accounting team table: gf_recon == its components (internal consistency, no refit)
     team = pq(C.MODELS / f"goal_accounting_{lab}.parquet")
-    if team is not None and {"gf_recon", "xgf", "mu_for", "fin_for", "opp_goalie"} <= set(team.columns):
+    if team is not None and {"gf_recon", "xgf", "mu_for", "fin_for", "opp_goalie"} <= set(
+        team.columns
+    ):
         # components stored at 2 dp -> reconcile to ~0.03 (5 rounded terms); exact pre-rounding
-        d = float((team.gf_recon - (team.xgf + team.mu_for + team.fin_for + team.opp_goalie)).abs().max())
-        yield exact("team gf_recon == xgf+μ+fin+oppGoalie", st, d < 0.03, round(d, 4), 0.0,
-                    "to stored 2-dp precision")
+        d = float(
+            (team.gf_recon - (team.xgf + team.mu_for + team.fin_for + team.opp_goalie)).abs().max()
+        )
+        yield exact(
+            "team gf_recon == xgf+μ+fin+oppGoalie",
+            st,
+            d < 0.03,
+            round(d, 4),
+            0.0,
+            "to stored 2-dp precision",
+        )
         if {"ga_recon", "xga", "mu_against", "opp_fin", "own_goalie"} <= set(team.columns):
-            d2 = float((team.ga_recon - (team.xga + team.mu_against + team.opp_fin + team.own_goalie)).abs().max())
-            yield exact("team ga_recon == xga+μ+oppFin+ownGoalie", st, d2 < 0.03, round(d2, 4), 0.0,
-                        "to stored 2-dp precision")
+            d2 = float(
+                (team.ga_recon - (team.xga + team.mu_against + team.opp_fin + team.own_goalie))
+                .abs()
+                .max()
+            )
+            yield exact(
+                "team ga_recon == xga+μ+oppFin+ownGoalie",
+                st,
+                d2 < 0.03,
+                round(d2, 4),
+                0.0,
+                "to stored 2-dp precision",
+            )
 
 
 def _league_5v5_xgf(seasons: list[int]) -> float:
@@ -208,8 +299,10 @@ def _league_5v5_xgf(seasons: list[int]) -> float:
     duration ≥ MIN_STINT_S) — i.e. the regression target the on-ice coefficients were fit to."""
     tot = 0.0
     for s in seasons:
-        d = pq(C.PROCESSED / "stints" / f"{s}.parquet",
-               columns=["nhl_game_id", "strength", "overload", "duration_s", "home_xgf", "away_xgf"])
+        d = pq(
+            C.PROCESSED / "stints" / f"{s}.parquet",
+            columns=["nhl_game_id", "strength", "overload", "duration_s", "home_xgf", "away_xgf"],
+        )
         if d is None:
             continue
         reg = (d.nhl_game_id // 10000) % 100 == 2
@@ -231,11 +324,23 @@ def _ev_creation_reconciliation(seasons: list[int], lab: str, stage: str) -> Ite
     # fold the baseline share back in (baseline/5 + coef) and weight by role-TOI (minutes -> /60 = hrs)
     created = float(((ev.ev_off_base / 5.0 + ev.ev_off) * (ev.ev_off_toi / 60.0)).sum())
     allowed = float(((ev.ev_off_base / 5.0 + ev.ev_def) * (ev.ev_def_toi / 60.0)).sum())
-    yield approx("Σ created shares ≈ league 5v5 ΣxGF", stage, created / target, 0.80, 1.15,
-                 f"created={created:.0f} vs ΣxGF={target:.0f} ({100 * (created / target - 1):+.1f}%)")
-    yield approx("Σ allowed shares ≈ league 5v5 ΣxGF", stage, allowed / target, 0.75, 1.15,
-                 f"allowed={allowed:.0f} vs ΣxGF={target:.0f} ({100 * (allowed / target - 1):+.1f}%); "
-                 "defence + context absorb more, so this reconciles looser than creation")
+    yield approx(
+        "Σ created shares ≈ league 5v5 ΣxGF",
+        stage,
+        created / target,
+        0.80,
+        1.15,
+        f"created={created:.0f} vs ΣxGF={target:.0f} ({100 * (created / target - 1):+.1f}%)",
+    )
+    yield approx(
+        "Σ allowed shares ≈ league 5v5 ΣxGF",
+        stage,
+        allowed / target,
+        0.75,
+        1.15,
+        f"allowed={allowed:.0f} vs ΣxGF={target:.0f} ({100 * (allowed / target - 1):+.1f}%); "
+        "defence + context absorb more, so this reconciles looser than creation",
+    )
 
 
 # ===============================================================================================
@@ -244,8 +349,10 @@ def _ev_creation_reconciliation(seasons: list[int], lab: str, stage: str) -> Ite
 def check_gamelog(seasons: list[int]) -> Iterator[Check]:
     st = "gamelog"
     for s in seasons:
-        gl = pq(C.PROCESSED / "gamelog" / f"{s}.parquet",
-                columns=["player_id", "game_id", "g", "sog", "toi_s"])
+        gl = pq(
+            C.PROCESSED / "gamelog" / f"{s}.parquet",
+            columns=["player_id", "game_id", "g", "sog", "toi_s"],
+        )
         box = pq(C.INTERIM / "box" / f"{s}.parquet")
         if gl is None or box is None:
             yield skip(f"gamelog rollup ({s})", st, "EXACT", "missing gamelog/box")
@@ -257,8 +364,14 @@ def check_gamelog(seasons: list[int]) -> Iterator[Check]:
         j = a.join(b, how="inner", lsuffix="_gl", rsuffix="_bx")
         for col in ("g", "sog", "toi_s"):
             bad = int((j[f"{col}_gl"] != j[f"{col}_bx"]).sum())
-            yield exact(f"Σ gamelog {col} == box {col} ({s})", st, bad == 0, bad, 0,
-                        f"{len(j)} players reconciled")
+            yield exact(
+                f"Σ gamelog {col} == box {col} ({s})",
+                st,
+                bad == 0,
+                bad,
+                0,
+                f"{len(j)} players reconciled",
+            )
 
 
 # ===============================================================================================
@@ -302,22 +415,43 @@ def check_export(seasons: list[int]) -> Iterator[Check]:
     for r in index:
         if r.get("g_net") is None:
             continue
-        recon = r.get("g_created", 0) + r.get("g_fin", 0) - r.get("g_allowed", 0) + r.get("g_pen", 0)
+        recon = (
+            r.get("g_created", 0) + r.get("g_fin", 0) - r.get("g_allowed", 0) + r.get("g_pen", 0)
+        )
         diff = abs(r["g_net"] - recon)
         worst = max(worst, diff)
         over += diff > 0.3
-    yield exact("g_net == created + fin − allowed + pen", st, over == 0, round(worst, 3), 0.0,
-                f"{len(index)} players; worst |Δ|={worst:.3f} (1-dp rounding)")
+    yield exact(
+        "g_net == created + fin − allowed + pen",
+        st,
+        over == 0,
+        round(worst, 3),
+        0.0,
+        f"{len(index)} players; worst |Δ|={worst:.3f} (1-dp rounding)",
+    )
 
     # E11 (JSON-level): percentiles ∈ [0,100]; attributed shares are ≥0 "in practice" (a handful of
     # extreme players can go slightly negative — see docs/metrics.md — so that one is APPROX).
     pcts = [r[k] for r in index for k in r if k.endswith("_pct") and r[k] is not None]
     pct_ok = all(0 <= p <= 100 for p in pcts)
-    yield exact("all percentiles ∈ [0,100]", st, pct_ok, None, None, f"{len(pcts)} percentile values")
-    shares = [r[k] for r in index for k in ("scoring60", "playmaking60", "allow60") if r.get(k) is not None]
+    yield exact(
+        "all percentiles ∈ [0,100]", st, pct_ok, None, None, f"{len(pcts)} percentile values"
+    )
+    shares = [
+        r[k]
+        for r in index
+        for k in ("scoring60", "playmaking60", "allow60")
+        if r.get(k) is not None
+    ]
     neg_frac = sum(v < -1e-6 for v in shares) / len(shares) if shares else 0.0
-    yield approx("attributed shares ≥ 0 (in practice)", st, neg_frac, None, 0.05,
-                 "extreme players may go slightly negative")
+    yield approx(
+        "attributed shares ≥ 0 (in practice)",
+        st,
+        neg_frac,
+        None,
+        0.05,
+        "extreme players may go slightly negative",
+    )
 
     # E12 index ↔ detail files: every indexed player must have a detail file (stale extras tolerated)
     pdir = C.SITE_JSON / "player"
@@ -326,16 +460,27 @@ def check_export(seasons: list[int]) -> Iterator[Check]:
         ids = {r["id"] for r in index}
         yield exact("every index player has a detail file", st, ids <= files, len(ids - files), 0)
         stale = len(files - ids)
-        yield approx("no stale player detail files", st, stale, None, 0,
-                     f"{stale} files on disk not in the index (rebuild `player/` to clear)")
+        yield approx(
+            "no stale player detail files",
+            st,
+            stale,
+            None,
+            0,
+            f"{stale} files on disk not in the index (rebuild `player/` to clear)",
+        )
 
     # A7 export-level reconciliation: index g_fin is a (thresholded) subset of league finishing goals
     g_fin_sum = sum(r.get("g_fin", 0) or 0 for r in index)
     fin = pq(C.MODELS / f"shooting_finishing_{label(seasons)}.parquet", columns=["fin_goals"])
     if fin is not None and fin.fin_goals.sum():
-        yield approx("Σ player g_fin vs Σ finishing goals (ratio)", st,
-                     g_fin_sum / float(fin.fin_goals.sum()), 0.5, 1.05,
-                     "index drops sub-threshold players, so ≤ 1")
+        yield approx(
+            "Σ player g_fin vs Σ finishing goals (ratio)",
+            st,
+            g_fin_sum / float(fin.fin_goals.sum()),
+            0.5,
+            1.05,
+            "index drops sub-threshold players, so ≤ 1",
+        )
 
     for name in ("games.json", "goalies.json"):
         p = C.SITE_JSON / name
@@ -370,8 +515,11 @@ def check_games(seasons: list[int], sample: int) -> Iterator[Check]:
         game = json.loads(raw)
         st_sum_h = round(sum(x["home_xgf"] for x in game["stints"]), 3)
         st_sum_a = round(sum(x["away_xgf"] for x in game["stints"]), 3)
-        worst_xgf = max(worst_xgf, abs(st_sum_h - game["totals"]["home_xgf"]),
-                        abs(st_sum_a - game["totals"]["away_xgf"]))
+        worst_xgf = max(
+            worst_xgf,
+            abs(st_sum_h - game["totals"]["home_xgf"]),
+            abs(st_sum_a - game["totals"]["away_xgf"]),
+        )
     note = f"sampled {len(checked)}/{len(gids)} games"
     yield exact("Σ stint xGF == game totals", st, worst_xgf < 1e-6, round(worst_xgf, 4), 0.0, note)
     yield exact("per-game JSON has no NaN/Infinity", st, nan_leak == 0, nan_leak, 0, note)

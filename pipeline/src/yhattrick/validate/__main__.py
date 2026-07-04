@@ -8,6 +8,7 @@ Usage:
   uv run python -m yhattrick.validate --season 2024
   uv run python -m yhattrick.validate --strict         # non-zero exit if an EXACT invariant fails
 """
+
 from __future__ import annotations
 
 import argparse
@@ -17,8 +18,12 @@ from .core import label, report, seasons_present
 
 
 def main(argv: list[str] | None = None) -> None:
-    p = argparse.ArgumentParser(description="Validate inference-stage invariants across exported artifacts")
-    p.add_argument("--season", type=int, default=None, help="one season (default: all in processed/)")
+    p = argparse.ArgumentParser(
+        description="Validate inference-stage invariants across exported artifacts"
+    )
+    p.add_argument(
+        "--season", type=int, default=None, help="one season (default: all in processed/)"
+    )
     p.add_argument("--strict", action="store_true", help="exit non-zero on any EXACT failure")
     p.add_argument("--games-sample", type=int, default=60, help="per-game JSON files to spot-check")
     args = p.parse_args(argv)

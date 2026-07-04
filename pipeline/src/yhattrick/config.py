@@ -2,6 +2,7 @@
 
 Everything else imports paths and helpers from here so the data layout stays consistent.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -23,33 +24,44 @@ def nhl_season8(season: int) -> str:
 
 # --- paths -------------------------------------------------------------------
 PKG_DIR = Path(__file__).resolve().parent
-PIPELINE_DIR = PKG_DIR.parent.parent          # .../hockey/pipeline
-REPO_ROOT = PIPELINE_DIR.parent               # .../hockey
+PIPELINE_DIR = PKG_DIR.parent.parent  # .../hockey/pipeline
+REPO_ROOT = PIPELINE_DIR.parent  # .../hockey
 DATA = REPO_ROOT / "data"
 
 RAW = DATA / "raw"
 RAW_SHIFTS = RAW / "nhl" / "shiftcharts"
-RAW_HTMLSHIFTS = RAW / "nhl" / "htmlshifts"   # TH/TV HTML TOI reports (fallback when JSON is empty)
+RAW_HTMLSHIFTS = RAW / "nhl" / "htmlshifts"  # TH/TV HTML TOI reports (fallback when JSON is empty)
 RAW_PBP = RAW / "nhl" / "pbp"
-RAW_PLAYERS = RAW / "nhl" / "players"   # per-player landing json (handedness, bio)
+RAW_PLAYERS = RAW / "nhl" / "players"  # per-player landing json (handedness, bio)
 
 INTERIM = DATA / "interim"
 PROCESSED = DATA / "processed"
-DIM = DATA / "dimensions"         # dimension tables (players bio, player_season, games, arenas) —
-                                  # descriptive attrs joined into facts by key, built once, not
-                                  # re-derived from raw feeds per fit
-MODELS = DATA / "models"          # model outputs (impact coefficients, WAR, ...)
+DIM = DATA / "dimensions"  # dimension tables (players bio, player_season, games, arenas) —
+# descriptive attrs joined into facts by key, built once, not
+# re-derived from raw feeds per fit
+MODELS = DATA / "models"  # model outputs (impact coefficients, WAR, ...)
 
 # Run logs for every stage (parse, join, fits, exports). The model-fit log lives here too.
 LOGS = REPO_ROOT / "logs"
-LOGS_MODEL = LOGS / "model"       # per-fit metadata snapshots + the model_fits.jsonl history
+LOGS_MODEL = LOGS / "model"  # per-fit metadata snapshots + the model_fits.jsonl history
 
 # Canonical site-facing JSON lives in the data tree; build_games syncs a copy to the web app.
 SITE_JSON = DATA / "games"
 WEB_DIR = REPO_ROOT / "web"
 WEB_DATA = WEB_DIR / "public" / "data"
 
-_ALL_DIRS = (RAW_SHIFTS, RAW_HTMLSHIFTS, RAW_PBP, RAW_PLAYERS, INTERIM, PROCESSED, DIM, SITE_JSON, LOGS, LOGS_MODEL)
+_ALL_DIRS = (
+    RAW_SHIFTS,
+    RAW_HTMLSHIFTS,
+    RAW_PBP,
+    RAW_PLAYERS,
+    INTERIM,
+    PROCESSED,
+    DIM,
+    SITE_JSON,
+    LOGS,
+    LOGS_MODEL,
+)
 
 
 def ensure_dirs() -> None:
@@ -68,12 +80,12 @@ NHL_STANDINGS_URL = "https://api-web.nhle.com/v1/standings/{date}"
 NHL_CLUB_SCHEDULE_URL = "https://api-web.nhle.com/v1/club-schedule-season/{team}/{season8}"
 
 USER_AGENT = "Mozilla/5.0 (yhattrick data pipeline; research/personal use)"
-REQUEST_TIMEOUT = 30           # seconds per request
-THROTTLE_SECONDS = 0.4         # polite delay between NHL API calls
+REQUEST_TIMEOUT = 30  # seconds per request
+THROTTLE_SECONDS = 0.4  # polite delay between NHL API calls
 MAX_RETRIES = 3
 
 # --- constants ---------------------------------------------------------------
-PERIOD_SECONDS = 1200          # 20:00 regulation period
+PERIOD_SECONDS = 1200  # 20:00 regulation period
 
 
 # --- game_id helpers ---------------------------------------------------------

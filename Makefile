@@ -36,7 +36,7 @@ SEASON ?=
 FAMILY ?= gaussian        # response family for `make model`: gaussian | tweedie
 
 .DEFAULT_GOAL := all
-.PHONY: all fetch fetch-season fetch-handedness fetch-htmlshifts clean-data dims xg stints box model shooting goal-accounting games gamelog players goalie-box goalie-gamelog goalies generative-model generative-cards publish-data validate test pipeline web-dev web-build
+.PHONY: all fetch fetch-season fetch-handedness fetch-htmlshifts clean-data dims xg stints box model shooting goal-accounting games gamelog players goalie-box goalie-gamelog goalies generative-model generative-cards publish-data validate test format pipeline web-dev web-build
 
 all: clean-data xg stints box model shooting goal-accounting games gamelog players goalie-gamelog goalie-box goalies
 
@@ -117,6 +117,10 @@ validate:
 # python unit tests (processing / modeling / export)
 test:
 	cd pipeline && uv run pytest -q
+
+# format python (black; line length in pipeline/pyproject.toml [tool.black])
+format:
+	cd pipeline && uv run black src tests
 
 # upload the heavy per-game JSON to Cloudflare R2 (needs R2_* env vars; see yhattrick.export.publish)
 publish-data:

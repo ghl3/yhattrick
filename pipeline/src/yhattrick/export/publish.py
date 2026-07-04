@@ -19,6 +19,7 @@ Usage:
   uv run python -m yhattrick.publish --force       # re-upload everything
   uv run python -m yhattrick.publish --set-cors    # also (re)apply a public GET CORS policy
 """
+
 from __future__ import annotations
 
 import argparse
@@ -36,7 +37,8 @@ CACHE_CONTROL = "public, max-age=31536000, immutable"
 
 def _gz(data: bytes) -> bytes:
     """Deterministic gzip (mtime=0) so a re-run produces byte-identical output → stable size for the
-    incremental-skip check below. Stored with Content-Encoding: gzip; browsers decode transparently."""
+    incremental-skip check below. Stored with Content-Encoding: gzip; browsers decode transparently.
+    """
     return gzip.compress(data, compresslevel=9, mtime=0)
 
 
@@ -76,17 +78,30 @@ def _remote_sizes(s3, bucket: str) -> dict[str, int]:
 
 def _set_cors(s3, bucket: str) -> None:
     """Allow browsers on any origin to GET the public JSON (read-only data CDN)."""
-    s3.put_bucket_cors(Bucket=bucket, CORSConfiguration={
-        "CORSRules": [{"AllowedMethods": ["GET", "HEAD"], "AllowedOrigins": ["*"],
-                       "AllowedHeaders": ["*"], "MaxAgeSeconds": 3600}]
-    })
+    s3.put_bucket_cors(
+        Bucket=bucket,
+        CORSConfiguration={
+            "CORSRules": [
+                {
+                    "AllowedMethods": ["GET", "HEAD"],
+                    "AllowedOrigins": ["*"],
+                    "AllowedHeaders": ["*"],
+                    "MaxAgeSeconds": 3600,
+                }
+            ]
+        },
+    )
     print(f"[publish] applied public GET CORS to {bucket}")
 
 
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description="Publish per-game JSON to Cloudflare R2")
-    p.add_argument("--force", action="store_true", help="re-upload even if a same-size object exists")
-    p.add_argument("--set-cors", action="store_true", help="also (re)apply the public GET CORS policy")
+    p.add_argument(
+        "--force", action="store_true", help="re-upload even if a same-size object exists"
+    )
+    p.add_argument(
+        "--set-cors", action="store_true", help="also (re)apply the public GET CORS policy"
+    )
     p.add_argument("--workers", type=int, default=16)
     args = p.parse_args(argv)
 
@@ -109,8 +124,14 @@ def main(argv: list[str] | None = None) -> None:
         body = _gz(f.read_bytes())
         if not args.force and remote.get(key) == len(body):
             return False
-        s3.put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/json",
-                      ContentEncoding="gzip", CacheControl=CACHE_CONTROL)
+        s3.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=body,
+            ContentType="application/json",
+            ContentEncoding="gzip",
+            CacheControl=CACHE_CONTROL,
+        )
         return True
 
     done = uploaded = 0
@@ -120,8 +141,10 @@ def main(argv: list[str] | None = None) -> None:
             done += 1
             if done % 1000 == 0:
                 print(f"  checked {done:,}/{len(files):,} · uploaded {uploaded:,}")
-    print(f"[publish] uploaded {uploaded:,} (skipped {len(files) - uploaded:,} unchanged) "
-          f"-> r2://{bucket}/{PREFIX}/  [gzip, {CACHE_CONTROL}]")
+    print(
+        f"[publish] uploaded {uploaded:,} (skipped {len(files) - uploaded:,} unchanged) "
+        f"-> r2://{bucket}/{PREFIX}/  [gzip, {CACHE_CONTROL}]"
+    )
 
 
 if __name__ == "__main__":

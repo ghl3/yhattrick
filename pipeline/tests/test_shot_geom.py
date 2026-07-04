@@ -3,6 +3,7 @@
 These pure functions orient raw NHL coordinates so the attacking net is always at +89, then derive
 distance/angle and the rebound/rush flags. Both the shot table and the xG features call them, so
 pinning them down keeps the two from drifting (the module's whole reason for existing)."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -46,19 +47,19 @@ def test_distance_angle_right_on_the_goal_line():
 def test_angle_is_absolute_value_symmetric():
     _, pos = G.distance_angle(np.array([70.0]), np.array([15.0]))
     _, neg = G.distance_angle(np.array([70.0]), np.array([-15.0]))
-    assert pos[0] == pytest.approx(neg[0])     # |y| -> mirror shots share an angle
+    assert pos[0] == pytest.approx(neg[0])  # |y| -> mirror shots share an angle
 
 
 # --- rebound / rush flags ----------------------------------------------------------------------
 def test_rebound_flag_only_after_a_recent_shot():
     prev = ["shot-on-goal", "shot-on-goal", "faceoff", "goal"]
-    tsl = [2.0, 5.0, 1.0, 3.0]                 # within 3s, too slow, not-a-shot, exactly 3s
+    tsl = [2.0, 5.0, 1.0, 3.0]  # within 3s, too slow, not-a-shot, exactly 3s
     assert list(G.rebound_flag(prev, tsl)) == [1, 0, 0, 1]
 
 
 def test_rush_flag_only_from_neutral_or_def_zone():
     prev_zone = ["N", "D", "O", "N"]
-    tsl = [3.0, 4.0, 1.0, 5.0]                 # ok, exactly 4s, wrong zone, too slow
+    tsl = [3.0, 4.0, 1.0, 5.0]  # ok, exactly 4s, wrong zone, too slow
     assert list(G.rush_flag(prev_zone, tsl)) == [1, 1, 0, 0]
 
 
@@ -72,6 +73,6 @@ def test_decode_situation_even_strength_and_powerplay():
 
 
 def test_decode_situation_pads_and_nulls_bad_codes():
-    out = G.decode_situation(pd.Series(["551", None]))   # 3-char zfills to "0551"; None -> NaN row
+    out = G.decode_situation(pd.Series(["551", None]))  # 3-char zfills to "0551"; None -> NaN row
     assert out.iloc[0].tolist() == [0, 5, 5, 1]
     assert out.iloc[1].isna().all()

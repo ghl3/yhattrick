@@ -1,6 +1,7 @@
 """Shared types + helpers for the validation stage: the `Check` record, pass/warn/fail
 constructors, small IO helpers, and the console reporter. Stage check functions live in
 `checks.py`; the CLI is `__main__.py`."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -20,8 +21,8 @@ ICONS = {"pass": "✓", "warn": "⚠", "fail": "✗", "skip": "–"}
 class Check:
     name: str
     stage: str
-    kind: str           # 'EXACT' | 'APPROX'
-    status: str         # 'pass' | 'warn' | 'fail' | 'skip'
+    kind: str  # 'EXACT' | 'APPROX'
+    status: str  # 'pass' | 'warn' | 'fail' | 'skip'
     observed: object = None
     expected: object = None
     detail: str = ""
@@ -91,6 +92,8 @@ def report(checks: list[Check]) -> dict:
             print(line)
     tally = {k: sum(c.status == k for c in checks) for k in ICONS}
     exact_fail = sum(c.status == "fail" and c.kind == "EXACT" for c in checks)
-    print(f"\n  summary: {tally['pass']} pass · {tally['warn']} warn · {tally['fail']} fail · "
-          f"{tally['skip']} skip   ({exact_fail} EXACT failures)")
+    print(
+        f"\n  summary: {tally['pass']} pass · {tally['warn']} warn · {tally['fail']} fail · "
+        f"{tally['skip']} skip   ({exact_fail} EXACT failures)"
+    )
     return {"tally": tally, "exact_fail": exact_fail}

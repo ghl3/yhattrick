@@ -12,6 +12,7 @@ Usage:
   uv run python -m yhattrick.clean                 # all configured seasons
   uv run python -m yhattrick.clean --season 2024
 """
+
 from __future__ import annotations
 
 import argparse
@@ -55,7 +56,11 @@ def build_shots(season: int, names: dict[int, str]) -> int:
     if not ep.exists():
         print(f"[shots] {season}: no events, skipping")
         return 0
-    ev = pd.read_parquet(ep).sort_values(["nhl_game_id", "time_g", "event_idx"]).reset_index(drop=True)
+    ev = (
+        pd.read_parquet(ep)
+        .sort_values(["nhl_game_id", "time_g", "event_idx"])
+        .reset_index(drop=True)
+    )
     g = ev.groupby("nhl_game_id", sort=False)
     tsl = ev.time_g - g.time_g.shift(1)
     sit = G.decode_situation(ev.situation_code)
@@ -72,26 +77,38 @@ def build_shots(season: int, names: dict[int, str]) -> int:
     def_goalie = np.where(is_home, df.away_goalie, df.home_goalie)
     sid = df.primary_player_id.astype("int64")
 
-    out = pd.DataFrame({
-        "nhl_game_id": df.nhl_game_id.to_numpy(), "event_idx": df.event_idx.to_numpy(),
-        "time_g": df.time_g.astype("int32").to_numpy(), "period": df.period.astype("int16").to_numpy(),
-        "is_home": is_home.astype(int), "home_team": df.nhl_game_id.map(home_team_by).to_numpy(),
-        "shooter_id": sid.to_numpy(), "shooter": sid.map(names).to_numpy(),
-        "goal": (df.type == "goal").astype(int).to_numpy(), "event": df.type.to_numpy(),
-        "x": df.x.astype("int16").to_numpy(), "y": df.y.astype("int16").to_numpy(),
-        "shot_type": df.shot_type.to_numpy(),
-        "distance": np.round(dist, 1), "angle": np.round(ang, 1),
-        "rebound": G.rebound_flag(df.prev_type, df.time_since_last),
-        "rush": G.rush_flag(df.prev_zone, df.time_since_last),
-        "home_n": df.home_skaters.astype("Int64").to_numpy(), "away_n": df.away_skaters.astype("Int64").to_numpy(),
-        "empty_net": (def_goalie == 0).astype(int),
-    })
+    out = pd.DataFrame(
+        {
+            "nhl_game_id": df.nhl_game_id.to_numpy(),
+            "event_idx": df.event_idx.to_numpy(),
+            "time_g": df.time_g.astype("int32").to_numpy(),
+            "period": df.period.astype("int16").to_numpy(),
+            "is_home": is_home.astype(int),
+            "home_team": df.nhl_game_id.map(home_team_by).to_numpy(),
+            "shooter_id": sid.to_numpy(),
+            "shooter": sid.map(names).to_numpy(),
+            "goal": (df.type == "goal").astype(int).to_numpy(),
+            "event": df.type.to_numpy(),
+            "x": df.x.astype("int16").to_numpy(),
+            "y": df.y.astype("int16").to_numpy(),
+            "shot_type": df.shot_type.to_numpy(),
+            "distance": np.round(dist, 1),
+            "angle": np.round(ang, 1),
+            "rebound": G.rebound_flag(df.prev_type, df.time_since_last),
+            "rush": G.rush_flag(df.prev_zone, df.time_since_last),
+            "home_n": df.home_skaters.astype("Int64").to_numpy(),
+            "away_n": df.away_skaters.astype("Int64").to_numpy(),
+            "empty_net": (def_goalie == 0).astype(int),
+        }
+    )
     dup = int(out.duplicated(["nhl_game_id", "event_idx"]).sum())
     assert dup == 0, f"{season}: {dup} duplicate (game, event_idx) shot keys — not a valid join key"
     op = C.INTERIM / "shots" / f"{season}.parquet"
     op.parent.mkdir(parents=True, exist_ok=True)
     out.to_parquet(op, index=False)
-    print(f"[shots] {season}: {len(out):,} unblocked shots across {out.nhl_game_id.nunique()} games -> {op.name}")
+    print(
+        f"[shots] {season}: {len(out):,} unblocked shots across {out.nhl_game_id.nunique()} games -> {op.name}"
+    )
     return len(out)
 
 
@@ -117,8 +134,8 @@ def _merge_player_intervals(rows: list[tuple]) -> list[tuple]:
 
 def clean_shifts(season: int) -> int:
     gids = _downloaded_game_ids(season)
-    raw: dict[tuple, list[tuple]] = {}   # (gid, player_id) -> [(start,end,period), ...]
-    meta: dict[tuple, tuple] = {}        # (gid, player_id) -> (name, team, team_id)
+    raw: dict[tuple, list[tuple]] = {}  # (gid, player_id) -> [(start,end,period), ...]
+    meta: dict[tuple, tuple] = {}  # (gid, player_id) -> (name, team, team_id)
     html_games = 0
     for gid in gids:
         data = json.loads((C.RAW_SHIFTS / f"{gid}.json").read_text()).get("data", [])
@@ -132,7 +149,9 @@ def clean_shifts(season: int) -> int:
                     continue
                 key = (gid, s["playerId"])
                 raw.setdefault(key, []).append((start, end, int(p)))
-                meta.setdefault(key, (f"{s['firstName']} {s['lastName']}", s["teamAbbrev"], s["teamId"]))
+                meta.setdefault(
+                    key, (f"{s['firstName']} {s['lastName']}", s["teamAbbrev"], s["teamId"])
+                )
         else:
             # the JSON shift feed is empty (dead for late-2024-25 on) -> parse the HTML TOI reports
             hrows = html_shifts.shifts_for_game(gid)
@@ -150,16 +169,29 @@ def clean_shifts(season: int) -> int:
         name, team, team_id = meta[(gid, pid)]
         for n, (start, end, period) in enumerate(_merge_player_intervals(intervals), 1):
             rows.append((gid, pid, name, team, team_id, period, start, end, n))
-    df = pd.DataFrame(rows, columns=[
-        "nhl_game_id", "player_id", "player_name", "team", "team_id",
-        "period", "start_g", "end_g", "shift_number"])
+    df = pd.DataFrame(
+        rows,
+        columns=[
+            "nhl_game_id",
+            "player_id",
+            "player_name",
+            "team",
+            "team_id",
+            "period",
+            "start_g",
+            "end_g",
+            "shift_number",
+        ],
+    )
     df.sort_values(["nhl_game_id", "player_id", "start_g"], inplace=True)
     df["duration_s"] = (df.end_g - df.start_g).astype("int32")
     out = C.INTERIM / "shifts" / f"{season}.parquet"
     out.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(out, index=False)
     via = f" ({html_games} via HTML TOI reports)" if html_games else ""
-    print(f"[shifts] {season}: {len(df):,} shifts across {df.nhl_game_id.nunique()} games{via} -> {out.name}")
+    print(
+        f"[shifts] {season}: {len(df):,} shifts across {df.nhl_game_id.nunique()} games{via} -> {out.name}"
+    )
     return len(df)
 
 
@@ -174,14 +206,22 @@ def clean_events_and_roster(season: int) -> tuple[int, pd.DataFrame]:
     for gid in gids:
         pbp = json.loads((C.RAW_PBP / f"{gid}.json").read_text())
         home_id = pbp["homeTeam"]["id"]
-        team_abbr = {pbp["homeTeam"]["id"]: pbp["homeTeam"]["abbrev"],
-                     pbp["awayTeam"]["id"]: pbp["awayTeam"]["abbrev"]}
+        team_abbr = {
+            pbp["homeTeam"]["id"]: pbp["homeTeam"]["abbrev"],
+            pbp["awayTeam"]["id"]: pbp["awayTeam"]["abbrev"],
+        }
         pid_name = {}
         for rs in pbp.get("rosterSpots", []):
             pid = rs["playerId"]
             pid_name[pid] = _name(rs)
-            roster[(pid, season)] = (pid, season, _name(rs), rs.get("positionCode"),
-                                     rs.get("sweaterNumber"), team_abbr.get(rs.get("teamId")))
+            roster[(pid, season)] = (
+                pid,
+                season,
+                _name(rs),
+                rs.get("positionCode"),
+                rs.get("sweaterNumber"),
+                team_abbr.get(rs.get("teamId")),
+            )
         for pl in pbp.get("plays", []):
             pd_ = pl.get("periodDescriptor", {})
             period = pd_.get("number")
@@ -190,31 +230,68 @@ def clean_events_and_roster(season: int) -> tuple[int, pd.DataFrame]:
                 continue
             d = pl.get("details", {})
             owner = d.get("eventOwnerTeamId")
-            ev_rows.append((
-                gid, pl.get("sortOrder", pl.get("eventId")), int(period), game_sec(period, tip),
-                pl.get("typeDescKey"), team_abbr.get(owner), owner == home_id,
-                d.get("xCoord"), d.get("yCoord"), d.get("zoneCode"),
-                pl.get("situationCode"), pl.get("homeTeamDefendingSide"),
-                d.get("scoringPlayerId") or d.get("shootingPlayerId") or d.get("hittingPlayerId")
-                or d.get("committedByPlayerId") or d.get("winningPlayerId"),
-                d.get("assist1PlayerId"), d.get("assist2PlayerId"),  # populated on goal events
-                d.get("shotType"), d.get("descKey"),  # descKey = penalty type when present
-            ))
+            ev_rows.append(
+                (
+                    gid,
+                    pl.get("sortOrder", pl.get("eventId")),
+                    int(period),
+                    game_sec(period, tip),
+                    pl.get("typeDescKey"),
+                    team_abbr.get(owner),
+                    owner == home_id,
+                    d.get("xCoord"),
+                    d.get("yCoord"),
+                    d.get("zoneCode"),
+                    pl.get("situationCode"),
+                    pl.get("homeTeamDefendingSide"),
+                    d.get("scoringPlayerId")
+                    or d.get("shootingPlayerId")
+                    or d.get("hittingPlayerId")
+                    or d.get("committedByPlayerId")
+                    or d.get("winningPlayerId"),
+                    d.get("assist1PlayerId"),
+                    d.get("assist2PlayerId"),  # populated on goal events
+                    d.get("shotType"),
+                    d.get("descKey"),  # descKey = penalty type when present
+                )
+            )
     if not ev_rows:
         print(f"[events] {season}: no games on disk yet")
         return 0, pd.DataFrame()
-    ev = pd.DataFrame(ev_rows, columns=[
-        "nhl_game_id", "event_idx", "period", "time_g", "type", "team", "is_home",
-        "x", "y", "zone", "situation_code", "home_defending_side", "primary_player_id",
-        "assist1_player_id", "assist2_player_id", "shot_type", "detail_key"])
+    ev = pd.DataFrame(
+        ev_rows,
+        columns=[
+            "nhl_game_id",
+            "event_idx",
+            "period",
+            "time_g",
+            "type",
+            "team",
+            "is_home",
+            "x",
+            "y",
+            "zone",
+            "situation_code",
+            "home_defending_side",
+            "primary_player_id",
+            "assist1_player_id",
+            "assist2_player_id",
+            "shot_type",
+            "detail_key",
+        ],
+    )
     ev.sort_values(["nhl_game_id", "time_g", "event_idx"], inplace=True)
     out = C.INTERIM / "events" / f"{season}.parquet"
     out.parent.mkdir(parents=True, exist_ok=True)
     ev.to_parquet(out, index=False)
-    rdf = pd.DataFrame(roster.values(),
-                       columns=["player_id", "season", "player_name", "position", "number", "team"])
-    print(f"[events] {season}: {len(ev):,} events, {len(rdf)} roster players "
-          f"across {ev.nhl_game_id.nunique()} games -> {out.name}")
+    rdf = pd.DataFrame(
+        roster.values(),
+        columns=["player_id", "season", "player_name", "position", "number", "team"],
+    )
+    print(
+        f"[events] {season}: {len(ev):,} events, {len(rdf)} roster players "
+        f"across {ev.nhl_game_id.nunique()} games -> {out.name}"
+    )
     return len(ev), rdf
 
 
@@ -237,7 +314,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--season", type=int, default=None, help="one season (default: all configured)")
     args = p.parse_args(argv)
     C.ensure_dirs()
-    for season in ([args.season] if args.season else C.SEASONS):
+    for season in [args.season] if args.season else C.SEASONS:
         clean_season(season)
 
 
