@@ -554,7 +554,7 @@ def fit_rate_create(R, g_team, g_cidx, shots_per_goal, count_model="poisson", a2
                 np.add.at(cinfo, g2_team[:, t], resp * pi2[:, t] * (1 - pi2[:, t]) * valid)
         ci = np.arange(lay.create.start, lay.create.stop)
         cdiag = sparse.csr_matrix((cinfo, (ci, ci)), shape=(lay.n_core, lay.n_core))
-        H = XtWX + _rate_penalty(lay, fm, e_prev, e_next, e_gap) + shots_per_goal * cdiag
+        H = XtWX + _rate_penalty(lay, fm, e_prev, e_next, e_gap, (lsh, lcr, ldf)) + shots_per_goal * cdiag
         M = XtWX + shots_per_goal ** 2 * cdiag
         se_sh, se_cr, se_df = _rate_ses(H, M, lay, lu, dense_max)
     out = {"intercept": float(th[0]), "beta": b, "psi0": psi0,

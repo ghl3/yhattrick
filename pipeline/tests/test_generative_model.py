@@ -367,6 +367,19 @@ def test_sparse_dense_se_parity():
         np.testing.assert_allclose(fit_dense[k], fit_sparse[k], rtol=1e-6, atol=1e-10)
 
 
+def test_create_se_reflects_the_create_prior():
+    """The create standard error responds to the create prior. The SE Hessian's level ridge is the
+    SAME precision the objective penalises with, so an overridden per-bucket create prior (the MA
+    bucket runs a tight one) shrinks the create estimate AND its standard error together — not just
+    the estimate."""
+    R, gt, gc, _, _, _ = _synth_create(P=40, n=40000, seed=5)
+    loose = G.fit_rate_create(R, gt, gc, shots_per_goal=16, create_prior_sd=0.30)
+    tight = G.fit_rate_create(R, gt, gc, shots_per_goal=16, create_prior_sd=0.04)
+    # same data + same anchor: the only difference is the create ridge, which must move the SE
+    assert not np.allclose(tight["se_create"], loose["se_create"])
+    assert np.median(tight["se_create"]) < np.median(loose["se_create"])
+
+
 def _synth_a2(gt, gc, create, q_true=0.6, seed=21):
     """Secondary-assist labels for _synth_create's goals: on teammate-created goals (gc ≥ 1) the A2
     is drawn from the create-ranking over the 3 remaining teammates with prob q_true, else uniformly

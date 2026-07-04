@@ -303,16 +303,19 @@ def _build_conv_X(logit_xg, sidx, shooter, goalie, lay, Cctx=None):
                              shape=(n, lay.n_theta))
 
 
-def _rate_penalty(lay, first_mask, e_prev, e_next, e_gap):
+def _rate_penalty(lay, first_mask, e_prev, e_next, e_gap, levels):
     """Sparse prior-precision matrix for the rate fit's player blocks, laid out by `lay` (a
     RateLayout). Per block: a level ridge on each player's FIRST state (`first_mask`) + the
     random-walk precision between his consecutive states — for an edge with weight
     w = 1/(rw_sd²·gap), add w to both diagonal entries and −w to the off-diagonals (the precision of
     θ_next − θ_prev ~ N(0, rw_sd²·gap)). With no edges (static or single season) this is exactly the
-    old diagonal ridge."""
-    blocks = [(1.0 / PRIOR_SD_SHOOT ** 2, 1.0 / RW_SD_SHOOT ** 2),
-              (1.0 / PRIOR_SD_CREATE ** 2, 1.0 / RW_SD_CREATE ** 2),
-              (1.0 / PRIOR_SD_SHOOT ** 2, 1.0 / RW_SD_DEF ** 2)]
+    old diagonal ridge. `levels` = (shoot, create, def) LEVEL precisions (1/prior_sd²) supplied by the
+    caller so they are the SAME ridge the objective penalises with — a per-bucket create/def prior
+    override (the MA bucket) then shrinks the point estimate and its standard error consistently. The
+    random-walk precisions are the shared RW_SD_* constants."""
+    blocks = [(levels[0], 1.0 / RW_SD_SHOOT ** 2),
+              (levels[1], 1.0 / RW_SD_CREATE ** 2),
+              (levels[2], 1.0 / RW_SD_DEF ** 2)]
     rows, cols, vals = [], [], []
     au = np.arange(lay.NU)
     for bi, (lev, wrw) in enumerate(blocks):
