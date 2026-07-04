@@ -1,8 +1,11 @@
 # The Generative Player Model (shooter-resolved, unified-creation, player curves)
 
-**Status:** experimental proof-of-concept. Lives in
-[`pipeline/src/yhattrick/models/generative_model.py`](../pipeline/src/yhattrick/models/generative_model.py),
-run with `uv run --group experimental python -m yhattrick.models.generative_model [--pool] [--count nb]`.
+**Status:** experimental proof-of-concept. The implementation spans focused modules under
+[`pipeline/src/yhattrick/models/`](../pipeline/src/yhattrick/models/): `generative_likelihood` (the
+stage objectives, parameter layouts and math primitives), `generative_data` (fact/dimension tables →
+design rows), `generative_model` (the fits + effective parameters), `generative_export` (values, PPC,
+JSON, CLI) and `generative_features` (shared stint orientation). Run with
+`uv run --group experimental python -m yhattrick.models.generative_model [--pool] [--count nb]`.
 **Not wired into the site/export** — the production additive (RAPM) model remains primary. This model
 is the *generative* counterpart: it specifies how a stint **produces** shots and goals, so you can both
 fit it and simulate from it. Covers **even strength (5v5) and the man-advantage (5v4/4v5)**, pools
@@ -234,12 +237,15 @@ conversion stage carries none — location bias flows through the recorded xG it
 | `DENSE_H_MAX` | parameter-count cutoff between the dense Hessian inverse and sparse column solves |
 | `ARENA_SD`, `ARENA_RW_SD`, `ARENA_MIN_GAMES` | arena-state nuisance prior (ridge + season RW) and the rare-venue gate |
 
-**Code-symbol map** (this doc → `generative_model.py`): `create_0`→`psi0`; `mu_rate/qual`→ each fit's
+**Code-symbol map** (this doc → code): `create_0`→`psi0`; `mu_rate/qual`→ each fit's
 `intercept`; `a`/`b`→`conv["a"]`/`conv["b"]`; `b_season`+curves→`conv["beta"]` (named by
 `conv["ctx_names"]`); `fin_j`→`conv["fin"]`; `gsave_g`→`conv["gsave"]`; `beta_rate/qual`→`beta` (named
 by each row-builder's `ctx_names`); `qbar`→`sig5`; `pi_c`→`pi`; `rate_j`→`exp(eta)` in the Poisson NLL;
 states→`shoot/create/def` per-unit arrays with `unit_player`/`unit_season`; last states→`*_last`;
-effective params→`effective_params()`.
+effective params→`effective_params()`. The stage objectives, the parameter-vector layouts
+(`RateLayout`/`QualLayout`/`ConvLayout` — one source of truth for how each fit's flat θ slices into
+these blocks) and the ridge/random-walk precisions live in `generative_likelihood`; the fits and
+`effective_params` in `generative_model`; the design-row builders in `generative_data`.
 
 ### Player-value attribution (deployment-free per-60, from EFFECTIVE params + intercepts)
 All values are computed from each player's **effective parameters** — his last state (or static level)
@@ -621,20 +627,30 @@ intercepts, and the 2016–2020 window extension — lives in
 ---
 
 ## 9. Implementation map & how to run
-- **File:** `pipeline/src/yhattrick/models/generative_model.py`. Tests:
-  `pipeline/tests/test_generative_model.py` (synthetic recovery — incl. RW drift, aging-curve +
-  projection math, sparse/dense SE parity, per-season reconciliation — plus a data-gated smoke test).
-- **Key functions:** `player_index` (shared index), `_age_position`/`_birthdates` (ages + F/D),
-  `_game_venues`/`_arena_index` (venue cache + the (venue, season) arena-state machinery),
-  `_load_stints(seasons, strengths)`, `rate_rows(seasons, strengths, dual, players, idx, agepos,
-  states, arenas)` (+ `_unit_machinery` for the per-season states), `quality_creator_rows(seasons,
-  idx, strengths, agepos, arenas)`, `conversion_rows(seasons, idx, strengths, agepos)` (data);
-  `fit_rate_create` (per-strength rate + credit; RW penalty via `_rate_penalty`, SEs via `_rate_ses`),
-  `fit_quality_creator` (pooled quality, position-level qcreate), `estimate_conversion_prior_sds` +
-  `fit_conversion` (pooled fin/gsave, per-strength `a`/`b`, season offsets, curves);
-  `effective_params` (state + curve + offset → card-ready arrays; `target=` for projections),
-  `unit_effective` (per-season trajectories), `player_values` (attribution), `ppc(R, rate, qual, conv,
-  key, agepos=)`; `run`/`_save` (loop over EV + MA buckets, projection, JSON).
+- **Modules** (`pipeline/src/yhattrick/models/`):
+  - `generative_features` — `load_stints(seasons, strengths)` and the attacking-team orientation
+    (`base_ctx`, `side_rows`) shared by the fit and the WAR consumers.
+  - `generative_likelihood` — the three stage objectives (`make_rate_nll`/`make_quality_nll`/
+    `make_conversion_nll`), the parameter layouts (`RateLayout`/`QualLayout`/`ConvLayout`), the sparse
+    design + prior-precision matrices (`_build_X`, `_rate_penalty`, …), and the math primitives
+    (`marginal_goal_prob`, `creator_mix`, `_sigmoid`) with the prior constants.
+  - `generative_data` — the fact/dimension tables → design rows: `player_index`, `_age_position`/
+    `_birthdates` (ages + F/D), `_arena_index` (the (venue, season) arena-state machinery),
+    `rate_rows` (+ `_unit_machinery` for the per-season states), `quality_creator_rows`,
+    `conversion_rows`, `estimate_conversion_prior_sds`.
+  - `generative_model` — the fits `fit_rate_create` (per-strength rate + credit; RW penalty via
+    `_rate_penalty`, SEs via `_rate_ses`), `fit_quality_creator` (pooled quality, position-level
+    qcreate), `fit_conversion` (pooled fin/gsave, per-strength `a`/`b`, season offsets, curves); the
+    checkpoint/warm-start machinery and `fit_all`; and the effective-parameter interpretation
+    `effective_params` (state + curve + offset → card-ready arrays; `target=` for projections),
+    `unit_effective` (per-season trajectories), `value_environment`.
+  - `generative_export` — `player_values` (attribution), `ppc(R, rate, qual, conv, key, agepos=)`, the
+    leaderboards, and `run`/`_save` (loop over EV + MA buckets, projection, JSON) + the CLI, reached
+    through a thin shim in `generative_model`.
+- **Tests:** `pipeline/tests/test_generative_{model,likelihood,data,cards,holdout,features}.py`
+  (synthetic recovery — incl. RW drift, aging-curve + projection math, sparse/dense SE parity,
+  per-season reconciliation, the parameter layouts and each stage objective — plus a data-gated smoke
+  test).
 - **Run:** `make generative-model` (single latest season) or
   `uv run --group experimental python -m yhattrick.models.generative_model --pool --count nb`
   (all seasons — multi-season ⇒ RW states + projection). `--spg-scale 0.5|2.0` for the assist-credit

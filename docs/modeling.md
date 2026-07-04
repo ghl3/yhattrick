@@ -261,14 +261,15 @@ net centered at 0 is *not* "vs average" — live in **[`docs/metrics.md`](metric
 aggregate; a roster's `g_net` does **not** sum to the team's goal differential. **Goalie analog:** no
 offense; `g_net = g_prevented = gsax_saved` (shrunk GSAx above expected), `gprev60 = GSAx/60`.
 
-## Alternative approach (experimental): generative model (`generative_model.py`)
+## Alternative approach (experimental): generative model (the `generative_*` modules)
 
 The additive linear model above is our **main model** — and deliberately so (see "Why the linear model
-stays primary" below). `models/generative_model.py` is an **experimental alternative** we explored: a
-**marked Poisson process with Bernoulli thinning** that, given a stint's lineup/context/length, *draws* the
-number of chances, each chance's xG, and each outcome, so it can be **simulated** as well as fit. It is
-**not wired into the site**; it's a proof of concept. The full likelihood (all parameters labelled) lives
-in the module docstring — that file is the source of truth.
+stays primary" below). The generative model (the `models/generative_*` modules) is an **experimental
+alternative** we explored: a **marked Poisson process with Bernoulli thinning** that, given a stint's
+lineup/context/length, *draws* the number of chances, each chance's xG, and each outcome, so it can be
+**simulated** as well as fit. It is **not wired into the site**; it's a proof of concept. The full
+likelihood (all parameters labelled) is specified in [`generative_model.md`](generative_model.md) and
+realised in `models/generative_likelihood.py`.
 
 Three layers, fit independently (the likelihood factorizes — counts, qualities, and outcomes are all
 observed, with disjoint parameter blocks):
