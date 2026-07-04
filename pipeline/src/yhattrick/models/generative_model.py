@@ -243,6 +243,12 @@ def _ck_stage(ck, key):
     return {k[len(pre):]: v for k, v in ck.items() if k.startswith(pre)}
 
 
+def _seq(x):
+    """The sequence `x`, or [] when it is absent (None). Safe for the arena-state numpy arrays, which
+    raise on the `x or []` idiom (a many-element array has no single truth value)."""
+    return [] if x is None else x
+
+
 def _warm_rate_x0(x0, w, R, NU, PS, QI, has_a2, nb):
     """Best-effort map of a checkpoint's rate θ onto this fit's layout. Keys: (pid, season) for the
     three unit blocks, column name for ctx, (venue, season) for arenas. Unmatched entries keep the
@@ -267,7 +273,7 @@ def _warm_rate_x0(x0, w, R, NU, PS, QI, has_a2, nb):
     x0[PS] = oth[ops]                                        # psi0 (create_0)
     oa = {(str(v), int(s)): float(x) for v, s, x in
           zip(w["arena_venue"], w["arena_season"], oth[ops + 1:ops + 1 + onar])}
-    for j, (v, s) in enumerate(zip(R.get("arena_venue") or [], R.get("arena_season") or [])):
+    for j, (v, s) in enumerate(zip(_seq(R.get("arena_venue")), _seq(R.get("arena_season")))):
         x0[PS + 1 + j] = oa.get((str(v), int(s)), 0.0)
     pos = ops + 1 + onar                                     # old tail: [q?] [log r?]
     if bool(w["has_a2"]):
@@ -284,8 +290,8 @@ def _reuse_theta_rate(w, n_th, R, has_a2, nb):
     ok = (w is not None and len(np.asarray(w["theta"])) == n_th
           and np.array_equal(np.asarray(w["unit_pid"]), u_pid)
           and np.array_equal(np.asarray(w["unit_season"]), u_sea)
-          and [str(x) for x in w["ctx_names"]] == [str(x) for x in (R.get("ctx_names") or [])]
-          and [str(x) for x in w["arena_venue"]] == [str(x) for x in (R.get("arena_venue") or [])]
+          and [str(x) for x in w["ctx_names"]] == [str(x) for x in _seq(R.get("ctx_names"))]
+          and [str(x) for x in w["arena_venue"]] == [str(x) for x in _seq(R.get("arena_venue"))]
           and bool(w["has_a2"]) == bool(has_a2) and bool(w["nb"]) == bool(nb))
     if not ok:
         raise ValueError("reuse: checkpoint does not match this rate fit exactly — run a full fit")
@@ -313,7 +319,7 @@ def _warm_qual_x0(x0, w, pids, ctx_names, ar_v, ar_s, P, k):
             x0[3 + 2 * P + j] = oc[nm]
     oa = {(str(v), int(s)): float(x) for v, s, x in
           zip(w["arena_venue"], w["arena_season"], oth[3 + 2 * oP + ok:3 + 2 * oP + ok + onar])}
-    for j, (v, s) in enumerate(zip(ar_v or [], ar_s or [])):
+    for j, (v, s) in enumerate(zip(_seq(ar_v), _seq(ar_s))):
         x0[3 + 2 * P + k + j] = oa.get((str(v), int(s)), 0.0)
     return hits
 
@@ -321,8 +327,8 @@ def _warm_qual_x0(x0, w, pids, ctx_names, ar_v, ar_s, P, k):
 def _reuse_theta_qual(w, n_th, pids, Q):
     ok = (w is not None and pids is not None and len(np.asarray(w["theta"])) == n_th
           and np.array_equal(np.asarray(w["pid"]), np.asarray(pids))
-          and [str(x) for x in w["ctx_names"]] == [str(x) for x in (Q.get("ctx_names") or [])]
-          and [str(x) for x in w["arena_venue"]] == [str(x) for x in (Q.get("arena_venue") or [])])
+          and [str(x) for x in w["ctx_names"]] == [str(x) for x in _seq(Q.get("ctx_names"))]
+          and [str(x) for x in w["arena_venue"]] == [str(x) for x in _seq(Q.get("arena_venue"))])
     if not ok:
         raise ValueError("reuse: checkpoint does not match this quality fit exactly — run a full fit")
     return np.asarray(w["theta"], dtype=np.float64)

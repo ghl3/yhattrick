@@ -561,6 +561,21 @@ def test_rate_warm_start_maps_by_key_not_position():
         G.fit_rate_create(R, gt, gc, shots_per_goal=16, warm=w2, reuse=True)
 
 
+def test_rate_warm_start_carries_arena_states():
+    """Warm-starting a fit that carries arena states maps them by (venue, season). Those venue/season
+    keys are numpy arrays (as the real rate row-builder produces), so the mapping must not use the
+    `array or []` idiom — it raises on a multi-element array and would silently cold-init. A working
+    warm start from the fit's own checkpoint begins at the optimum and converges in far fewer
+    iterations."""
+    R, gt, gc, *_ = _synth_create(P=40, n=30000, seed=7, arena_fx=[0.15, -0.1, 0.05, 0.2, -0.15])
+    R["arena_venue"] = np.asarray(R["arena_venue"])          # real rate_rows stores venue keys as arrays
+    cold = G.fit_rate_create(R, gt, gc, shots_per_goal=16)
+    w = G._stage_rate(cold, np.asarray(R["players"]))
+    warm = G.fit_rate_create(R, gt, gc, shots_per_goal=16, warm=w)
+    assert warm["converged"] and warm["nit"] < cold["nit"]   # carried the states → started at the optimum
+    assert np.allclose(warm["create"], cold["create"], atol=1e-3)
+
+
 def test_quality_and_conversion_warm_reuse():
     Q, qc_pos, create, isD = _synth_creator(P=30, n=40000)
     pids = np.arange(30)
