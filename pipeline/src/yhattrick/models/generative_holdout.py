@@ -49,6 +49,9 @@ import numpy as np
 
 from .. import config as C
 from . import generative_model as G
+from . import generative_data as D
+from . import generative_likelihood as L
+from .generative_features import RATE_CTX
 
 MIN_TOI_EVAL = 12000.0      # ≥ 200 EV minutes in the target season to enter the player-level table
 CAND_ORDER = ("league-avg", "pooled-mean", "last-state", "projection")
@@ -194,9 +197,9 @@ def evaluate(train_through, target=None, count_model="nb", spg_scale=1.0, rescor
     idx_t = {int(p): i for i, p in enumerate(players_t)}
 
     # held-out EV rows on the target season's own player index (rookies included, at the prior mean)
-    players_h, idx_h = G.player_index([target])
-    agepos_h = G._age_position(players_h, [target])
-    Rh = G.rate_rows([target], G.EV_STRENGTHS, True, players_h, idx_h, agepos_h,
+    players_h, idx_h = D.player_index([target])
+    agepos_h = D._age_position(players_h, [target])
+    Rh = D.rate_rows([target], L.EV_STRENGTHS, True, players_h, idx_h, agepos_h,
                      states=False, arenas=False)
     Ph = len(players_h)
     seen = np.array([p in idx_t for p in players_h])
@@ -208,7 +211,7 @@ def evaluate(train_through, target=None, count_model="nb", spg_scale=1.0, rescor
     nowcast = cmt.get(f"season_{train_through}", 0.0)
     ctx_base = np.full(len(Rh["count"]), nowcast)
     ctx_full = ctx_base.copy()
-    base_names = set(G.RATE_CTX)
+    base_names = set(RATE_CTX)
     for j, nm in enumerate(Rh["ctx_names"]):
         if nm in cmt:
             if nm in base_names:
@@ -238,7 +241,7 @@ def evaluate(train_through, target=None, count_model="nb", spg_scale=1.0, rescor
     out = {"train": [int(s) for s in ts["train"]], "target": int(target), "count_model": count_model,
            "n_rows": int(len(N)), "n_players": Ph, "n_seen": int(seen.sum()),
            "n_eligible": int(elig.sum()),
-           "rw_sd": {"shoot": G.RW_SD_SHOOT, "create": G.RW_SD_CREATE, "def": G.RW_SD_DEF},
+           "rw_sd": {"shoot": L.RW_SD_SHOOT, "create": L.RW_SD_CREATE, "def": L.RW_SD_DEF},
            "candidates": {}}
     if np.isfinite(float(ts.get("a2_q", np.nan))):
         out["a2_q"] = float(ts["a2_q"])
@@ -315,12 +318,12 @@ def evaluate(train_through, target=None, count_model="nb", spg_scale=1.0, rescor
     for blk, term in ev_terms.items():
         gamma["ev"][blk] = calibration_slope(N, Rh["offset"], mu0 + ctx_base + ev_all - term, term)
     if "ma_shoot" in ts:
-        Rm = G.rate_rows([target], G.MA_STRENGTHS, False, players_h, idx_h, agepos_h,
+        Rm = D.rate_rows([target], L.MA_STRENGTHS, False, players_h, idx_h, agepos_h,
                          states=False, arenas=False)
         cmm = G._coef_map([str(n) for n in ts["ma_ctx_names"]], ts["ma_beta"])
         ctx_ma = np.full(len(Rm["count"]), cmm.get(f"season_{train_through}", 0.0))
         for j, nm in enumerate(Rm["ctx_names"]):
-            if nm in cmm and nm in set(G.RATE_CTX):
+            if nm in cmm and nm in set(RATE_CTX):
                 ctx_ma = ctx_ma + cmm[nm] * Rm["Xctx"][:, j]
         ma_terms = {
             "shoot": to_hold(ts["ma_shoot"])[Rm["shooter_idx"]],

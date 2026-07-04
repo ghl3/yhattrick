@@ -12,6 +12,8 @@ pytest.importorskip("jax")          # skip entirely unless the experimental deps
 
 from yhattrick import config as C
 from yhattrick.models import generative_model as G
+from yhattrick.models import generative_data as D
+from yhattrick.models import generative_likelihood as L
 
 
 # ── synthetic builders (shooter-resolved: 1 focal shooter + 4 teammates + 5 defenders per row) ────
@@ -467,15 +469,15 @@ def test_ma_bucket_masked_defenders_recover():
 def test_real_fit_smoke():
     sd = C.PROCESSED / "shots_onice"
     seasons = (sorted(int(f.stem) for f in sd.glob("*.parquet"))[-1:]) if sd.exists() else []
-    players, idx = G.player_index(seasons)
+    players, idx = D.player_index(seasons)
     assert players
-    agepos = G._age_position(players, seasons)
+    agepos = D._age_position(players, seasons)
     assert agepos["isD"].sum() > 0                            # rosters resolve positions
-    Q = G.quality_creator_rows(seasons, idx, G.ALL_STRENGTHS, agepos)
+    Q = D.quality_creator_rows(seasons, idx, L.ALL_STRENGTHS, agepos)
     cidx = np.where(Q["creator"] == 4, 0, np.clip(Q["creator"], 0, 3) + 1).astype(np.int64)
     creates = {}
-    for key, strengths, dual in [("ev", G.EV_STRENGTHS, True), ("ma", G.MA_STRENGTHS, False)]:
-        R = G.rate_rows(seasons, strengths, dual, players, idx, agepos, states=dual)
+    for key, strengths, dual in [("ev", L.EV_STRENGTHS, True), ("ma", L.MA_STRENGTHS, False)]:
+        R = D.rate_rows(seasons, strengths, dual, players, idx, agepos, states=dual)
         assert R is not None and len(R["count"]) > 0
         assert R["team_idx"].shape[1] == 4 and R["def_idx"].shape[1] == 5
         assert len(R["ctx_names"]) == R["Xctx"].shape[1]      # named context incl. AGE_CTX
@@ -502,7 +504,7 @@ def test_real_fit_smoke():
     qual = G.fit_quality_creator(Q, len(players), creates, isD=agepos["isD"])
     assert qual["converged"] and set(qual["mu_qual"]) >= {"ev", "ma"}
     assert np.asarray(qual["qcreate"]).shape == (2,)          # A1: position-level
-    Cr = G.conversion_rows(seasons, idx, G.ALL_STRENGTHS, agepos)
+    Cr = D.conversion_rows(seasons, idx, L.ALL_STRENGTHS, agepos)
     cf = G.fit_conversion(Cr, len(players))
     assert cf["converged"] and set(cf["a"]) >= {"ev", "ma"}
     assert cf["recon_season"]                                 # F6 per-season reconciliation present
