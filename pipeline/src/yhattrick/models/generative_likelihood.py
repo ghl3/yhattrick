@@ -411,11 +411,14 @@ class QualHypers:
     lrw_ar: float
 
 
-def make_rate_nll(lay: RateLayout, h: RateHypers, arena_rw):
+def make_rate_nll(lay: RateLayout, h: RateHypers, arena_rw, create_center=None):
     """Rate-stage objective: Poisson/NB shot-count NLL + assist-credit anchor (spg-weighted
     conditional logit over the on-ice teammates, plus the optional A2 mixture stage) + ridge/RW/arena
     penalties. `arena_rw` = (a_ep, a_en, a_iw) the venue-season random-walk edges (jnp arrays).
-    Returns nll(th, *data) with the data signature the optimizer streams."""
+    `create_center` (per-unit, or None = 0): the `create` level ridge shrinks first states toward THIS
+    target instead of 0 — set to the position (F/D) mean so a weakly-identified forward defaults to the
+    forward baseline, not to "suppresses offense" (roadmap §5e). A fixed constant (not a free
+    parameter), so the level stays pinned and SE curvature is unchanged. Returns nll(th, *data)."""
     n_ar, PS, QI = lay.n_ar, lay.PS, lay.QI
     nb, has_a2, has_rw, has_ar_rw = h.nb, h.has_a2, h.has_rw, h.has_ar_rw
     lsh, lcr, ldf = h.lsh, h.lcr, h.ldf
@@ -423,6 +426,7 @@ def make_rate_nll(lay: RateLayout, h: RateHypers, arena_rw):
     la_ar, lrw_ar = h.la_ar, h.lrw_ar
     shots_per_goal = h.shots_per_goal
     a_ep, a_en, a_iw = arena_rw
+    ccen = 0.0 if create_center is None else jnp.asarray(create_center)
 
     def split(th):
         return (
@@ -482,7 +486,9 @@ def make_rate_nll(lay: RateLayout, h: RateHypers, arena_rw):
             pl2 = jnp.exp(jnp.take_along_axis(logpi2, g2b[:, None], 1)[:, 0])
             credit = credit - jnp.sum(jnp.log(q * pl2 + (1.0 - q) / 3.0 + 1e-12))
         pen = 0.5 * (
-            lsh * jnp.sum(fmj * sh**2) + lcr * jnp.sum(fmj * cr**2) + ldf * jnp.sum(fmj * df**2)
+            lsh * jnp.sum(fmj * sh**2)
+            + lcr * jnp.sum(fmj * (cr - ccen) ** 2)
+            + ldf * jnp.sum(fmj * df**2)
         )
         if has_rw:  # RW: θ_next ~ N(θ_prev, rw_sd²·gap)
             pen += 0.5 * (

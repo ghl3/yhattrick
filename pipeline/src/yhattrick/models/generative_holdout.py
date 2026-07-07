@@ -100,8 +100,14 @@ def candidates(M, target):
     }
 
 
-def _hyper_tag(ma_anchor_scale, ma_create_prior_sd, ma_def_prior_sd=None):
-    """Cache-file suffix for non-default MA hyperparameters (sweep candidates keep separate caches)."""
+def _hyper_tag(
+    ma_anchor_scale,
+    ma_create_prior_sd,
+    ma_def_prior_sd=None,
+    ev_anchor_scale=1.0,
+    create_prior_center=None,
+):
+    """Cache-file suffix for non-default hyperparameters (sweep candidates keep separate caches)."""
     tag = ""
     if ma_anchor_scale != 1.0:
         tag += f"_a{ma_anchor_scale:g}"
@@ -109,6 +115,10 @@ def _hyper_tag(ma_anchor_scale, ma_create_prior_sd, ma_def_prior_sd=None):
         tag += f"_p{ma_create_prior_sd:g}"
     if ma_def_prior_sd:
         tag += f"_d{ma_def_prior_sd:g}"
+    if ev_anchor_scale != 1.0:
+        tag += f"_ea{ev_anchor_scale:g}"
+    if create_prior_center:
+        tag += f"_cc{create_prior_center}"
     return tag
 
 
@@ -121,6 +131,8 @@ def _fit_train_side(
     ma_anchor_scale=1.0,
     ma_create_prior_sd=None,
     ma_def_prior_sd=None,
+    ev_anchor_scale=1.0,
+    create_prior_center=None,
 ):
     """Run the training fit and reduce it to the slim scoring inputs; cached as an npz so scoring
     can iterate without re-fitting. The train side keeps its OWN θ̂ checkpoint chain
@@ -132,6 +144,8 @@ def _fit_train_side(
         ma_anchor_scale=ma_anchor_scale,
         ma_create_prior_sd=ma_create_prior_sd,
         ma_def_prior_sd=ma_def_prior_sd,
+        ev_anchor_scale=ev_anchor_scale,
+        create_prior_center=create_prior_center,
         warm=True,
         save_ckpt=True,
         ckpt_path=C.MODELS / "holdout_ckpt.npz",
@@ -156,6 +170,7 @@ def _fit_train_side(
         "ma_anchor_scale": np.float64(ma_anchor_scale),
         "ma_create_prior_sd": np.float64(ma_create_prior_sd if ma_create_prior_sd else np.nan),
         "ma_def_prior_sd": np.float64(ma_def_prior_sd if ma_def_prior_sd else np.nan),
+        "ev_anchor_scale": np.float64(ev_anchor_scale),
     }
     for name, c in candidates(M, target).items():
         for blk in BLOCKS:
@@ -172,7 +187,7 @@ def _fit_train_side(
         ts["ma_beta"] = np.asarray(mat["beta"], dtype=np.float64)
     path = C.MODELS / (
         f"holdout_fit_{train_through}"
-        f"{_hyper_tag(ma_anchor_scale, ma_create_prior_sd, ma_def_prior_sd)}.npz"
+        f"{_hyper_tag(ma_anchor_scale, ma_create_prior_sd, ma_def_prior_sd, ev_anchor_scale, create_prior_center)}.npz"
     )
     C.MODELS.mkdir(parents=True, exist_ok=True)
     np.savez(path, **ts)
@@ -205,6 +220,8 @@ def evaluate(
     ma_anchor_scale=1.0,
     ma_create_prior_sd=None,
     ma_def_prior_sd=None,
+    ev_anchor_scale=1.0,
+    create_prior_center=None,
 ):
     sd = C.PROCESSED / "shots_onice"
     avail = sorted(int(f.stem) for f in sd.glob("*.parquet")) if sd.exists() else []
@@ -212,7 +229,9 @@ def evaluate(
     target = target or train_through + 1
     if target not in avail:
         raise SystemExit(f"target season {target} not in processed data {avail}")
-    tag = _hyper_tag(ma_anchor_scale, ma_create_prior_sd, ma_def_prior_sd)
+    tag = _hyper_tag(
+        ma_anchor_scale, ma_create_prior_sd, ma_def_prior_sd, ev_anchor_scale, create_prior_center
+    )
     cache = C.MODELS / f"holdout_fit_{train_through}{tag}.npz"
     if rescore and cache.exists():
         print(f"[holdout] rescoring from {cache.name}")
@@ -229,6 +248,8 @@ def evaluate(
             ma_anchor_scale=ma_anchor_scale,
             ma_create_prior_sd=ma_create_prior_sd,
             ma_def_prior_sd=ma_def_prior_sd,
+            ev_anchor_scale=ev_anchor_scale,
+            create_prior_center=create_prior_center,
         )
     players_t = ts["players"]
     idx_t = {int(p): i for i, p in enumerate(players_t)}
@@ -369,6 +390,7 @@ def evaluate(
     # last-state candidate (the "current skill" read the cards/WAR consume); MA uses the bucket's
     # static effective params. This is the selection criterion for the MA anchor/prior sweep.
     out["ma_anchor_scale"] = float(ts.get("ma_anchor_scale", 1.0))
+    out["ev_anchor_scale"] = float(ts.get("ev_anchor_scale", 1.0))
     mcp = float(ts.get("ma_create_prior_sd", np.nan))
     out["ma_create_prior_sd"] = None if np.isnan(mcp) else mcp
     mdp = float(ts.get("ma_def_prior_sd", np.nan))
@@ -425,6 +447,7 @@ def evaluate(
         "count_model": count_model,
         "spg_scale": spg_scale,
         "ma_anchor_scale": out["ma_anchor_scale"],
+        "ev_anchor_scale": out["ev_anchor_scale"],
         "ma_create_prior_sd": out["ma_create_prior_sd"],
         "ma_def_prior_sd": out["ma_def_prior_sd"],
         "gamma": gamma,
@@ -468,6 +491,18 @@ def main(argv=None):
         default=None,
         help="sweep candidate: def prior SD for the MA bucket",
     )
+    p.add_argument(
+        "--ev-anchor-scale",
+        type=float,
+        default=1.0,
+        help="sweep candidate: scale the EV bucket's assist-anchor weight (Kapanen class, §5e)",
+    )
+    p.add_argument(
+        "--create-prior-center",
+        choices=["position-mean"],
+        default=None,
+        help="sweep candidate: re-center the EV create ridge on the F/D position mean (§5e lever 3)",
+    )
     args = p.parse_args(argv)
     evaluate(
         args.train_through,
@@ -478,6 +513,8 @@ def main(argv=None):
         ma_anchor_scale=args.ma_anchor_scale,
         ma_create_prior_sd=args.ma_create_prior,
         ma_def_prior_sd=args.ma_def_prior,
+        ev_anchor_scale=args.ev_anchor_scale,
+        create_prior_center=args.create_prior_center,
     )
 
 

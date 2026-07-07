@@ -285,6 +285,8 @@ def run(
     ma_anchor_scale=1.0,
     ma_create_prior_sd=None,
     ma_def_prior_sd=None,
+    ev_anchor_scale=1.0,
+    create_prior_center=None,
 ):
     names = roster_names(seasons)
     M = fit_all(
@@ -297,6 +299,8 @@ def run(
         ma_anchor_scale=ma_anchor_scale,
         ma_create_prior_sd=ma_create_prior_sd,
         ma_def_prior_sd=ma_def_prior_sd,
+        ev_anchor_scale=ev_anchor_scale,
+        create_prior_center=create_prior_center,
     )
     players, agepos, Q = M["players"], M["agepos"], M["Q"]
     rates, spg, qual, conv, last_season = (
@@ -602,7 +606,16 @@ def main(argv=None):
         type=float,
         default=0.25,
         help="scale the PP/PK bucket's assist-anchor weight (default: the value the "
-        "2026-07 held-out calibration sweep selected — docs §7/§9; EV untouched)",
+        "2026-07 held-out calibration sweep selected — docs §7/§9)",
+    )
+    p.add_argument(
+        "--ev-anchor-scale",
+        type=float,
+        default=0.25,
+        help="scale the EV bucket's assist-anchor weight (default: the value the held-out "
+        "sweep selected — docs §7/§9). At full weight the anchor overfits assist-ROLE into "
+        "create (held-out teammate-shot corr barely beat naive counting); 0.25 predicts "
+        "next-season teammate shots markedly better and relaxes the Kapanen-class drag (§5e)",
     )
     p.add_argument(
         "--ma-create-prior",
@@ -615,6 +628,13 @@ def main(argv=None):
         type=float,
         default=0.10,
         help="def prior SD for the PP/PK bucket (default: sweep-selected)",
+    )
+    p.add_argument(
+        "--create-prior-center",
+        choices=["zero", "position-mean"],
+        default="position-mean",
+        help="EV create ridge target: 'position-mean' (default; held-out selected — shrinks a "
+        "weakly-identified forward toward the forward baseline, not to 0) or 'zero' (legacy). §5e/§7",
     )
     p.add_argument(
         "--cold",
@@ -642,4 +662,8 @@ def main(argv=None):
         ma_anchor_scale=args.ma_anchor_scale,
         ma_create_prior_sd=args.ma_create_prior,
         ma_def_prior_sd=args.ma_def_prior,
+        ev_anchor_scale=args.ev_anchor_scale,
+        create_prior_center=(
+            None if args.create_prior_center == "zero" else args.create_prior_center
+        ),
     )

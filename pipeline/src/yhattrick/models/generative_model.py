@@ -270,6 +270,8 @@ def ckpt_save(
     ma_anchor_scale=1.0,
     ma_create_prior_sd=None,
     ma_def_prior_sd=None,
+    ev_anchor_scale=1.0,
+    create_prior_center=None,
 ):
     pids = np.asarray(players)
     z = {
@@ -277,6 +279,8 @@ def ckpt_save(
         "count_model": np.asarray(count_model),
         "spg_scale": np.asarray(float(spg_scale)),
         "ma_anchor_scale": np.asarray(float(ma_anchor_scale)),
+        "ev_anchor_scale": np.asarray(float(ev_anchor_scale)),
+        "create_prior_center": np.asarray(str(create_prior_center)),
         "ma_create_prior_sd": np.asarray(
             float(ma_create_prior_sd) if ma_create_prior_sd else np.nan
         ),
@@ -518,6 +522,8 @@ def fit_rate_create(
     reuse=False,
     create_prior_sd=None,
     def_prior_sd=None,
+    create_center=None,
+    skip_se=False,
     dense_max=DENSE_H_MAX,
 ):
     """UNIFIED CREATION over per-(player, season) STATES. One `create` parameter per unit that does
@@ -597,6 +603,11 @@ def fit_rate_create(
 
     lay = RateLayout(NU, k, n_ar, has_a2, nb)
     PS, QI = lay.PS, lay.QI  # psi0 index / A2-mixture-logit index
+    if create_center is not None:
+        create_center = np.asarray(create_center, dtype=np.float64)
+        assert create_center.shape == (
+            NU,
+        ), f"create_center must be per-unit ({NU},), got {create_center.shape}"
 
     hyp = RateHypers(
         nb=nb,
@@ -613,7 +624,7 @@ def fit_rate_create(
         la_ar=la_ar,
         lrw_ar=lrw_ar,
     )
-    nll = make_rate_nll(lay, hyp, (a_ep, a_en, a_iw))
+    nll = make_rate_nll(lay, hyp, (a_ep, a_en, a_iw), create_center)
 
     x0 = np.zeros(lay.n_theta)
     if nb:
@@ -667,6 +678,8 @@ def fit_rate_create(
         se_sh = np.asarray(warm["se_shoot_last"], dtype=np.float64)
         se_cr = np.asarray(warm["se_create_last"], dtype=np.float64)
         se_df = np.asarray(warm["se_def_last"], dtype=np.float64)
+    elif skip_se:  # caller only wants the point estimates (e.g. the two-pass centering probe)
+        se_sh = se_cr = se_df = np.full(P, np.nan)
     else:
         eta = th[0] + sh[sh_i] + cr[tm_i].sum(1) + (df[df_i] * dmask).sum(1) + R["Xctx"] @ b
         if n_ar:
@@ -1177,6 +1190,8 @@ def fit_all(
     ma_anchor_scale=1.0,
     ma_create_prior_sd=None,
     ma_def_prior_sd=None,
+    ev_anchor_scale=1.0,
+    create_prior_center=None,
 ):
     """Fit every stage on `seasons` and return the raw fit objects — the shared engine behind run()
     (which adds leaderboards, values, PPC, projection, JSON) and the held-out predictive harness
@@ -1194,8 +1209,15 @@ def fit_all(
     `ma_anchor_scale` / `ma_create_prior_sd`: the MA (PP/PK) bucket's assist-anchor weight scale
     and create prior SD — hyperparameters selected by held-out validation (docs §7): on fixed PP
     units the shot counts pin only the unit's total creation, so the assist anchor alone splits
-    it, and assists on the PP reflect ROLE (who touches the puck last), not creation skill. The EV
-    bucket is untouched (linemate mixing identifies its split; validated at full weight)."""
+    it, and assists on the PP reflect ROLE (who touches the puck last), not creation skill.
+    `ev_anchor_scale`: the same weight scale for the EV bucket (production uses 0.25, held-out
+    selected; the arg default here stays 1.0, neutral). At full weight the assist anchor overfits
+    assist-ROLE into create — held-out teammate-shot prediction barely beat naive counting (and
+    underperformed it in 2024) — because EV assists reflect who was credited, not who created the
+    chance. Down-weighting to 0.25 predicts next-season teammate shots markedly better on two
+    independent target years and relaxes the within-unit drag on finishers glued to elite
+    distributors (the Kapanen class; roadmap §5e). Below ~0.1 the anchor loses its grip and create
+    stops being identified (block sign flips), so 0.25 is the sweet spot, not zero."""
     print(
         f"[generative_model:shooter-resolved] seasons {seasons} — count {count_model} — EV + PP/PK …"
     )
@@ -1205,17 +1227,23 @@ def fit_all(
             + (f", create prior sd {ma_create_prior_sd:g}" if ma_create_prior_sd else "")
             + (f", def prior sd {ma_def_prior_sd:g}" if ma_def_prior_sd else "")
         )
+    if ev_anchor_scale != 1.0:
+        print(f"  EV bucket: anchor×{ev_anchor_scale:g}")
     ck = ckpt_load(ckpt_path) if (warm or reexport) else None
     if reexport:
         if ck is None:
             raise SystemExit("--reexport needs a θ̂ checkpoint from a prior full fit")
         ck_mas = float(ck.get("ma_anchor_scale", 1.0))
+        ck_eas = float(ck.get("ev_anchor_scale", 1.0))
+        ck_cpc = str(ck.get("create_prior_center", "None"))
         ck_mcp = float(ck.get("ma_create_prior_sd", np.nan))
         if (
             list(map(int, ck["seasons"])) != [int(s) for s in seasons]
             or str(ck["count_model"]) != count_model
             or float(ck["spg_scale"]) != float(spg_scale)
             or ck_mas != float(ma_anchor_scale)
+            or ck_eas != float(ev_anchor_scale)
+            or ck_cpc != str(create_prior_center)
             or not (
                 np.isnan(ck_mcp)
                 and ma_create_prior_sd is None
@@ -1256,7 +1284,9 @@ def fit_all(
         gm = (Q["goal"] == 1) & (Q["strength"] == slab)
         ngoal = int(gm.sum())
         nun = int(((Q["creator"] == 4) & (Q["strength"] == slab)).sum())
-        aw = ma_anchor_scale if key == "ma" else 1.0  # per-bucket anchor weight (docs §7)
+        aw = (
+            ma_anchor_scale if key == "ma" else ev_anchor_scale
+        )  # per-bucket anchor weight (docs §7)
         spg[key] = (
             aw * spg_scale * float(R["count"].sum()) / max(ngoal, 1)
         )  # IPW weight (×A3 scale)
@@ -1290,11 +1320,7 @@ def fit_all(
             f"spg {spg[key]:.1f}  anchored {len(gc)} ({100 * nun / max(ngoal, 1):.0f}% unassisted, "
             f"{len(gc2)} with A2)"
         )
-        rate = fit_rate_create(
-            R,
-            gt,
-            gc,
-            spg[key],
+        rate_kwargs = dict(
             count_model=count_model,
             a2=(gt2, g1c, gc2),
             warm=_ck_stage(ck, key),
@@ -1302,6 +1328,21 @@ def fit_all(
             create_prior_sd=(ma_create_prior_sd if key == "ma" else None),
             def_prior_sd=(ma_def_prior_sd if key == "ma" else None),
         )
+        cc = None
+        if create_prior_center == "position-mean" and dual and not reexport:
+            # Two-pass: fit at center 0, then re-center the `create` level ridge on the F/D raw-state
+            # means so a weakly-identified forward defaults to the forward baseline instead of 0 (=
+            # "suppresses offense"). Non-uniform (F/D differ), so identified, not a gauge no-op; the
+            # well-identified stay put (likelihood-pinned). Roadmap §5e lever 3.
+            rate0 = fit_rate_create(R, gt, gc, spg[key], skip_se=True, **rate_kwargs)
+            isD_u = agepos["isD"][R["unit_player"]].astype(bool)
+            cr0 = rate0["create"]
+            muF, muD = float(cr0[~isD_u].mean()), float(cr0[isD_u].mean())
+            cc = np.where(isD_u, muD, muF).astype(np.float64)
+            print(
+                f"  [{key}] create prior re-centered on position means: F {muF:+.3f}  D {muD:+.3f}"
+            )
+        rate = fit_rate_create(R, gt, gc, spg[key], create_center=cc, **rate_kwargs)
         rate["R"] = R
         rates[key] = rate
         last_season = np.maximum(last_season, R["last_season"])
@@ -1376,6 +1417,8 @@ def fit_all(
             ma_anchor_scale=ma_anchor_scale,
             ma_create_prior_sd=ma_create_prior_sd,
             ma_def_prior_sd=ma_def_prior_sd,
+            ev_anchor_scale=ev_anchor_scale,
+            create_prior_center=create_prior_center,
         )
         print(f"  θ̂ checkpoint → {cp} (warm starts / --reexport)")
     return {
