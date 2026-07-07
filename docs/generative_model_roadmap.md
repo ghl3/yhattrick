@@ -7,6 +7,10 @@ independently by whoever picks it up; file/function references are current as of
 change (July 2026). Rank reflects value-per-effort toward the product goal: **interpretable
 per-player features that power player cards**.
 
+This is the *forward* backlog. What has already been tried, shipped, or reverted — with the numbers
+and lessons — lives in the append-only [experiment log](generative_model_experiments.md); read it
+before re-running anything that looks like a dead end.
+
 **Design principle (user-set, applies to every item):** player cards are **broad latent qualities we
 isolate** (Scoring, Playmaking, Defense, Finishing, …), not restatements of countable stats. Observed
 events are *evidence that grounds a quality*, never a card: assists ground Playmaking, blocked shots
@@ -173,12 +177,18 @@ and GA/60 −0.50. Investigating the clash surfaced three distinct issues:
   adding a shooter-relative `sit` column at the next stints regeneration.
 
 ### 5e. `create` identifiability for low-linemate-variation players (the Kapanen class)
-**Status: open, root-cause understood, first experiment specified.** Motivating case: Oliver Kapanen
-(MTL, 8482775) reads worst-in-league WAR (−1.32) despite 22 goals; a four-model comparison agreed his
-defense is bad but split hard on EV-offense credit (E-H +6.5/+7.0 GAR and actual WAR +0.1; us and
-hockeyviz harsh). His EV offense collapses because his `create` is fit at −0.109 — below both the
-forward mean (+0.28) and replacement (+0.088). See `docs/notes/2026-07-03-assist-role-negative-result.md`
-(the reverted fix) and `docs/notes/2026-07-03-war-case-studies.md`.
+**Status: levers 1 (EV `anchor_scale`) and 3 (position-mean prior) validated + shipped 2026-07;
+Kapanen resolved to ≈ neutral.** Motivating case: Oliver Kapanen (MTL, 8482775) read worst-in-league
+WAR (−1.32) despite 22 goals; a four-model comparison agreed his defense is bad but split hard on
+EV-offense credit (E-H +6.5/+7.0 GAR and actual WAR +0.1; us and hockeyviz harsh). His EV offense
+collapsed because his `create` was fit at −0.109 — below both the forward mean and replacement
+(+0.088). Two shipped changes closed it: EV `anchor_scale = 0.25` (lever 1) moved him to −0.059, then
+the position-mean `create` prior (lever 3) moved him to **−0.007 (playmaking ≈ 0)** — no longer an
+offense-suppressor, matching the four-model consensus (bad defense, roughly neutral offense). Both were
+selected/validated by held-out prediction, not by fitting Kapanen. See
+`docs/generative_model_experiments.md` for the full A/B numbers, and
+`docs/notes/2026-07-03-assist-role-negative-result.md` (the reverted fix) and
+`docs/notes/2026-07-03-war-case-studies.md`.
 
 **Why `create` goes far-negative for these players (mechanism, confirmed).** `create` does double duty:
 (i) a multiplicative lift on teammates' shot RATE (identified only by seeing a player with *varied*
@@ -233,26 +243,42 @@ collapsed 0.142→0.077 because the role prior was *looser* than create's and st
 centered at 0 there is no single global `role_sd` that both helps Kapanen and stays stable — and
 re-centering (the escape) is uniform-dead per above. So re-running this family is not expected to work.
 
-**Candidate levers, ranked (only the first is not a re-run):**
-1. **Global EV `anchor_scale` (do this first — cheap, and the one genuinely different lever).** Reuse
-   the existing per-bucket anchor-weight plumbing (`ma_anchor_scale`, applied at ~1932) but expose it
-   for the EV bucket, selected by held-out validation like the MA hyperparameters (item 5c / §7).
-   Lowering it loosens the anchor's grip so a collinear finisher's relative `create` relaxes toward the
-   population center instead of being dragged below by assist share. It does not add a per-player
-   parameter and does not depend on the prior center. Cost is real: it discards genuine assist
-   information for players who need it, so it is a global bias/variance trade, not a free win — decide
-   by held-out likelihood, not by whether it fixes Kapanen. **First experiment:** sweep EV
-   `anchor_scale ∈ {1.0, 0.5, 0.25}`; success = Kapanen moves toward average AND well-identified
-   forwards stay put (corr(create old,new) ~0.99, spread preserved) AND held-out create-side tm-corr
-   does not regress. The θ̂ checkpoint chain makes the sweep cheap.
+**Candidate levers, ranked:**
+1. **Global EV `anchor_scale` — ✅ VALIDATED + SHIPPED (2026-07), EV `anchor_scale = 0.25`.** Exposed
+   `ev_anchor_scale` through the same plumbing as `ma_anchor_scale` (`fit_all` / `run` / both CLIs /
+   the holdout harness). The held-out sweep (train ≤2024 → 2025, confirmed on ≤2023 → 2024) selected
+   0.25 on the create-side teammate-shots track — model doc §7 "EV anchor sweep". **The result
+   overturned the pre-registered success criterion, and that is the lesson: this item predicted
+   success = "well-identified forwards stay put (corr ~0.99, spread preserved)". That is WRONG.** In
+   sample, lowering the anchor compressed forward `create` spread (std 0.13 → 0.08) and moved
+   well-identified forwards (corr 0.88 at ×0.25) — which looked like signal destruction and matched the
+   `assist_role` spread-collapse fingerprint. But the direct held-out measurement says the opposite:
+   teammate-shots corr *rose* 0.657 → 0.690 (and 0.620 → 0.687 on 2024, where the full-weight model had
+   *underperformed* naive counting), own-shots corr and row deviance improved too. The compression was
+   shed OVERFITTING, not lost signal: the assist anchor at full weight was cramming assist-role into
+   `create`. **Methodological takeaway for every future lever here: judge by held-out prediction
+   (tm-corr / deviance), never by in-sample invariance against the current fit — the current fit is the
+   thing under suspicion.** Below ×0.1 the anchor loses its grip (`create`'s held-out block flips sign),
+   so 0.25 is a genuine interior optimum, not "less is always more". γ_create 0.90 → 0.83 (still above
+   the accepted MA 0.78).
 2. **Better grounding data (item 18, pass-tracking) — the real fix.** The anchor is sparse (goals only)
    AND role-biased (passer credited, finisher not). Grounding `create` on the last pass before EVERY
    shot (~16× more labels, not goal/role-conditioned) removes both defects and drops the `spg` IPW.
    Data-limited: not in the NHL public feed. This is the principled resolution; everything else is a
    workaround.
-3. **Position-mean create prior + a sum-to-zero / constrained role term.** Untested and not a pure
-   no-op (unlike uniform), but carries the self-defeating tension above; only a refit settles it. Lower
-   priority than (1).
+3. **Position-mean create prior — ✅ VALIDATED + SHIPPED (2026-07), `create_prior_center=position-mean`.**
+   The rate level ridge shrinks first states toward the F/D raw-state mean (F +0.174, D −0.308) instead
+   of 0, so a weakly-identified forward defaults to the forward baseline, not to "suppresses offense".
+   Non-uniform (F/D differ), so identified — confirmed not a gauge no-op. Two-pass (fit at 0 with
+   `skip_se` → measure means → refit centered); the center is a fixed constant so SE curvature is
+   unchanged. Held-out: tm-corr 0.690→0.719 (2025) / 0.687→0.705 (2024), ev:create γ 0.83→0.94 / 0.86→0.95.
+   In-sample: well-identified invariant (corr 0.9989 — a clean prior change, the correct check here since
+   this changes the prior not the likelihood), Kapanen −0.059→−0.007. **A predicted-marginal fix that
+   the data showed was a clear win** — a systematically-off level hurts calibration across the whole
+   distribution, not just the tail. **This also unblocks a separated create/role decomposition**: the
+   reverted `assist_role` died because the prior was centered at 0; that prerequisite is now in place, so
+   the role term (a per-player offset inside the anchor/`pi` only, tight/sum-to-zero prior) is worth a
+   held-out-gated re-try — the note's self-defeating tension may be resolved now.
 4. **Honest fallback (item 14 + #5 bootstrap CIs).** Flag low-linemate-variation players
    ("context-dependent") and widen their WAR CI so an unidentified number is not shown as precise. Does
    not fix the point estimate; it stops overstating it. Cheapest correct thing if (1) and (2) stall.

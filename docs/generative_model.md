@@ -391,9 +391,12 @@ EV `pi` uses that season's create states). Stage 3 uses neither, so it is indepe
   `pi = softmax([create_0, create_T])`. We only observe a shot's creator on the ~1-in-16 Fenwick shots
   that are goals, so weighting each observed goal-creator by `spg` (≈ shots per goal ≈ 1/goal-rate,
   computed per bucket from the data) makes it stand in for the shots whose creator we never see — an
-  **inverse-probability weight, not a free knob** (`--spg-scale` exists to *check* sensitivity, A3).
-  Without it the dense counts identify `create` only as a possession/volume effect; with it `create`
-  is pulled toward the players actually credited with setups. Goals whose assister is not an on-ice
+  **inverse-probability weight** (`--spg-scale` exists to *check* IPW sensitivity, A3). On top of the
+  IPW, a held-out-selected **anchor weight** (EV and PP both ×0.25, §7) discounts the assist evidence
+  because a credited assist reflects puck-role as much as creation — the A1 analogue of the A2 mixture
+  share `q`. Without any anchor the dense counts identify `create` only as a possession/volume effect;
+  with it `create` is pulled toward the players actually credited with setups, but only as far as
+  held-out prediction supports (over-anchoring overfits role, §7). Goals whose assister is not an on-ice
   teammate are excluded from the anchor. **Secondary assists** join as an exploded-logit second
   ranking stage: with A1's column masked, the recorded A2 is scored as
   `P(A2=c₂) = q·softmax(create_{T\c₁})[c₂] + (1−q)/3` — a MIXTURE whose share
@@ -437,7 +440,10 @@ EV `pi` uses that season's create states). Stage 3 uses neither, so it is indepe
 **Why `create` is identified.** The rate response is *shooter-specific* (`N_j`), so `shoot_j` loads on
 rows where j shoots and `create_p` loads on rows where p is a *teammate* of the shooter — estimated
 from how much the players around p out-shoot when p is on the ice (lineup variation, **no pass data
-needed**), then *anchored* by the assist-credit so it means creation, not mere possession.
+needed**), then *lightly anchored* by the assist-credit so it leans toward creation rather than mere
+possession. The anchor weight is calibrated (EV ×0.25, §7): the dense lineup channel is the primary
+identifier and over-anchoring overfits assist-role, but the anchor is not zero — removing it entirely
+un-identifies `create` (its held-out block flips sign).
 
 **Standard errors.** The rate stage assembles the exact curvature `H = XᵀWX + K` (K = level ridge + RW
 tridiagonal precision) sparsely, plus the credit Fisher on the create diagonal. When the parameter
@@ -480,30 +486,33 @@ captured constants (slow compile, double memory). Unit gathers are int32. See `_
 Pooled 2021–2025 fit (NB counts, 1,481 players, 4,739 EV player-season states, 21.4M EV rate rows):
 
 - **`create` is well-identified and forward-weighted** — even with the sandwich-corrected SEs (F1),
-  the last-state leaderboard runs z up to ~9 (Pastrnak +0.76 ±0.16): Pastrnak, Scheifele, Barkov,
-  Bedard, Kucherov, Crosby, Marner, Tkachuk — recognized setup men, no defenseman over-representation.
-  Both halves matter: the dense volume signal captures the unobserved passing the assists miss, and
-  the credit anchor keeps the metric pointed at genuine creation rather than raw possession.
+  the last-state leaderboard runs z up to ~11 (Kucherov +0.48): Crosby, Kucherov, Hagel, Scheifele,
+  MacKinnon, McCann — recognized setup men, no defenseman over-representation.
+  The dense volume signal (how much a player's linemates shoot with him on the ice) is the primary
+  identifier; the assist anchor at its calibrated EV weight (EV sweep above) sharpens the within-unit
+  ordering without overfitting who-gets-credited. Pure distributors top the board and shooter-
+  playmakers like Pastrnak settle just below them — an ordering that predicts held-out teammate shots
+  better than the old assist-heavy one.
 - **Finishing identifies under pooling + position/age baselines.** 39/1040 eligible clear `|z|>2`
   (single-season: ~2/633), and the leaderboard is the canonical elite-finisher list — Tage Thompson,
   Draisaitl, Panarin, Marner, Forsberg, Ovechkin (z 2.5–5.1). The A2 position offsets matter here:
   without them, the D calibration offset (compensating the a>1 slope on low-xG point shots) was
   absorbed into individual defensemen's `fin`.
-- **`qcreate` (position-level, A1) is significant and interpretable:** F −0.094 ±0.015, D −0.393
-  ±0.042 — assisted chances are slightly less dangerous than unassisted ones when set up by a forward,
+- **`qcreate` (position-level, A1) is significant and interpretable:** F −0.097 ±0.015, D −0.401
+  ±0.041 — assisted chances are slightly less dangerous than unassisted ones when set up by a forward,
   and much less dangerous when set up by a defenseman (point-shot/perimeter feeds). This is priced
   into every player's playmaking value by position.
 - **Trajectories read like careers, not noise.** Per-season effective states move 0.02–0.2/season
-  under the RW prior: Pastrnak's `create` climbs 0.35→0.76 across 2021–25 (his real shooter→dual-threat
-  evolution), Bedard jumps in year 3, Suzuki rises steadily, Crosby holds ~0.55 with a gentle age-38
-  dip, Ovechkin's `shoot` is flat at 40.
+  under the RW prior: Pastrnak's `create` rises across 2021–25 to +0.38 (his shooter→dual-threat
+  evolution), Bedard jumps in year 3, Suzuki rises steadily, Crosby holds near +0.44 into his late
+  30s, Ovechkin's `shoot` is flat at 40.
 - **Aging curves are gentle once position and level are controlled** — a few % per decade-z on the
   log scale. The finishing curve peaks young (~23 F) and declines, consistent with the shooting-talent
   literature; the EV shoot curve peaks later (~28) than raw-data curves suggest — the survivor-bias
   flattening documented in §3c. Read the curves as league-composition aging, not within-player decline.
 - **Goals and shots reconcile.** `Σp=Σgoals` exact overall and per season (26,809 EV; per-season
-  6,599–6,994 all exact); PPC: EV shots within 0.04%, EV goals within 0.4%, PP goals +2.5% (sim high —
-  watch item). The NB count model matches the per-row overdispersion (r≈1.4 EV, 18 MA).
+  6,599–6,994 all exact); PPC: EV shots within 0.08%, EV goals within 0.5%, PP goals +1.4% (sim high —
+  watch item). The NB count model matches the per-row overdispersion (r≈1.4 EV, 20 MA).
 - **Projections are face-valid:** the 2026 board is the current elite with small age adjustments —
   young players tick up (Guenther, Gauthier), older players tick down, no wild extrapolations (the RW
   mean holds states; only ages move).
@@ -564,16 +573,17 @@ fitted contribution and everything else is held at training values. γ = 1 ⇔ t
 spread predicts next season at face value. γ < 1 has two causes and only one is a defect:
 (a) genuine year-over-year skill drift attenuates any one-step forecast (the RW_SD values imply a
 ceiling ≈ 0.9 for EV shoot/create, lower for def), and (b) within-season **misallocation** —
-spread the data never identified. The EV blocks sit on their drift ceilings (0.94 / 0.90 / 0.80);
+spread the data never identified. The EV blocks sit near their drift ceilings (shoot/create/def
+0.95 / 0.94 / 0.81 at the selected anchor + position-mean prior);
 PP create at the default settings sat at **0.31** — the fixed-unit residual-sink problem (§8):
 on five-man units that never change, shot counts pin only the unit's creation SUM, the assist
 anchor splits it, and PP assists are ROLE (who touches the puck last), not creation. Assist-light
 net-front players absorb the negative residual of their anchored teammates.
 
 The fix is in the fit: the MA bucket's anchor weight and create/def priors became hyperparameters
-selected BY this harness (γ toward the EV ceiling, subject to held-out MA deviance not degrading;
-EV settings untouched). The sweep (train ≤2024 → score 2025; warm-started via the holdout θ̂
-chain, ~15–45 min per candidate):
+selected BY this harness (γ toward the EV ceiling, subject to held-out MA deviance not degrading).
+The EV anchor is selected the same way (next subsection). The sweep (train ≤2024 → score 2025;
+warm-started via the holdout θ̂ chain, ~15–45 min per candidate):
 
 | MA anchor | create prior | def prior | γ shoot | γ create | γ def | MA dev/1k | Σμ/ΣN |
 |---|---|---|---|---|---|---|---|
@@ -595,6 +605,52 @@ every axis simultaneously — honesty and prediction were not in tension. Escala
 sweep can't reach the ceiling: a separate per-player assist-style offset in the MA anchor
 (decoupling "last passer" from "chance creator"). Slopes land in
 `data/models/holdout_calibration*.json`; the WAR audit reports them alongside the card numbers.
+
+### EV anchor sweep — the same lever, EV bucket (2026-07)
+
+γ alone hid an EV problem the ranking metric exposes. At full anchor weight EV `create` sat right
+on its calibration ceiling (γ_create ≈ 0.90), which reads as healthy — but the held-out **teammate-
+shots correlation** (does a player's `create` predict how much his linemates actually shoot next
+season) was only 0.657, barely above the naive last-season-rates bar (0.612), and on the 2024 target
+the full-weight model (0.620) *underperformed* naive counting (0.639). γ measures whether the fitted
+scale is calibrated; it does not measure whether the ranking is right. The assist anchor at full
+weight was overfitting assist-ROLE (who gets credited) into `create`, inflating its spread with
+information that does not generalize — the same defect as the PP bucket, milder because EV linemate
+mixing gives the volume channel real independent signal. The EV anchor is selected by the harness
+just like MA (train ≤2024 → score 2025; the create-side teammate-shots track is the criterion):
+
+| EV anchor | tm-corr | tm-MAE | own corr | dev/1k | γ create |
+|---|---|---|---|---|---|
+| ×1.0 (old default) | 0.657 | 3.41 | 0.837 | 126.75 | 0.90 |
+| ×0.5 | 0.679 | 2.89 | 0.852 | 126.43 | 0.89 |
+| **×0.25 (selected)** | **0.690** | 2.67 | 0.859 | 126.27 | 0.83 |
+| ×0.1 | 0.687 | 2.57 | 0.860 | 126.18 | 0.58 |
+| ×0.0 (anchor off) | 0.646 | 2.74 | 0.852 | 126.24 | 0.98 |
+
+tm-corr peaks at ×0.25 and the improvement holds on the independent 2024 target (×1.0 → ×0.25 lifts
+tm-corr 0.620 → 0.687). Turning the anchor fully off is worse: below ~0.1 `create` loses its grip and
+its held-out block contribution flips sign — the anchor carries real signal, it was just massively
+over-weighted. ×0.25 keeps near-peak prediction with a healthy γ (0.83, above the accepted MA 0.78)
+and is the shipped EV default. The population effect: forward `create` spread tightens (std 0.13 →
+0.08) and negative-`create` forwards drop from 2.6% to 0.8% — the compression is shed overfitting,
+not lost signal, since it *raises* held-out prediction. It also relaxes the Kapanen-class drag
+(§5e / roadmap): a finisher glued to an elite distributor moves toward replacement rather than being
+dragged below it.
+
+### Position-mean `create` prior (2026-07)
+
+The level ridge on the first `create` state shrinks toward the F/D **position mean** (forwards +0.174,
+defensemen −0.308), not toward 0 — so a weakly-identified forward defaults to the forward baseline
+rather than to "suppresses offense". Set by `create_prior_center=position-mean` (the default), computed
+two-pass (fit at 0, measure the raw-state means, refit centered). The center is a fixed constant, so the
+level stays pinned and the SE curvature is unchanged. Because the F/D means differ, the shift is
+non-uniform and data-identified (a uniform re-center would be a gauge no-op). Held-out it improves
+every axis on two target years — tm-corr 0.690 → 0.719 (2025) / 0.687 → 0.705 (2024) and **ev:create γ
+0.83 → 0.94** — and in-sample it is a clean prior change: well-identified forwards are invariant
+(corr 0.9989), spread preserved, negative-`create` forwards drop to 0.2%. It closes the residual
+Kapanen-class drag (Kapanen −0.059 → −0.007, playmaking ≈ 0). The correct validation here is
+well-identified invariance (a prior change should leave likelihood-pinned players put), the *opposite*
+of the anchor-weight check above (a likelihood change) — a distinction worth keeping straight.
 
 ---
 
@@ -709,7 +765,7 @@ shots whose creator is unobserved" (inverse-probability weighting).
 
 | Bucket | Value | Provenance |
 |---|---|---|
-| EV | shots-per-goal, data-derived each fit (≈ 16.5) | data; full weight validated — adding anchor signal (A2) improved held-out teammate rates, and γ_create ≈ 0.90 = the drift ceiling |
+| EV | shots-per-goal × **0.25** (≈ 4.1) | **validated** (2026-07 sweep, §7): at full weight the anchor overfit assist-role — held-out teammate-shots corr 0.657, barely over naive 0.612 (and under it in 2024); ×0.25 lifts it to 0.690 on two target years. Below ×0.1 create loses identification |
 | PP/PK | shots-per-goal × **0.25** (≈ 2.6) | **validated** (2026-07 sweep): PP assists are role-censored, so each carries far less creation information; γ_create 0.31 → 0.75 with held-out PP deviance improving |
 | `--spg-scale` | 1.0 | CLI multiplier for A3 sensitivity checks only |
 
@@ -718,7 +774,8 @@ shots whose creator is unobserved" (inverse-probability weighting).
 | Constant | Value | Scale | Controls | Provenance |
 |---|---|---|---|---|
 | `PRIOR_SD_SHOOT` | 0.30 | log shot rate | `shoot_j` and (EV) `def_d` spread | hand-set; EV γ_shoot 0.94 ≈ ceiling |
-| `PRIOR_SD_CREATE` | 0.12 | log rate (per-teammate) | EV `create_p` spread | hand-set; EV γ_create 0.90 ≈ ceiling |
+| `PRIOR_SD_CREATE` | 0.12 | log rate (per-teammate) | EV `create_p` spread | hand-set; EV γ_create 0.94 with the position-mean prior (§7) |
+| EV create prior CENTER | **position-mean** | log rate | ridge target for EV `create` — F +0.174 / D −0.308, not 0 | **validated** (2026-07, §7): held-out tm-corr + γ improve on two years; well-identified players invariant |
 | MA create prior | **0.04** | log rate | PP `create_p` spread | **validated** (sweep; fixed units can't identify a wider individual spread) |
 | MA def prior | **0.10** | log rate | PK `def_d` spread | **validated** (sweep: restores γ_def to 0.74 ≈ the EV-def ceiling after the create cap pushed unit residual into def; best held-out PP deviance) |
 | `PRIOR_SD_QSHOOT` | 0.20 | logit xG | `qshoot_j` / `qdef_d` spread | hand-set |
