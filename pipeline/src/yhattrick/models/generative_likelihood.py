@@ -43,6 +43,7 @@ PRIOR_SD_CREATE = 0.12  # create_p — per-teammate lift; tighter (noisier high-
 #   curbs high-minute pull on the shared teammate-shot volume)
 PRIOR_SD_QSHOOT = 0.20  # qshoot_j / qdef_d on the logit-xG scale
 PRIOR_SD_QCREATE = 0.25  # qcreate_c — danger the single (latent) creator adds
+PRIOR_SD_QCREATE_PL = 0.08  # create_qual (per-player on-ice xG lift) — tight: each loads on 4× rows
 # The conversion-stage prior SDs (fin, gsave) are NOT hand-set: a pre-calculation stage estimates the
 # per-player TALENT SD from the data each fit (empirical Bayes; see estimate_conversion_prior_sds) and
 # feeds it in as the ridge prior. These two constants are only the FALLBACK values used when too few
@@ -193,16 +194,25 @@ class RateLayout:
 
 @dataclass(frozen=True)
 class QualLayout:
-    """Quality fit θ = [mq | qshoot(P) | qcreate(2) | qdef(P) | beta(k) | arena(n_ar)]. qcreate is a
-    position-level pair [F, D]."""
+    """Quality fit θ = [mq | qshoot(P) | qcreate(2) | qdef(P) | create_qual(P?) | beta(k) | arena].
+    qcreate is a position-level pair [F, D]. `create_qual` (present iff `has_cq`) is a
+    per-player on-ice creation-QUALITY block: each teammate on the ice lifts the shot's xG, mirroring
+    how `create` lifts the shot RATE in Stage 1 — a dense RAPM-on-quality signal (every shot, no
+    creator marginalization). Width 0 when off, so the layout degenerates exactly to the position-pair
+    model."""
 
     P: int
     k: int
     n_ar: int = 0
+    has_cq: bool = False
+
+    @property
+    def _ncq(self) -> int:
+        return self.P if self.has_cq else 0
 
     @property
     def n_theta(self) -> int:
-        return 3 + 2 * self.P + self.k + self.n_ar
+        return 3 + 2 * self.P + self._ncq + self.k + self.n_ar
 
     @property
     def mq(self) -> int:
@@ -221,12 +231,17 @@ class QualLayout:
         return slice(3 + self.P, 3 + 2 * self.P)
 
     @property
+    def create_qual(self) -> slice:
+        return slice(3 + 2 * self.P, 3 + 2 * self.P + self._ncq)
+
+    @property
     def beta(self) -> slice:
-        return slice(3 + 2 * self.P, 3 + 2 * self.P + self.k)
+        return slice(3 + 2 * self.P + self._ncq, 3 + 2 * self.P + self._ncq + self.k)
 
     @property
     def arena(self) -> slice:
-        return slice(3 + 2 * self.P + self.k, 3 + 2 * self.P + self.k + self.n_ar)
+        b = 3 + 2 * self.P + self._ncq + self.k
+        return slice(b, b + self.n_ar)
 
 
 @dataclass(frozen=True)
@@ -409,6 +424,7 @@ class QualHypers:
     lqd: float
     la_ar: float
     lrw_ar: float
+    lcq: float = 0.0  # create_qual ridge precision (0 when the block is off)
 
 
 def make_rate_nll(lay: RateLayout, h: RateHypers, arena_rw, create_center=None):
@@ -510,17 +526,21 @@ def make_quality_nll(lay: QualLayout, h: QualHypers, arena_rw):
     goals and marginalized over the FIXED creator distribution pi otherwise + ridge/arena penalties.
     `arena_rw` = (a_ep, a_en, a_iw). Returns nll(th, *data)."""
     n_ar = lay.n_ar
+    has_cq = lay.has_cq
     has_ar_rw = h.has_ar_rw
-    lqs, lqc, lqd = h.lqs, h.lqc, h.lqd
+    lqs, lqc, lqd, lcq = h.lqs, h.lqc, h.lqd, h.lcq
     la_ar, lrw_ar = h.la_ar, h.lrw_ar
     a_ep, a_en, a_iw = arena_rw
 
-    def split(th):  # [mq | qshoot(P) | qcreate(2) | qdef(P) | beta(k) | arena]
+    def split(th):  # [mq | qshoot(P) | qcreate(2) | qdef(P) | create_qual(P?) | beta(k) | arena]
         return th[lay.mq], th[lay.qshoot], th[lay.qcreate], th[lay.qdef], th[lay.beta]
 
     def nll(th, sh_i, tm_i, tp_i, df_i, dm, X, xg, obs, cidx, pi, acl):
         mq, qs, qc, qd, b = split(th)
         base = mq + qs[sh_i] + jnp.sum(qd[df_i] * dm, 1) + X @ b
+        if has_cq:  # each on-ice teammate lifts the shot's xG (dense RAPM-on-quality)
+            cq = th[lay.create_qual]
+            base = base + jnp.sum(cq[tm_i], 1)
         if n_ar:  # venue location-bias offset (−1 = ref)
             arq = th[lay.arena]
             base = base + jnp.where(acl >= 0, arq[jnp.clip(acl, 0, None)], 0.0)
@@ -536,6 +556,8 @@ def make_quality_nll(lay: QualLayout, h: QualHypers, arena_rw):
         marg = jnp.sum(pi * sig5, axis=1)  # latent: marginalize over FIXED pi
         ll = jnp.where(obs, fb(gs), fb(marg))
         pen = 0.5 * (lqs * jnp.sum(qs**2) + lqc * jnp.sum(qc**2) + lqd * jnp.sum(qd**2))
+        if has_cq:  # create_qual EB ridge (tight — 4× on-ice leverage)
+            pen = pen + 0.5 * lcq * jnp.sum(cq**2)
         if n_ar:  # arena nuisance prior: ridge + season RW
             pen += 0.5 * la_ar * jnp.sum(arq**2)
             if has_ar_rw:

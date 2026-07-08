@@ -462,6 +462,287 @@ def evaluate(
     return out
 
 
+# ══ go/no-go: does per-player creation QUALITY (create_qual) beat the position pair? ══════════════
+# The rate harness above tests the create VOLUME half (teammate-shots track). This tests the QUALITY
+# half: a per-player on-ice xG lift `cq[p]` (dense RAPM-on-quality — every shot p is on the ice for
+# is worth +cq[p] logit-xG) vs the model's fallback of one lift per POSITION (qcreate_{F,D}). Both
+# candidates come from ONE create_qual=True fit and differ ONLY in that channel (per-player cq vs its
+# F/D mean), exactly as the rate track derives all candidates from one fit. Prediction is the on-ice
+# level sigmoid(base): the sparse creator-credit bump (the qc mixture) is a shared nuisance that would
+# need projected anchor states, so it is dropped from BOTH sides to isolate the dense cq channel and
+# keep the A/B fair. Aggregation is per-player teammate xG-per-shot over held-out EV shots where the
+# player is an on-ice non-shooter (the create side), mirroring the rate track's teammate-shots read.
+MIN_TMSHOTS_EVAL = 400  # ≥ this many held-out EV teammate-shots to enter the quality gate table
+
+
+def _fit_quality_gate_side(train, train_through, target, count_model, ma_kwargs):
+    """Fit the model WITH per-player create_qual on the training seasons and reduce it to the slim
+    quality-scoring inputs (cached npz). Also caches the naive teammate-xG bar: each player's mean
+    on-ice teammate xG in the final training season (the model-free 'use last year' read)."""
+    M = G.fit_all(
+        train,
+        count_model=count_model,
+        create_qual=True,
+        warm=True,
+        save_ckpt=True,
+        # per-train_through checkpoint: each split keeps its OWN chain so a fit never warm-starts
+        # from one that saw its held-out target (the 2021-24 fit must not seed the 2021-23 → 2024 split)
+        ckpt_path=C.MODELS / f"holdout_cq_ckpt_{train_through}.npz",
+        **ma_kwargs,
+    )
+    q = M["qual"]
+    players = np.asarray(M["players"], dtype=np.int64)
+    isD = np.asarray(M["agepos"]["isD"], dtype=bool)
+    # naive bar: per-player mean on-ice teammate xG in the final training season (EV only)
+    idx_tr = {int(p): i for i, p in enumerate(players)}
+    Qtr = D.quality_creator_rows([train_through], idx_tr, G.ALL_STRENGTHS, M["agepos"], arenas=False)
+    ev = Qtr["strength"] == 0
+    P = len(players)
+    xg_tr = _sigmoid_np(Qtr["y"][ev])
+    naive_sum = np.zeros(P)
+    naive_cnt = np.zeros(P)
+    tmi = Qtr["team_idx"][ev]
+    for t in range(tmi.shape[1]):
+        np.add.at(naive_sum, tmi[:, t], xg_tr)
+        np.add.at(naive_cnt, tmi[:, t], 1.0)
+    ts = {
+        "players": players,
+        "isD": isD,
+        "mq": np.float64(q["intercept"]),
+        "qshoot": np.asarray(q["qshoot"], dtype=np.float64),
+        "qcreate": np.asarray(q["qcreate"], dtype=np.float64),
+        "qdef": np.asarray(q["qdef"], dtype=np.float64),
+        "create_qual": np.asarray(q["create_qual"], dtype=np.float64),
+        "beta": np.asarray(q["beta"], dtype=np.float64),
+        "ctx_names": np.array(q["ctx_names"]),
+        "naive_tmxg": np.where(naive_cnt > 0, naive_sum / np.maximum(naive_cnt, 1.0), np.nan),
+        "naive_cnt": naive_cnt,
+        "train": np.array(train, dtype=np.int64),
+        "train_through": np.int64(train_through),
+    }
+    path = C.MODELS / f"qgate_fit_{train_through}.npz"
+    C.MODELS.mkdir(parents=True, exist_ok=True)
+    np.savez(path, **ts)
+    print(f"[qgate] training side cached -> {path.name}")
+    return ts
+
+
+def _sigmoid_np(x):
+    return 1.0 / (1.0 + np.exp(-x))
+
+
+def quality_gate(
+    train_through,
+    target=None,
+    count_model="nb",
+    rescore=False,
+    ma_anchor_scale=0.25,
+    ma_create_prior_sd=0.04,
+    ma_def_prior_sd=0.10,
+    ev_anchor_scale=0.25,
+    create_prior_center="position-mean",
+):
+    """Held-out go/no-go for the per-player creation-quality parameter: ship create_qual only if the
+    per-player candidate beats the position-level pair at predicting held-out teammate xG."""
+    sd = C.PROCESSED / "shots_onice"
+    avail = sorted(int(f.stem) for f in sd.glob("*.parquet")) if sd.exists() else []
+    train = [s for s in avail if s <= train_through]
+    target = target or train_through + 1
+    if target not in avail:
+        raise SystemExit(f"target season {target} not in processed data {avail}")
+    ma_kwargs = dict(
+        ma_anchor_scale=ma_anchor_scale,
+        ma_create_prior_sd=ma_create_prior_sd,
+        ma_def_prior_sd=ma_def_prior_sd,
+        ev_anchor_scale=ev_anchor_scale,
+        create_prior_center=create_prior_center,
+    )
+    cache = C.MODELS / f"qgate_fit_{train_through}.npz"
+    if rescore and cache.exists():
+        print(f"[qgate] rescoring from {cache.name}")
+        z = np.load(cache, allow_pickle=False)
+        ts = {k: z[k] for k in z.files}
+    else:
+        print(f"[qgate] train {train} → target {target} — fitting create_qual=True …")
+        ts = _fit_quality_gate_side(train, train_through, target, count_model, ma_kwargs)
+
+    players_t = ts["players"]
+    idx_t = {int(p): i for i, p in enumerate(players_t)}
+    isD_t = ts["isD"].astype(bool)
+    cq_t = ts["create_qual"]
+    # position means of the fitted cq (the position-level counterfactual): trained players only
+    muF = float(cq_t[~isD_t].mean())
+    muD = float(cq_t[isD_t].mean())
+    print(f"[qgate] fitted create_qual: F mean {muF:+.4f} std {cq_t[~isD_t].std():.4f}  "
+          f"D mean {muD:+.4f} std {cq_t[isD_t].std():.4f}")
+
+    # held-out quality rows on the target's own player index (rookies at the position mean)
+    players_h, idx_h = D.player_index([target])
+    agepos_h = D._age_position(players_h, [target])
+    isD_h = np.asarray(agepos_h["isD"], dtype=bool)
+    Qh = D.quality_creator_rows([target], idx_h, G.ALL_STRENGTHS, agepos_h, arenas=False)
+    ev = Qh["strength"] == 0  # EV only: the 5v5 chance-creation signal (matches the rate track)
+    Ph = len(players_h)
+    seen = np.array([int(p) in idx_t for p in players_h])
+    print(f"[qgate] target EV shots {int(ev.sum()):,}  players {Ph} ({int(seen.sum())} seen)")
+
+    def to_hold(vec_t, fill_pos=False):
+        """Map a train-index vector onto the held-out player index; unseen → position mean (fill_pos)
+        or 0."""
+        out = np.where(isD_h, muD, muF) if fill_pos else np.zeros(Ph)
+        for i, p in enumerate(players_h):
+            j = idx_t.get(int(p))
+            if j is not None:
+                out[i] = vec_t[j]
+        return out
+
+    qshoot_h = to_hold(ts["qshoot"])
+    qdef_h = to_hold(ts["qdef"])
+    cq_pp = to_hold(cq_t, fill_pos=True)  # per-player candidate (unseen → position mean)
+    cq_pos = np.where(isD_h, muD, muF)  # position-level candidate: every player at his F/D mean
+
+    # context by NAME (quality per-player params carry no curves, so apply ALL matched columns
+    # + the final-training-season league nowcast), on EV rows only
+    cmt = G._coef_map([str(n) for n in ts["ctx_names"]], ts["beta"])
+    nowcast = cmt.get(f"season_{int(ts['train_through'])}", 0.0)
+    ctx = np.full(int(ev.sum()), nowcast)
+    for j, nm in enumerate(Qh["ctx_names"]):
+        if nm in cmt:
+            ctx = ctx + cmt[nm] * Qh["Xctx"][ev, j]
+
+    sh_i = Qh["shooter_idx"][ev]
+    tm_i = Qh["team_idx"][ev]
+    df_i = Qh["def_idx"][ev]
+    dm = Qh["def_mask"][ev]
+    obs_xg = _sigmoid_np(Qh["y"][ev])
+    base0 = float(ts["mq"]) + qshoot_h[sh_i] + (qdef_h[df_i] * dm).sum(1) + ctx  # shared, no cq
+
+    # observed per-player teammate xG (the create side: mean xG of shots the player is on ice for
+    # but did not take) + shot weight
+    obs_sum = np.zeros(Ph)
+    cnt = np.zeros(Ph)
+    for t in range(tm_i.shape[1]):
+        np.add.at(obs_sum, tm_i[:, t], obs_xg)
+        np.add.at(cnt, tm_i[:, t], 1.0)
+    obs_tmxg = np.where(cnt > 0, obs_sum / np.maximum(cnt, 1.0), 0.0)
+    elig = seen & (cnt >= MIN_TMSHOTS_EVAL)
+    w = cnt
+    print(f"[qgate] eligible (seen + ≥{MIN_TMSHOTS_EVAL} EV teammate-shots): {int(elig.sum())}")
+
+    def pred_player(cq_h):
+        """Per-player predicted teammate xG-per-shot under an on-ice cq vector."""
+        px = _sigmoid_np(base0 + cq_h[tm_i].sum(1))
+        s = np.zeros(Ph)
+        for t in range(tm_i.shape[1]):
+            np.add.at(s, tm_i[:, t], px)
+        return np.where(cnt > 0, s / np.maximum(cnt, 1.0), 0.0), px
+
+    pp_pred, pp_px = pred_player(cq_pp)  # per-player candidate
+    pos_pred, pos_px = pred_player(cq_pos)  # position-level candidate
+
+    def rowdev(px):  # per-1k fractional-Bernoulli deviance (per-shot honesty check)
+        d = -2.0 * np.sum(obs_xg * np.log(px + 1e-9) + (1 - obs_xg) * np.log(1 - px + 1e-9))
+        return float(d) / len(obs_xg) * 1000.0
+
+    def _wcorr(pred, m):
+        return wpearson(pred[m], obs_tmxg[m], w[m])
+
+    res = {
+        "per-player": {
+            "tmxg_corr": _wcorr(pp_pred, elig),
+            "tmxg_mae": wmae(pp_pred[elig], obs_tmxg[elig], w[elig]),
+            "row_dev_per_1k": rowdev(pp_px),
+        },
+        "position-level": {
+            "tmxg_corr": _wcorr(pos_pred, elig),
+            "tmxg_mae": wmae(pos_pred[elig], obs_tmxg[elig], w[elig]),
+            "row_dev_per_1k": rowdev(pos_px),
+        },
+    }
+
+    # naive bar: last training season's per-player teammate xG predicts the target's
+    naive_h = to_hold(np.where(np.isnan(ts["naive_tmxg"]), 0.0, ts["naive_tmxg"]))
+    naive_ok = elig & (to_hold(ts["naive_cnt"]) >= MIN_TMSHOTS_EVAL)
+    res["naive_last_season"] = {
+        "tmxg_corr": (_wcorr(naive_h, naive_ok) if naive_ok.sum() > 2 else float("nan")),
+        "tmxg_mae": (wmae(naive_h[naive_ok], obs_tmxg[naive_ok], w[naive_ok]) if naive_ok.any() else float("nan")),
+        "n": int(naive_ok.sum()),
+    }
+
+    # honesty check: does a player's OWN fitted cq predict his observed teammate-xg deviation out of
+    # sample? This is the clean, MEAN-CENTERED calibration — corr of the own-cq deviation (from the
+    # position mean) with the observed teammate-xg deviation (from the position-level prediction).
+    # It isolates the per-player creation signal from the linemate-clustering confound that pollutes
+    # a prediction-space slope, and — being centered — is immune to the level offset from omitting the
+    # shared qc creator bump. > 0 ⇔ the signal is directionally real; ≈ 0 ⇔ noise / linemate-only.
+    ei = np.flatnonzero(elig)
+    own_dev = (cq_pp - cq_pos)[ei]  # player's own cq minus his position mean
+    obs_dev = (obs_tmxg - pos_pred)[ei]  # observed teammate-xg minus the position-level prediction
+    own_cal_corr = wpearson(own_dev, obs_dev, w[ei])
+    # informational: mean-centered slope of the observed deviation on the cq-driven prediction
+    # deviation (honest magnitude read; a level offset from the dropped qc bump makes it noisy, so it
+    # is reported, not gated)
+    dpred = (pp_pred - pos_pred)[ei]
+    ww = w[ei] / w[ei].sum()
+    mdp, mdo = float(np.sum(ww * dpred)), float(np.sum(ww * obs_dev))
+    cal_slope = float(
+        np.sum(ww * (dpred - mdp) * (obs_dev - mdo)) / max(np.sum(ww * (dpred - mdp) ** 2), 1e-12)
+    )
+
+    # noise-robust verdict: a paired bootstrap over eligible players. A bare Δcorr>0 rubber-stamps
+    # noise (a random cq clears it ~half the time); require the improvement to survive resampling.
+    B, ne = 2000, len(ei)
+    rng = np.random.RandomState(12345)
+    dboot = np.empty(B)
+    for b in range(B):
+        j = ei[rng.randint(0, ne, ne)]  # resample eligible players with replacement
+        dboot[b] = wpearson(pp_pred[j], obs_tmxg[j], w[j]) - wpearson(pos_pred[j], obs_tmxg[j], w[j])
+    p_boot = float(np.mean(dboot > 0))
+    lo, hi = float(np.percentile(dboot, 5)), float(np.percentile(dboot, 95))
+    dcorr = res["per-player"]["tmxg_corr"] - res["position-level"]["tmxg_corr"]
+    # PASS iff the per-player rank edge is real (survives resampling) AND the own-cq signal is
+    # directionally honest (not a linemate-clustering mirage)
+    verdict = "PASS" if (p_boot >= 0.95 and lo > 0 and own_cal_corr > 0.15) else "FAIL"
+    res["own_cal_corr"] = own_cal_corr
+    res["cal_slope"] = cal_slope
+
+    print(f"\n{'candidate':16s} {'tmxg-corr':>10s} {'tmxg-MAE':>9s} {'row-dev/1k':>11s}")
+    for name in ("position-level", "per-player", "naive_last_season"):
+        r = res[name]
+        rd = f"{r['row_dev_per_1k']:11.3f}" if "row_dev_per_1k" in r else f"{'—':>11s}"
+        print(f"{name:16s} {r['tmxg_corr']:10.3f} {r['tmxg_mae']:9.4f} {rd}")
+    print(
+        f"\n[qgate] Δcorr(per-player − position) = {dcorr:+.4f}  "
+        f"bootstrap 90% CI [{lo:+.4f}, {hi:+.4f}]  P(per-player wins) = {p_boot:.3f}"
+    )
+    print(
+        f"[qgate] own-cq calibration corr = {own_cal_corr:+.3f} (>.15 ⇒ signal real)  "
+        f"centered slope = {cal_slope:+.3f}"
+    )
+    print(f"[qgate] GATE: {verdict}  (PASS ⇔ CI-low > 0, P(win) ≥ .95, own-cq corr > .15)")
+
+    out = {
+        "train": [int(s) for s in ts["train"]],
+        "target": int(target),
+        "count_model": count_model,
+        "n_eligible": int(elig.sum()),
+        "min_tmshots": MIN_TMSHOTS_EVAL,
+        "cq_std_F": float(cq_t[~isD_t].std()),
+        "cq_std_D": float(cq_t[isD_t].std()),
+        "candidates": res,
+        "delta_corr": dcorr,
+        "boot_ci90": [lo, hi],
+        "boot_p_win": p_boot,
+        "own_cal_corr": own_cal_corr,
+        "cal_slope": cal_slope,
+        "verdict": verdict,
+    }
+    path = C.MODELS / f"qgate_{target}.json"
+    path.write_text(json.dumps(out, indent=1))
+    print(f"  -> {path}")
+    return out
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="Held-out-season predictive harness (generative model)")
     p.add_argument("--train-through", type=int, default=2024, help="last training season")
@@ -503,7 +784,21 @@ def main(argv=None):
         default=None,
         help="sweep candidate: re-center the EV create ridge on the F/D position mean (§5e lever 3)",
     )
+    p.add_argument(
+        "--quality-gate",
+        action="store_true",
+        help="go/no-go: does per-player create_qual beat the position pair at predicting held-out "
+        "teammate xG? (fits create_qual=True; uses the production MA/EV anchor settings)",
+    )
     args = p.parse_args(argv)
+    if args.quality_gate:
+        quality_gate(
+            args.train_through,
+            args.target,
+            count_model=args.count,
+            rescore=args.rescore,
+        )
+        return
     evaluate(
         args.train_through,
         args.target,

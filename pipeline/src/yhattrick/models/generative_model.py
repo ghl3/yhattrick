@@ -115,6 +115,7 @@ from .generative_likelihood import (
     PRIOR_SD_CREATE,
     PRIOR_SD_QSHOOT,
     PRIOR_SD_QCREATE,
+    PRIOR_SD_QCREATE_PL,
     RW_SD_SHOOT,
     RW_SD_CREATE,
     RW_SD_DEF,
@@ -159,11 +160,11 @@ jax.config.update("jax_enable_x64", True)  # float64: stable optimization + Hess
 # ── fits (JAX autodiff gradient + scipy L-BFGS-B; exact Hessian for SEs) ───────────────────────────
 
 
-def _optimize(nll, x0, *data):
-    """Minimize nll(th, *data) over th (scipy L-BFGS-B; grad via JAX). The big data arrays are passed
-    as ARGUMENTS to the jitted value_and_grad — NOT closed over — so XLA streams them as inputs instead
-    of baking them into the compiled program as multi-GB captured constants (which is slow to compile
-    and doubles memory). Convert once to device arrays here and reuse across iterations."""
+def _optimize(nll, x0, *data, maxiter=1500):
+    """Minimize nll(th, *data) over th (grad via JAX). The big data arrays are passed as ARGUMENTS to
+    the jitted value_and_grad — NOT closed over — so XLA streams them as inputs instead of baking them
+    into the compiled program as multi-GB captured constants (which is slow to compile and doubles
+    memory). Convert once to device arrays here and reuse across iterations."""
     vg = jax.jit(jax.value_and_grad(nll))
     dargs = [jnp.asarray(d) for d in data]
 
@@ -176,7 +177,7 @@ def _optimize(nll, x0, *data):
         x0,
         jac=True,
         method="L-BFGS-B",
-        options={"maxiter": 1500, "maxfun": 1500, "ftol": 1e-10, "gtol": 1e-7},
+        options={"maxiter": maxiter, "maxfun": maxiter, "ftol": 1e-10, "gtol": 1e-7},
     )
 
 
@@ -376,11 +377,16 @@ def _reuse_theta_rate(w, n_th, R, has_a2, nb):
     return np.asarray(w["theta"], dtype=np.float64)
 
 
-def _warm_qual_x0(x0, w, pids, ctx_names, ar_v, ar_s, P, k):
+def _warm_qual_x0(x0, w, pids, ctx_names, ar_v, ar_s, P, k, ncq=0):
     """Map a checkpoint's quality θ onto this fit's layout (players by id, ctx by name, arenas by
-    (venue, season)). Returns the number of players carried."""
+    (venue, season)). Returns the number of players carried. `ncq` = width of THIS fit's create_qual
+    block (0 for the position-pair fit); it shifts the beta/arena WRITE offsets. The checkpoint's own
+    create_qual width is recovered from its θ length, so the two fit variants warm-start from each
+    other cleanly: create_qual is carried by player id when both fits have it, and dropped or started
+    cold otherwise — while beta/arena are always read at the checkpoint's true (o_ncq-shifted) offset."""
     oth = np.asarray(w["theta"], dtype=np.float64)
     oP, ok, onar = len(w["pid"]), int(w["n_ctx"]), len(w["arena_venue"])
+    o_ncq = len(oth) - (3 + 2 * oP + ok + onar)  # checkpoint's create_qual width (0 or oP)
     old = {str(p): j for j, p in enumerate(w["pid"])}
     x0[0] = oth[0]
     hits = 0
@@ -390,19 +396,20 @@ def _warm_qual_x0(x0, w, pids, ctx_names, ar_v, ar_s, P, k):
             hits += 1
             x0[1 + i] = oth[1 + j]  # qshoot
             x0[3 + P + i] = oth[3 + oP + j]  # qdef
+            if ncq and o_ncq:  # carry per-player create_qual only when both fits carry the block
+                x0[3 + 2 * P + i] = oth[3 + 2 * oP + j]
     x0[1 + P : 3 + P] = oth[1 + oP : 3 + oP]  # qcreate position pair
-    oc = {str(nm): float(v) for nm, v in zip(w["ctx_names"], oth[3 + 2 * oP : 3 + 2 * oP + ok])}
+    ob = 3 + 2 * oP + o_ncq  # checkpoint's beta offset (past its own create_qual block)
+    oc = {str(nm): float(v) for nm, v in zip(w["ctx_names"], oth[ob : ob + ok])}
     for j, nm in enumerate(ctx_names or []):
         if nm in oc:
-            x0[3 + 2 * P + j] = oc[nm]
+            x0[3 + 2 * P + ncq + j] = oc[nm]
     oa = {
         (str(v), int(s)): float(x)
-        for v, s, x in zip(
-            w["arena_venue"], w["arena_season"], oth[3 + 2 * oP + ok : 3 + 2 * oP + ok + onar]
-        )
+        for v, s, x in zip(w["arena_venue"], w["arena_season"], oth[ob + ok : ob + ok + onar])
     }
     for j, (v, s) in enumerate(zip(_seq(ar_v), _seq(ar_s))):
-        x0[3 + 2 * P + k + j] = oa.get((str(v), int(s)), 0.0)
+        x0[3 + 2 * P + ncq + k + j] = oa.get((str(v), int(s)), 0.0)
     return hits
 
 
@@ -749,7 +756,7 @@ def fit_rate_create(
     return out
 
 
-def fit_quality_creator(Q, P, creates, isD=None, warm=None, reuse=False, pids=None):
+def fit_quality_creator(Q, P, creates, isD=None, warm=None, reuse=False, pids=None, create_qual=False):
     """QUALITY fit, POOLED across strengths (EV+MA). Estimates one shared set of qshoot/qdef per player
     (danger is an intrinsic, strength-neutral skill — xG already encodes the man-advantage), with the
     strength environment absorbed by a `pp` context column (per-strength intercept). `qcreate` is a
@@ -769,6 +776,7 @@ def fit_quality_creator(Q, P, creates, isD=None, warm=None, reuse=False, pids=No
     )  # col in [unassist, t0..t3]
     obs_np = (cre >= 0) & (Q["goal"] == 1)  # rows with an OBSERVED creator label
     lqs, lqc, lqd = 1 / PRIOR_SD_QSHOOT**2, 1 / PRIOR_SD_QCREATE**2, 1 / PRIOR_SD_QSHOOT**2
+    lcq = (1 / PRIOR_SD_QCREATE_PL**2) if create_qual else 0.0
     strength = Q.get("strength", np.zeros(n, dtype=np.int64))
     dmask = Q.get("def_mask")
     if dmask is None:
@@ -794,14 +802,16 @@ def fit_quality_creator(Q, P, creates, isD=None, warm=None, reuse=False, pids=No
             lg[m] = np.concatenate([np.full((int(m.sum()), 1), psi_s), cr_s[tcols[m]]], 1)
     pi_np = np.exp(lg - lg.max(1, keepdims=True))
     pi_np /= pi_np.sum(1, keepdims=True)
-    lay = QualLayout(P, k, n_ar)
+    lay = QualLayout(P, k, n_ar, has_cq=create_qual)
 
-    hyp = QualHypers(has_ar_rw=has_ar_rw, lqs=lqs, lqc=lqc, lqd=lqd, la_ar=la_ar, lrw_ar=lrw_ar)
+    hyp = QualHypers(
+        has_ar_rw=has_ar_rw, lqs=lqs, lqc=lqc, lqd=lqd, la_ar=la_ar, lrw_ar=lrw_ar, lcq=lcq
+    )
     nll = make_quality_nll(lay, hyp, (a_ep, a_en, a_iw))
 
     x0 = np.zeros(lay.n_theta)
-    if reuse:
-        th = _reuse_theta_qual(warm, len(x0), pids, Q)
+    if reuse:  # reexport: reuse θ̂ iff the checkpoint matches this fit exactly (create_qual width
+        th = _reuse_theta_qual(warm, len(x0), pids, Q)  # included — _reuse_theta_qual enforces it)
         converged, gnorm, nit = bool(warm["converged"]), float(warm["grad_norm"]), 0
     else:
         if warm is not None and pids is not None:
@@ -815,6 +825,7 @@ def fit_quality_creator(Q, P, creates, isD=None, warm=None, reuse=False, pids=No
                     Q.get("arena_season"),
                     P,
                     k,
+                    ncq=lay._ncq,
                 )
                 print(f"    quality warm start: {hits}/{P} players carried from checkpoint")
             except Exception as e:  # a stale checkpoint must never kill a fit
@@ -844,9 +855,12 @@ def fit_quality_creator(Q, P, creates, isD=None, warm=None, reuse=False, pids=No
         th[lay.qdef],
         th[lay.beta],
     )
+    cq = np.asarray(th[lay.create_qual], dtype=np.float64)  # per-player on-ice xG lift (empty if off)
     arq_vec = th[lay.arena]
     # Beta concentration from residual MSE around the fitted mean
     base = mq + qs[Q["shooter_idx"]] + (qd[Q["def_idx"]] * dmask).sum(1) + Q["Xctx"] @ b
+    if create_qual:
+        base = base + cq[Q["team_idx"]].sum(1)
     if n_ar:
         base = base + np.where(acol >= 0, arq_vec[np.clip(acol, 0, None)], 0.0)
     sig5 = np.concatenate([_sigmoid(base)[:, None], _sigmoid(base[:, None] + qc[tpos])], 1)
@@ -876,6 +890,21 @@ def fit_quality_creator(Q, P, creates, isD=None, warm=None, reuse=False, pids=No
     se_qc = (
         np.asarray(warm["se_qcreate"], dtype=np.float64) if reuse else 1.0 / np.sqrt(info_qc + lqc)
     )
+    # per-player on-ice creation-quality SE: same diagonal Gauss-Newton, but each shot's information
+    # accrues to ALL FOUR on-ice teammates (cq lifts the mark whoever created it), not just the
+    # credited creator's position. Observed-creator rows use the creator-column variance; latent rows
+    # the marginal's response to a unit base shift. Info summed → 1/√(info + ridge). Always computed
+    # fresh (a create_qual fit re-optimises even on reexport, so `th` here is the fitted solution).
+    se_cq = None
+    if create_qual:
+        sc0 = sig5[np.arange(n), ci]  # creator-column quality (used on observed-creator rows)
+        d_base = np.where(
+            obs_np, sc0 * (1 - sc0), (pi_np * sig5 * (1 - sig5)).sum(1)
+        )  # ∂fitted/∂(base shift)
+        info_row = d_base**2 / np.clip(fitted * (1 - fitted), 1e-9, None)
+        info_cq = np.zeros(P)
+        np.add.at(info_cq, Q["team_idx"], info_row[:, None])
+        se_cq = 1.0 / np.sqrt(info_cq + lcq)
     n_create = np.zeros(P, dtype=np.int64)
     np.add.at(n_create, cr_pl[is_tm], 1)
     # per-strength quality intercept: EV = mq; PP = mq + (pp-column coefficient, Xctx col 1)
@@ -886,6 +915,8 @@ def fit_quality_creator(Q, P, creates, isD=None, warm=None, reuse=False, pids=No
         "qshoot": qs,
         "qcreate": qc,
         "qdef": qd,
+        "create_qual": cq if create_qual else None,
+        "se_create_qual": se_cq,
         "beta": b,
         "beta_s": s_conc,
         "se_qcreate": se_qc,
@@ -1077,6 +1108,7 @@ def effective_params(rates, qual, conv, players, agepos, last_season, target=Non
         }
     qcm = _coef_map(qual.get("ctx_names"), qual["beta"])
     qc = np.asarray(qual["qcreate"])
+    cq_pl = qual.get("create_qual")  # per-player on-ice xG lift; None when the block is off
     qual_eff = {
         "mu_qual": qual["mu_qual"],
         "beta_s": qual.get("beta_s"),
@@ -1084,6 +1116,7 @@ def effective_params(rates, qual, conv, players, agepos, last_season, target=Non
         "qcreate": qc[isD.astype(np.int64)] if qc.shape == (2,) else qc,  # A1: position pair
         "qcreate_pos": qc if qc.shape == (2,) else None,  # the [F, D] pair (creator classes)
         "qdef": qual["qdef"] + isD * qcm.get("def_D", 0.0),
+        "create_qual": None if cq_pl is None else np.asarray(cq_pl),  # per-player creation quality
     }
     ccm = _coef_map(conv.get("ctx_names"), conv.get("beta", []))
     conv_eff = {
@@ -1192,6 +1225,7 @@ def fit_all(
     ma_def_prior_sd=None,
     ev_anchor_scale=1.0,
     create_prior_center=None,
+    create_qual=False,
 ):
     """Fit every stage on `seasons` and return the raw fit objects — the shared engine behind run()
     (which adds leaderboards, values, PPC, projection, JSON) and the held-out predictive harness
@@ -1372,7 +1406,14 @@ def fit_all(
 
     # pooled quality fit (shared loadings; per-strength intercept; per-row creator dist by strength)
     qual = fit_quality_creator(
-        Q, P, creates, isD=agepos["isD"], warm=_ck_stage(ck, "qual"), reuse=reexport, pids=players
+        Q,
+        P,
+        creates,
+        isD=agepos["isD"],
+        warm=_ck_stage(ck, "qual"),
+        reuse=reexport,
+        pids=players,
+        create_qual=create_qual,
     )
     print(
         f"  quality fit (pooled EV+MA): converged={qual['converged']} |grad|={qual['grad_norm']:.1e} "
