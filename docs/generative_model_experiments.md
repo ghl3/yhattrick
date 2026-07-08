@@ -24,6 +24,46 @@ Entry template:
 
 ---
 
+### 2026-07-08 — Per-player creation QUALITY via the dense teammate-xG channel (`create_qual`) — SHIPPED
+- **Goal / hypothesis:** playmaking has two halves — raising teammates' shot VOLUME (the existing
+  `create`) and their shot QUALITY. Per-player creation quality was thought unidentifiable (~20
+  goal-labeled assists per player, SE ≈ 0.5 vs talent spread ≈ 0.1). But that ceiling is specific to
+  the SPARSE assist-credit channel. The QUALITY mark carries a ~16× denser signal: every on-ice
+  teammate shot has an xG. Mirror the volume-`create` identification on the mark — a per-player on-ice
+  xG lift `create_qual[p]` that raises every shot p is on the ice for (dense RAPM-on-quality), distinct
+  from the position-level creator-credit pair `qcreate_{F,D}`.
+- **What we did:** added an optional per-player `create_qual` block to the quality stage
+  (`base += Σ cq[on-ice teammates]`, tight EB ridge `PRIOR_SD_QCREATE_PL = 0.08`; per-player SEs by
+  diagonal Gauss-Newton, information to all four on-ice teammates). Built a held-out teammate-xG gate
+  (`generative_holdout.quality_gate`): one `create_qual=True` fit → two candidates differing only in
+  the dense channel (per-player `cq` vs its F/D mean); score per-player teammate xG-per-shot on the
+  held-out season; noise-robust paired-bootstrap verdict + a mean-centered own-cq calibration corr.
+  Wired `cq` into the playmaking VALUE (quality half) and into WAR (`war_bucket`: each shooter's
+  goals-per-shot absorbs his teammates' Σcq via a goals-per-shot derivative `gbar_class_deriv`; the
+  replacement swap gains the first-order teammate-quality cross-term). Default ON in the export.
+- **Outcome — gate passes on two independent held-out years, then a clean production ship.**
+  - Gate 2024→2025: teammate-xG corr position 0.692 → per-player **0.760** (Δ+0.068; bootstrap 90% CI
+    [+0.049, +0.089], P(per-player wins) **1.000**); own-cq calibration corr **+0.401**, centered slope
+    +1.049; beats naive last-year (0.730). Gate 2023→2024: 0.728 → **0.793** (Δ+0.064; CI
+    [+0.043, +0.085], P **1.000**); own-cq calibration **+0.402**, slope +1.155.
+  - WAR swap validated to machine precision (**1.9e-17**) against a brute-force per-row recompute
+    (`cq` is linear in the mark, so the linearised cross-term is exact algebra).
+  - Production fit (2021-2025, warm, 1h42): `create_qual` F std 0.020 / D std 0.013 (mean ≈ 0). Top
+    forwards Kucherov/MacKinnon/McDavid (+0.099/+0.099/+0.092); top D Lane Hutson (+0.048); checking
+    forwards negative. Playmaking VALUE gain tracks cq (corr **+0.977**). WAR gain tracks cq (corr
+    **+0.833**): league WAR 1080 → **1119** (+3.4% — a newly-attributed value channel), MacKinnon
+    6.30→7.65, Kucherov 5.07→6.13, McDavid 7.28→8.33; only those three regulars move > 1.0 WAR, no
+    spurious swings. Audit clean: κ 0.951, value scale ×1.06, league calibration +0.8%, reconciliation
+    synergy ×0.97 (the `cq` cross-term adds no reconciliation error — linear ⇒ marginals sum exactly).
+- **Lesson:** the "per-player creation quality is data-blocked" ceiling was about the SPARSE assist
+  channel, not the model — the dense on-ice teammate-xG channel identifies it cleanly, and the signal
+  is stable across years (own-cq calibration +0.401 vs +0.402). Second lesson, methodological: a
+  calibration slope that disagrees with a rock-solid rank/bootstrap result is a red flag on the SLOPE'S
+  CONSTRUCTION first — the initial gate γ was an uncentered regression through a level-offset reference
+  and gave a false −0.218 FAIL; the mean-centered own-cq calibration is the honest metric. Also killed:
+  a Newton-CG solver for the cq block (JAX HVPs) thrashed to 2h22 vs L-BFGS ~40min — L-BFGS stays.
+- **Refs:** model.md §2/§7/§8/§9, roadmap §5f; commit: pending.
+
 ### 2026-07-07 — Position-mean `create` prior (Kapanen-class residual, lever 3) — SHIPPED
 - **Goal / hypothesis:** the EV `create` level ridge shrinks toward 0, but forwards genuinely live
   above 0, so weakly-identified forwards get pulled below their reference class. Re-center the ridge on

@@ -96,17 +96,26 @@ A shot's mean quality (xG) is a shooter/defense/context baseline plus a bump fro
 created the chance. On a goal the creator is observed (the primary assister); otherwise it is latent and
 marginalized over the creator distribution `pi`:
 ```
-base_i = mu_qual + qshoot_j + Σ_{d∈B} qdef_d + beta_qual·x                 # everything but the creator
+base_i = mu_qual + qshoot_j + Σ_{d∈B} qdef_d + beta_qual·x + Σ_{t∈T} create_qual_t   # everything but the creator
 qbar_i = sigmoid( base_i + qcreate_pos(c) )                 if GOAL with an on-ice creator label
        = Σ_{c∈{∅,T}} pi_c · sigmoid( base_i + qcreate_pos(c) )   otherwise — creator latent
    where  pi_c = softmax([ create_0 , create_T ])_c    and   qcreate_∅ = 0   (unassisted adds no bump)
 ```
-`qcreate_pos(c)` is **position-level** — one scalar for F, one for D — not per-player: a typical player
-is the observed primary creator on only ~20 goals even pooled, far too few for a per-player danger
-offset (§8), so the danger a creator adds is pooled to his position and **every remaining parameter is
-one the data can actually estimate**. Goals whose credited assister is *not* an on-ice teammate (data
-glitch, goalie assist) keep a latent creator — they are marginalized like non-goals and excluded from
-the Stage-1 assist-credit anchor.
+The mark carries **two distinct creation-quality channels**, because a chance can be made more dangerous
+in two ways the data separates cleanly:
+- **`qcreate_pos(c)` — the credited-creator bump, position-level.** One scalar for F, one for D, keyed to
+  the *creator* `c` via the anchor `pi`. It is *sparse*: a typical player is the observed primary creator
+  on only ~20 goals even pooled, far too few for a per-player creator-danger offset (§8), so this bump is
+  pooled to position.
+- **`create_qual_t` — the on-ice creation quality, per-player.** Every on-ice teammate `t` lifts *every*
+  shot's xG by his own `create_qual`, whether or not he is the credited creator (`Σ_{t∈T}` in `base_i`).
+  This is a *dense* RAPM-on-quality effect: every teammate shot has an xG, ~16× the signal of goal-labeled
+  assists, so it identifies a per-player quality skill that the sparse creator channel cannot (§7/§8). It is
+  the quality analog of how volume `create` is identified from on-ice teammate shot *counts*, and carries a
+  tight EB prior (`PRIOR_SD_QCREATE_PL`) since each player loads on 4× the rows.
+
+Goals whose credited assister is *not* an on-ice teammate (data glitch, goalie assist) keep a latent
+creator — they are marginalized like non-goals and excluded from the Stage-1 assist-credit anchor.
 
 The fit maximizes a **fractional-Bernoulli quasi-likelihood** on the xG values
 (`Σ xg·log(qbar) + (1−xg)·log(1−qbar)`) — consistent for the mean under a Beta(s·qbar, s·(1−qbar))
@@ -200,7 +209,8 @@ conversion stage carries none — location bias flows through the recorded xG it
 | `create_0` | rate | **unassisted** creator propensity (the `∅` candidate in `pi`); a single global scalar |
 | `def_d[s]` | rate | opponent shot-rate suppression (`<0` good); per-season STATE at EV |
 | `qshoot_j` | quality | danger of j's own shots |
-| `qcreate_{F,D}` | quality | danger a creator adds — **position-level** (2 params; per-player is unidentifiable, §8) |
+| `qcreate_{F,D}` | quality | danger a *credited creator* adds — **position-level**, sparse assist channel (2 params; per-player is unidentifiable, §8) |
+| `create_qual_p` | quality | **on-ice creation quality** — danger p adds to *every* teammate shot he is on the ice for (per-player; dense teammate-xG channel, §7/§8) |
 | `qdef_d` | quality | opponent danger suppression (`<0` good) |
 | `fin_j` | conversion | finishing above xG on own shots (logit offset; fit natively) |
 | `gsave_g` | conversion | goalie saves above expected (logit offset, `<0` good; per goalie `g`) |
@@ -255,7 +265,8 @@ reference-season environment:
 q_own_j(c)    = sigmoid(mu_qual + qshoot_j + qcreate_pos(c))                    # mean xG per own shot, by CREATOR CLASS c
 ḡ_j           = Σ_c π_c · E[ sigmoid(a·logit(x)+b+fin_j) ],  x ~ Beta(s·q_own_j(c), s·(1−q_own_j(c)))
 scoring(j)    = exp(mu_rate+shoot_j) · ḡ_j                                                          # own shots, CONVERTED
-playmaking(p) = N_TM · exp(mu_rate) · (exp(create_p) − 1) · sigmoid(mu_qual + qcreate_pos(p))       # teammate xG added
+playmaking(p) = N_TM · exp(mu_rate) · [ (exp(create_p) − 1) · sigmoid(mu_qual + qcreate_pos(p))          # teammate xG added:
+              + exp(create_p) · (sigmoid(mu_qual+qcreate_pos(p)+create_qual_p) − sigmoid(mu_qual+qcreate_pos(p))) ]  #   VOLUME + QUALITY
 defense(d)    = N_DEF · [ exp(mu_rate)·sigmoid(mu_qual) − exp(mu_rate+def_d)·sigmoid(mu_qual+qdef_d) ]  # opp xG suppressed
 creator_share(p) = exp(create_p) / ( exp(create_0) + exp(create_p) + (N_TM−1) )                    # per-teammate-shot
 ```
@@ -272,6 +283,11 @@ asserts this; a residual is a modeling finding, not a knob).
 Computed **per strength** with that bucket's rate loadings + intercepts and the pooled
 quality/finishing loadings: EV → `ev_scoring/playmaking/defense` (`N_DEF=5`); MA → `pp_scoring/
 pp_playmaking` and `pk_defense` (`N_DEF=4`; the MA `def` loadings are the penalty-killers).
+**Playmaking is the sum of two halves.** The VOLUME half prices the *extra* shots p causes his teammates
+to take (`exp(create_p)−1`) at their danger; the QUALITY half prices p's on-ice `create_qual` lift applied
+to *all* the teammate shots he is on the ice for (`exp(create_p)`). Two equal-volume creators now separate
+by whether one sets up tap-ins and the other point shots. `player_values` also exposes the quality half
+alone as `playmaking_quality` (0 when `create_qual` is off).
 **Units note:** `scoring` is conversion-adjusted (goals/60) while `playmaking` and `defense` are xG/60 —
 the same convention as the production cards; keep the units straight when comparing across cards.
 Defense `>0` = suppresses (good).
@@ -502,6 +518,20 @@ Pooled 2021–2025 fit (NB counts, 1,481 players, 4,739 EV player-season states,
   ±0.041 — assisted chances are slightly less dangerous than unassisted ones when set up by a forward,
   and much less dangerous when set up by a defenseman (point-shot/perimeter feeds). This is priced
   into every player's playmaking value by position.
+- **`create_qual` (per-player on-ice creation quality) identifies from the dense channel and predicts
+  out of sample.** Spread F std 0.020 / D std 0.013 (logit-xG). The leaderboard is the recognized
+  chance-creation elite — Kucherov, MacKinnon, McDavid, Pastrnak (F); Lane Hutson, Karlsson, Bouchard
+  (D) — distinct from volume `create` (corr ≈ +0.31, so it is a *separate* skill, not a relabel). The
+  held-out teammate-xG gate (`generative_holdout.quality_gate`) is the go/no-go: the per-player lift
+  beats the position pair at predicting the next season's teammate xG-per-shot on **two** independent
+  target years — corr 0.692→0.760 (2025) and 0.728→0.793 (2024), both bootstrap P(win)=1.000 — with an
+  own-cq calibration corr of **+0.40 in both years** and a centered slope ≈ 1 (the spread predicts at
+  face value, and beats naive last-season teammate-xG). It flows into playmaking value (the QUALITY
+  half, §2) and into WAR (each shooter's goals-per-shot absorbs his teammates' Σ`create_qual`): the WAR
+  gain tracks `cq` (corr +0.83), lifting the elite creators (MacKinnon +1.35, Kucherov +1.06, McDavid
+  +1.05 WAR — the only three regulars moving >1.0) while league WAR rises modestly (1080→1119) as a
+  previously-unattributed value channel; κ, value scale, calibration, and the reconciliation synergy
+  are all undisturbed.
 - **Trajectories read like careers, not noise.** Per-season effective states move 0.02–0.2/season
   under the RW prior: Pastrnak's `create` rises across 2021–25 to +0.38 (his shooter→dual-threat
   evolution), Bedard jumps in year 3, Suzuki rises steadily, Crosby holds near +0.44 into his late
@@ -654,25 +684,31 @@ of the anchor-weight check above (a likelihood change) — a distinction worth k
 
 ---
 
-## 8. Resolved problem — per-player `qcreate`; open threads
+## 8. Per-player creation quality — the sparse channel vs the dense channel
 
-Earlier versions carried a per-player `qcreate_p` (danger a player adds *when he is the creator*). It
-**did not identify**: essentially no player cleared `|z|>2`, SEs sat at the prior SD, and the estimate
-shrank to the prior for everyone. The cause is structural — a typical player is the observed primary
-setup man on only **~17–26 goals even across several pooled seasons**, far too few events for a
-per-player offset on setup danger; non-goal shots contribute little because the creator is latent
-there.
+Per-player creation quality lives on two different data channels, and only one of them identifies it.
 
-**Resolution (A1):** `qcreate` is now a **position-level pair** — the danger an F/D creator adds — so
-playmaking = `create` volume × position-typical setup danger, and no unidentifiable per-player
-parameters remain in the model. If per-player creation *quality* is ever revisited, the denser route
-is an on-ice teammate-xG-per-shot lift (RAPM-style on the quality scale), not the creator-latent
-mixture.
+**The sparse channel (credited creator) does NOT identify per-player.** Earlier versions carried a
+per-player `qcreate_p` (danger a player adds *when he is the credited creator*). It **did not identify**:
+essentially no player cleared `|z|>2`, SEs sat at the prior SD, and the estimate shrank to the prior for
+everyone. The cause is structural — a typical player is the observed primary setup man on only
+**~17–26 goals even across several pooled seasons**, far too few events for a per-player offset; non-goal
+shots contribute little because the creator is latent there. So the credited-creator bump `qcreate` is a
+**position-level pair** (A1), the danger an F/D creator adds.
+
+**The dense channel (on-ice teammate xG) DOES identify per-player — `create_qual`.** Every on-ice
+teammate shot has an xG, ~16× the signal of goal-labeled assists. Adding a per-player on-ice xG lift
+`create_qual_p` to the mark's `base` (§2) — the quality analog of how volume `create` is identified from
+on-ice shot *counts* — recovers a per-player creation-quality skill that the sparse channel cannot. It is
+held-out validated: on two independent target years, the per-player lift beats the position pair at
+predicting held-out teammate xG-per-shot (corr 0.692→0.760 and 0.728→0.793, both bootstrap-certain), with
+an own-cq calibration corr of +0.40 in *both* years (§7). So per-player creation quality is now a real,
+shipped skill — sourced from the dense channel, not the creator-latent mixture the sparse route offered.
 
 **Open threads.** (a) The Stage-2 goal-selection bias (approximation 4, §5). (b) Whether the non-goal
-marginal can be made more informative (weighting it when `pi` concentrates). (c) Whether "danger per
-setup" is separable from shooter + location at all on this data. (d) EB estimation of the RW drift
-SDs. (e) Card-level CIs by parametric bootstrap through `player_values` (sample from the Laplace
+marginal can be made more informative (weighting it when `pi` concentrates). (c) Whether the sparse
+credited-creator danger is separable from shooter + location at all on this data. (d) EB estimation of the
+RW drift SDs. (e) Card-level CIs by parametric bootstrap through `player_values` (sample from the Laplace
 posteriors — the natural payoff of a generative model).
 
 **The full ranked improvement backlog** — including unused data sources (secondary assists,
@@ -779,7 +815,8 @@ shots whose creator is unobserved" (inverse-probability weighting).
 | MA create prior | **0.04** | log rate | PP `create_p` spread | **validated** (sweep; fixed units can't identify a wider individual spread) |
 | MA def prior | **0.10** | log rate | PK `def_d` spread | **validated** (sweep: restores γ_def to 0.74 ≈ the EV-def ceiling after the create cap pushed unit residual into def; best held-out PP deviance) |
 | `PRIOR_SD_QSHOOT` | 0.20 | logit xG | `qshoot_j` / `qdef_d` spread | hand-set |
-| `PRIOR_SD_QCREATE` | 0.25 | logit xG | `qcreate` (position pair) spread | hand-set (identification resolved at position level, §8) |
+| `PRIOR_SD_QCREATE` | 0.25 | logit xG | `qcreate` (position pair, credited creator) spread | hand-set (identification resolved at position level, §8) |
+| `PRIOR_SD_QCREATE_PL` | 0.08 | logit xG | per-player `create_qual` (on-ice creation quality) spread | hand-set tight (dense channel — each player loads on 4× the rows); held-out gate confirms the spread predicts at face value (§7/§8) |
 
 **Conversion priors (data — estimated every fit, then held fixed during it)**
 

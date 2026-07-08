@@ -293,6 +293,23 @@ the real two-failure-mode harness (`scratchpad/validate_assist_role.py` pattern)
 (feature-based `qcreate`), 14 (lineup-diversity diagnostic), 18 (pass tracking), and the 5c PP escalation
 note (same anchor split, PP flavor).
 
+### 5f. Per-player creation QUALITY via the dense on-ice channel — ✅ SHIPPED (2026-07)
+**Status: shipped.** Playmaking's quality half is now per-player, not position-level. The insight: the
+per-player creation-quality ceiling (roadmap #13/#18 below) is a property of the SPARSE assist-credit
+channel (~20 goal-labeled setups/player), NOT of the model. The QUALITY mark carries a ~16× denser
+signal — every on-ice teammate shot has an xG — so a per-player on-ice xG lift `create_qual[p]`
+(`base += Σ cq[on-ice teammates]`, the quality analog of how volume `create` reads on-ice shot counts)
+identifies what the creator-latent mixture cannot. Held-out validated by a teammate-xG gate
+(`generative_holdout.quality_gate`): the per-player lift beats the position pair at predicting next
+season's teammate xG-per-shot on two independent target years (corr 0.692→0.760 / 0.728→0.793, both
+bootstrap-certain; own-cq calibration +0.40 both years). Wired into playmaking value (quality half) and
+WAR (each shooter's goals-per-shot absorbs his teammates' Σcq; the replacement swap gains the first-order
+teammate-quality cross-term). Elite creators separate on it (Kucherov/MacKinnon/McDavid top; distinct
+from volume `create` at corr ≈ 0.31). This is what items 13 and 18 reserved for a feature-γ compromise or
+external pass data — delivered from data already in hand. See `generative_model.md` §2/§7/§8 and the
+experiment log (2026-07-08). Pass tracking (#18) would still SHARPEN it (per-shot creator attribution,
+not just on-ice presence), so #18 stays open as a refinement rather than the only route.
+
 ## Tier 2 — valuable, after Tier 1
 
 ### 6. Stage-2 goal-selection reweighting
@@ -341,8 +358,10 @@ loop in `_shooter_counts`. Do before/with item 7.
 
 ## Tier 3 — opportunistic
 
-- **13. Feature-based `qcreate`** — the identifiable middle ground between the position pair and a
-  (hopeless) per-player parameter: `qcreate(c) = position_c + γ·x_c` with 2–3 GLOBAL coefficients
+- **13. Feature-based `qcreate`** — *largely superseded by `create_qual` (§5f), which identifies a full
+  per-player quality skill from the dense on-ice channel; keep only as a possible refinement of the
+  sparse credited-creator bump.* The identifiable middle ground between the position pair and a
+  (once-thought-hopeless) per-player parameter: `qcreate(c) = position_c + γ·x_c` with 2–3 GLOBAL coefficients
   on observable creator features (e.g., mean xG of the shots he's credited with assisting, or his
   setup-location profile). Every labeled goal informs γ, so it fits today's data; creation quality
   then varies across players exactly as far as evidence supports. Rationale: per-player `qcreate`
@@ -358,10 +377,12 @@ loop in `_shooter_counts`. Do before/with item 7.
   offsets (LD/RD, off-wing one-timers). Marginal until the bigger signals land.
 - **17. Empty-net / extra-attacker bucket** — 6v5/5v6 currently excluded; could become a third
   strength bucket like MA. Small.
-- **18. Pass-tracking / NHL EDGE data (external)** — the only route to a real per-player
-  creation-quality (`qcreate`), i.e. upgrading Playmaking's quality half. Mechanism: the last pass
-  before EVERY shot is an "assist on a shot that wasn't a goal" — ~16× more creator labels — and the
-  shot's xG is the outcome that identifies per-player setup danger. Everything upgrades in place:
+- **18. Pass-tracking / NHL EDGE data (external)** — sharpens per-player creation-quality from ON-ICE
+  presence (`create_qual`, shipped §5f) to CREDITED-per-shot: the dense on-ice channel already gives a
+  per-player quality skill, but it attributes to whoever is on the ice, not specifically to the setup
+  man. Pass tracking closes that gap. Mechanism: the last pass before EVERY shot is an "assist on a shot
+  that wasn't a goal" — ~16× more creator labels — and the shot's xG identifies per-player setup danger
+  at the credited-creator level. Everything upgrades in place:
   labels replace the latent-creator marginalization row-by-row (the `obs` mask in
   `fit_quality_creator` already supports mixed labeled/unlabeled rows, so PARTIAL game coverage —
   e.g. manually-tracked samples — works with zero structural change); the assist-credit anchor drops
@@ -380,9 +401,11 @@ loop in `_shooter_counts`. Do before/with item 7.
   stay interpretable.
 - **Per-player parametric aging curves:** dominated by the RW drift states, which capture atypical
   trajectories without assuming they're age-shaped.
-- **Per-player `qcreate` on current data:** structurally unidentifiable (~20 observed setups/player);
-  resolved as position-level (A1). Only pass/tracking data (item 18) reopens this — or, partially,
-  the feature-based γ compromise (item 13).
+- **Per-player `qcreate` (CREDITED-creator danger) on current data:** structurally unidentifiable
+  (~20 observed setups/player); resolved as position-level (A1). Note this is the SPARSE assist channel
+  only — per-player creation *quality* IS identified on the DENSE on-ice teammate-xG channel
+  (`create_qual`, shipped §5f). Pass/tracking data (item 18) would reopen the credited-creator level
+  specifically; the feature-based γ compromise (item 13) is now largely superseded by `create_qual`.
 
 ---
 
