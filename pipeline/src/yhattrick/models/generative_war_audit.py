@@ -148,8 +148,18 @@ def run_audit(season=None, fit_path=None):
         rgcl = GC.gbar_classes(fit, key, r_qs, r_fin, season=S)
         rp["g0"], rp["gF"], rp["gD"] = rgcl
         rp["kq"] = _sigmoid(mq + r_qd) / max(_sigmoid(mq), GC.EPS)
+        # per-player on-ice creation quality: the actual world carries each shooter's teammate-Σ(cq)
+        # lift; the all-replacement world (E_atk_repl below) has none, so bucket_E stays at cq=None
+        cq = t["create_qual"] if np.any(t["create_qual"]) else None
+        gcl_d = None
+        if cq is not None:
+            gcl_d = GC.gbar_class_deriv(fit, key, t["qshoot_eff"], fin_s, season=S)
+            rp["g0_d"], rp["gF_d"], rp["gD_d"] = GC.gbar_class_deriv(fit, key, r_qs, r_fin, season=S)
+            rp["cq"] = np.zeros(n)
 
-        ga, gdd, E = GC.war_bucket(r, n, sh, cr, df_, gcl, kq, r["gsave"], cx, rp, psi0, t["isD"])
+        ga, gdd, E = GC.war_bucket(
+            r, n, sh, cr, df_, gcl, kq, r["gsave"], cx, rp, psi0, t["isD"], cq=cq, gcl_d=gcl_d
+        )
         war_p += ga + gdd
         E_tot[key] = float(E.sum())
         if key == "ev":

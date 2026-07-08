@@ -175,6 +175,7 @@ def player_table(fit):
         "ev_create_se",
         "qshoot",
         "qdef",
+        "create_qual",  # per-player on-ice creation quality (0 when absent)
         "fin",
         "fin_se",
     ):
@@ -218,6 +219,16 @@ def gbar_classes(fit, key, qshoot_eff, fin_eff, season=None):
         qb = np.clip(_sigmoid(mq + qshoot_eff + qc), EPS, 1 - EPS)
         out.append(marginal_goal_prob(qb, s, a, b, fin_eff))
     return out
+
+
+def gbar_class_deriv(fit, key, qshoot_eff, fin_eff, season=None, h=1e-3):
+    """d(goals-per-shot)/d(logit-xg) per creator class — the local response to the per-player on-ice
+    create_qual lift, which enters the mark's logit exactly like a shift in qshoot. Central finite
+    difference on gbar_classes; used to apply each shooter's teammate-Σ(create_qual) lift (and its
+    swap cross-term) linearly inside war_bucket. cq ≈ 0.01–0.1 logit, so the O(cq²) error is <1%."""
+    gp = gbar_classes(fit, key, qshoot_eff + h, fin_eff, season)
+    gm = gbar_classes(fit, key, qshoot_eff - h, fin_eff, season)
+    return [(a2 - b2) / (2.0 * h) for a2, b2 in zip(gp, gm)]
 
 
 def values_at(fit, t, key, sh, cr, df, fin_eff, n_def):
@@ -321,11 +332,12 @@ def war_rows(seasons, idx):
     return out
 
 
-def bucket_E(rows, sh, cr, df, gcl, kq, cx, psi0, isD, gsave=None):
+def bucket_E(rows, sh, cr, df, gcl, kq, cx, psi0, isD, gsave=None, cq=None, gcl_d=None):
     """E[GF] per side-row under the given parameter arrays — the same equation war_bucket uses
     for its base world (creator-marginalized ḡ per shooter from the row's actual teammates,
     goalie tilt, defenders' K_B). Exposed for the WAR audit's joint (whole-team) counterfactuals:
-    pass replacement arrays to price an all-replacement attack."""
+    pass replacement arrays to price an all-replacement attack. `cq`/`gcl_d` apply the per-player
+    creation-quality lift (Σ teammate create_qual on each shooter's mark, linearised)."""
     A, B, dm = rows["atk"], rows["def"], rows["dmask"]
     gs = rows["gsave"] if gsave is None else gsave
     g0, gF, gD = gcl
@@ -335,13 +347,19 @@ def bucket_E(rows, sh, cr, df, gcl, kq, cx, psi0, isD, gsave=None):
     S_k = e_cr.sum(1)[:, None] - e_cr
     SF_k = (e_cr * fmask).sum(1)[:, None] - e_cr * fmask
     SD_k = S_k - SF_k
-    gbar = (p0 * g0[A] + SF_k * gF[A] + SD_k * gD[A]) / (p0 + S_k)
+    Z = p0 + S_k
+    gbar = (p0 * g0[A] + SF_k * gF[A] + SD_k * gD[A]) / Z
+    if cq is not None and gcl_d is not None:  # teammate create_qual lift (linearised)
+        g0d, gFd, gDd = gcl_d
+        cqA = cq[A]
+        delta = cqA.sum(1)[:, None] - cqA
+        gbar = gbar + (p0 * g0d[A] + SF_k * gFd[A] + SD_k * gDd[A]) / Z * delta
     tj = np.exp(sh[A] - cr[A]) * gbar * np.exp((1.0 - g0[A]) * gs[:, None])
     lKB = (np.log(np.clip(kq[B], EPS, None)) * dm).sum(1)
     return cx * np.exp(cr[A].sum(1) + (df[B] * dm).sum(1) + lKB) * tj.sum(1) * rows["dur"] / 3600.0
 
 
-def war_bucket(rows, P, sh, cr, df, gcl, kq, gsave, cx, repl, psi0, isD):
+def war_bucket(rows, P, sh, cr, df, gcl, kq, gsave, cx, repl, psi0, isD, cq=None, gcl_d=None):
     """GAR per player for ONE (season, bucket)'s stint-side rows — closed-form replacement swaps.
 
     Per side-row: E[GF]/h = cx·e^{Σcr_A}·e^{Σdf_B·mask}·K_B·Σ_j e^{sh_j − cr_j}·ḡ_j(row), where
@@ -349,13 +367,15 @@ def war_bucket(rows, P, sh, cr, df, gcl, kq, gsave, cx, repl, psi0, isD):
     creator distribution π = softmax([ψ₀, create of j's four actual teammates]) with the three
     creator-class conversions `gcl` = (g0, gF, gD) (each already a Beta-marginal, see
     gbar_classes), tilted log-linearly for the row's goalie (·e^{(1−ḡ)·gsave}); K_B = Π_d κ_d.
-    Each attacker slot's swap perturbs the shared e^{Σcr} and his own term (his teammates' creator
-    mixes are held fixed — a second-order cross term); each defender slot's swap perturbs e^{Σdf}
-    and K_B. `repl` = per-player replacement arrays (sh, cr, df, g0, gF, gD, kq — each player's
-    value = his position's CONTEXT-MATCHED archetype: EV band for EV, PP band for attack slots,
-    PK band for defender slots). Returns (gar_atk, gar_def, E): per-player goals vs replacement
-    (attack/defense booked separately: EV takes both; MA books attack=PP, defense=PK) and the
-    per-row expected goals (the audit's raw material)."""
+    Each attacker slot's swap perturbs the shared e^{Σcr} and his own term. Per-player creation
+    QUALITY (`cq` = create_qual) lifts each shooter's mark logit by Σ(cq of his on-ice teammates),
+    so a swap ALSO shifts the four teammates' ḡ — a first-order cross term (applied
+    linearly via `gcl_d` = d ḡ/d logit-xg per class, plus `repl["g0_d"/"gF_d"/"gD_d"]` for the swapped
+    slot's own lift). Held fixed (cq off) this reduces exactly to the position-quality WAR. `repl` =
+    per-player replacement arrays (sh, cr, df, g0, gF, gD, kq — each player's value = his position's
+    CONTEXT-MATCHED archetype: EV band for EV, PP band for attack slots, PK band for defender slots).
+    Returns (gar_atk, gar_def, E): per-player goals vs replacement (attack/defense booked separately:
+    EV takes both; MA books attack=PP, defense=PK) and the per-row expected goals (audit raw material)."""
     A, B, dm = rows["atk"], rows["def"], rows["dmask"]
     hrs = rows["dur"] / 3600.0
     gs = rows["gsave"]  # per-row goalie gsave (n,)
@@ -371,19 +391,43 @@ def war_bucket(rows, P, sh, cr, df, gcl, kq, gsave, cx, repl, psi0, isD):
     SF_k = (e_cr * fmask).sum(1)[:, None] - e_cr * fmask
     SD_k = S_k - SF_k
     Z = p0 + S_k
-    gbar = (p0 * g0[A] + SF_k * gF[A] + SD_k * gD[A]) / Z  # (n,5) creator-marginal ḡ per shooter
+    gbar0 = (p0 * g0[A] + SF_k * gF[A] + SD_k * gD[A]) / Z  # (n,5) creator-marginal ḡ per shooter
+    # each shooter's teammate-Σ(create_qual) lifts his mark; ḡ shifts by ḡ' · δ (linear)
+    use_cq = cq is not None and gcl_d is not None
+    if use_cq:
+        g0d, gFd, gDd = gcl_d
+        cqA = cq[A]  # (n,5)
+        delta = cqA.sum(1)[:, None] - cqA  # (n,5) each shooter's on-ice-teammate create_qual sum
+        gbar_d = (p0 * g0d[A] + SF_k * gFd[A] + SD_k * gDd[A]) / Z  # dḡ/d(logit) per shooter (n,5)
+        gbar = gbar0 + gbar_d * delta
+        # u_k = sensitivity of shooter k's term to a unit lift in his teammates' cq (for cross term)
+        uterm = np.exp(sh[A] - cr[A]) * gbar_d * np.exp((1.0 - g0[A]) * gs[:, None])
+        Usum = uterm.sum(1)
+    else:
+        gbar = gbar0
     tj = np.exp(sh[A] - cr[A]) * gbar * np.exp((1.0 - g0[A]) * gs[:, None])
     T = tj.sum(1)
     E = cx * np.exp(crA + dfB + lKB) * T * hrs  # E[GF] per side-row (goals)
     gar_atk, gar_def = np.zeros(P), np.zeros(P)
-    # attacker slots: swap p → repl(pos_p): Σcr shifts by (cr_r − cr_p); own term t_p → t_r
+    # attacker slots: swap p → repl(pos_p): Σcr shifts by (cr_r − cr_p); own term t_p → t_r; and
+    # p's cq change shifts every teammate's ḡ — the Σ_{m≠k} cross term
     for k in range(A.shape[1]):
         p = A[:, k]
         gbar_r = (p0 * repl["g0"][p] + SF_k[:, k] * repl["gF"][p] + SD_k[:, k] * repl["gD"][p]) / Z[
             :, k
         ]
+        cross = 0.0
+        if use_cq:
+            gbar_r_d = (
+                p0 * repl["g0_d"][p] + SF_k[:, k] * repl["gF_d"][p] + SD_k[:, k] * repl["gD_d"][p]
+            ) / Z[:, k]
+            gbar_r = gbar_r + gbar_r_d * delta[:, k]  # swapped shooter keeps his teammates' lift
+            dcq = repl["cq"][p] - cq[p]  # p's own cq change → shifts the OTHER shooters' ḡ
+            cross = dcq * (Usum - uterm[:, k])
         t_r = np.exp(repl["sh"][p] - repl["cr"][p]) * gbar_r * np.exp((1.0 - repl["g0"][p]) * gs)
-        E_swp = cx * np.exp(crA - cr[p] + repl["cr"][p] + dfB + lKB) * (T - tj[:, k] + t_r) * hrs
+        E_swp = (
+            cx * np.exp(crA - cr[p] + repl["cr"][p] + dfB + lKB) * (T - tj[:, k] + t_r + cross) * hrs
+        )
         np.add.at(gar_atk, p, E - E_swp)
     # defender slots: swap d → repl: Σdf shifts, K_B ratio; sign: reducing opp GF is positive GAR
     for k in range(B.shape[1]):
@@ -564,6 +608,14 @@ def build(fit_path=None):
         gcl = gbar_classes(fit, key, t["qshoot_eff"], fin_s, season=s)
         repl["g0"], repl["gF"], repl["gD"] = gbar_classes(fit, key, r_qs, r_fin, season=s)
         repl["kq"] = _sigmoid(mq + r_qd) / max(_sigmoid(mq), EPS)
+        # per-player on-ice creation quality lifts each shooter's teammate-Σ(create_qual); enabled
+        # only when the block is present, so WAR is byte-identical when create_qual is absent
+        cq = t["create_qual"] if np.any(t["create_qual"]) else None
+        gcl_d = None
+        if cq is not None:
+            gcl_d = gbar_class_deriv(fit, key, t["qshoot_eff"], fin_s, season=s)
+            repl["g0_d"], repl["gF_d"], repl["gD_d"] = gbar_class_deriv(fit, key, r_qs, r_fin, season=s)
+            repl["cq"] = np.zeros(n)  # a replacement player adds no creation quality (neutral)
         if key == "ev" and int(s) == last:
             np.add.at(toi_ev_last, r["atk"], np.broadcast_to(r["dur"][:, None], r["atk"].shape))
         ga, gd, _ = war_bucket(
@@ -579,6 +631,8 @@ def build(fit_path=None):
             repl,
             fit["strengths"][key]["psi0"],
             t["isD"],
+            cq=cq,
+            gcl_d=gcl_d,
         )
         if key == "ev":
             gar["ev"] += ga + gd

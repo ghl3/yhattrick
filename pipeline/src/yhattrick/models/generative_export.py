@@ -51,7 +51,8 @@ def player_values(rates, qual, conv, players, isD=None):
     For each strength (rate loadings are per-strength; quality/finishing loadings are POOLED, only the
     intercept splits):
        scoring(j)    = exp(mu_rate+shoot) · ḡ_j                                                   own shots, converted
-       playmaking(p) = N_TM · exp(mu_rate) · (exp(create)−1) · sigmoid(mu_qual+qcreate)           teammate xG added
+       playmaking(p) = N_TM · exp(mu_rate) · [ (exp(create)−1) · sigmoid(mu_qual+qcreate)         teammate xG added:
+                       + exp(create) · (sigmoid(mu_qual+qcreate+create_qual) − sigmoid(mu_qual+qcreate)) ]  volume + quality
        defense(d)    = N_DEF · [exp(mu_rate)·sigmoid(mu_qual) − exp(mu_rate+def)·sigmoid(mu_qual+qdef)]  suppression
     ḡ_j is the model's own goals-per-shot: the conversion curve marginalized over BOTH the fitted
     shot-quality distribution (Beta, concentration beta_s — see marginal_goal_prob) AND the creator
@@ -90,12 +91,24 @@ def player_values(rates, qual, conv, players, isD=None):
             p_own0 = _sigmoid(a * lq + b)
         base = np.exp(ml) * _sigmoid(mq)
         env = float(rate.get("value_env") or 1.0)  # average-environment factor (see
+        # playmaking: teammate xG p adds. Volume = extra shots created × their danger; quality = the
+        # per-player on-ice xG lift create_qual applied to ALL teammate shots p is on ice for
+        # (N_TM·exp(ml)·exp(cr)). The quality half is 0 when create_qual is absent.
+        tm_shots = N_TM * np.exp(ml) * np.exp(cr)  # teammate shots p is on ice for (per 60)
+        pm_vol = env * N_TM * np.exp(ml) * (np.exp(cr) - 1.0) * _sigmoid(mq + qcreate)
+        cq = qual.get("create_qual")
+        if cq is not None:
+            cqv = np.asarray(cq)
+            pm_qual = env * tm_shots * (_sigmoid(mq + qcreate + cqv) - _sigmoid(mq + qcreate))
+        else:
+            pm_qual = np.zeros_like(np.asarray(pm_vol))
         out[key] = {  # value_environment; 1.0 = reference)
             "scoring": env * shots * p_own,  # own shots, converted to goals
             "finishing": env * shots * (p_own - p_own0),  # goals above xG-implied conversion
             "own_xg": env * shots * _sigmoid(mq + qshoot),
             "own_shots": env * shots,
-            "playmaking": env * N_TM * np.exp(ml) * (np.exp(cr) - 1.0) * _sigmoid(mq + qcreate),
+            "playmaking": pm_vol + pm_qual,  # volume + quality
+            "playmaking_quality": pm_qual,  # the create_qual half alone (diagnostic; 0 when absent)
             "defense": env * n_def * (base - np.exp(ml + defn) * _sigmoid(mq + qdef)),
             "creator_share": np.exp(cr) / (np.exp(rate["psi0"]) + np.exp(cr) + (N_TM - 1)),
         }
@@ -287,6 +300,7 @@ def run(
     ma_def_prior_sd=None,
     ev_anchor_scale=1.0,
     create_prior_center=None,
+    create_qual=True,
 ):
     names = roster_names(seasons)
     M = fit_all(
@@ -301,6 +315,7 @@ def run(
         ma_def_prior_sd=ma_def_prior_sd,
         ev_anchor_scale=ev_anchor_scale,
         create_prior_center=create_prior_center,
+        create_qual=create_qual,
     )
     players, agepos, Q = M["players"], M["agepos"], M["Q"]
     rates, spg, qual, conv, last_season = (
@@ -537,6 +552,9 @@ def _save(seasons, players, rates, qual, conv, vals, ppcs, spg, agepos, last_sea
             "toi_pk": float(ma["R"]["toi_def"][i]) if ma else 0.0,
             "qshoot": float(qual["qshoot"][i]),
             "qdef": float(qual["qdef"][i]),
+            "create_qual": (  # per-player on-ice creation quality (strength-neutral; 0 when absent)
+                float(qual["create_qual"][i]) if qual.get("create_qual") is not None else 0.0
+            ),
             "n_create": int(qual["n_create"][i]),
             "fin": float(conv["fin"][i]),
             "fin_se": float(conv["se_fin"][i]),
@@ -647,6 +665,12 @@ def main(argv=None):
         help="skip optimization: reuse the checkpoint's θ̂/SEs (exact same fit signature "
         "required) and just regenerate reports + JSON — for export-side changes",
     )
+    p.add_argument(
+        "--no-create-qual",
+        action="store_true",
+        help="drop the per-player on-ice creation-quality block (fit only the position-level "
+        "creator pair). Default: fit per-player create_qual (held-out validated)",
+    )
     args = p.parse_args(argv)
     sd = C.PROCESSED / "shots_onice"
     avail = sorted(int(f.stem) for f in sd.glob("*.parquet")) if sd.exists() else []
@@ -666,4 +690,5 @@ def main(argv=None):
         create_prior_center=(
             None if args.create_prior_center == "zero" else args.create_prior_center
         ),
+        create_qual=not args.no_create_qual,
     )
