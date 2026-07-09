@@ -243,7 +243,14 @@ def values_at(fit, t, key, sh, cr, df, fin_eff, n_def):
     g0, gF, gD = gbar_classes(fit, key, t["qshoot_eff"], fin_eff)
     w0, wf, wd = creator_mix(fit["strengths"][key]["psi0"], t["isD"], key)
     sc = env * shots * (w0 * g0 + wf * gF + wd * gD)
+    # playmaking = volume (extra shots created × their danger) + quality (the per-player on-ice
+    # create_qual lift applied to ALL teammate shots) — mirrors player_values in the model
     pm = env * 4.0 * np.exp(mu) * (np.exp(cr) - 1.0) * _sigmoid(mq + qc_pos)
+    cq = t.get("create_qual")
+    if cq is not None:
+        pm = pm + env * 4.0 * np.exp(mu) * np.exp(cr) * (
+            _sigmoid(mq + qc_pos + cq) - _sigmoid(mq + qc_pos)
+        )
     base = np.exp(mu) * _sigmoid(mq)
     dfv = env * n_def * (base - np.exp(mu + df) * _sigmoid(mq + t["qdef_eff"]))
     return sc, pm, dfv
@@ -765,7 +772,7 @@ def build(fit_path=None):
                 + _curve_val4(finc["coef"], zs, t["isD"][i])
                 + t["isD"][i] * finc["d_offset"]
             )
-            ti = {k: np.array([t[k][i]]) for k in ("isD", "qshoot_eff", "qdef_eff")}
+            ti = {k: np.array([t[k][i]]) for k in ("isD", "qshoot_eff", "qdef_eff", "create_qual")}
             s_sc, s_pm, s_df = values_at(
                 fit,
                 ti,
