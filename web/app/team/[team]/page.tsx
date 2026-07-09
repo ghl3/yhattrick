@@ -59,8 +59,8 @@ const rosterColumns = (team: string): ColumnDef<PlayerRow>[] => {
       },
     },
     {
-      header: "GA/60", id: "ga60", accessorFn: (p) => p.ga60 ?? null,
-      meta: { title: "Goals Added per 60 above a replacement-level player at his position (5v5)" },
+      header: "NGA/60", id: "ga60", accessorFn: (p) => p.ga60 ?? null,
+      meta: { title: "Net Goals Added per 60 above a replacement-level player at his position (5v5)" },
       cell: (c) => {
         const p = c.row.original;
         return p.ga60 == null ? <span className="metric-cell muted">—</span> : (
@@ -207,7 +207,7 @@ export default function Team() {
           rowHref={(p) => `/player/${p.id}`}
           className="games ptable"
         />
-        <p className="muted card-note">Every skater who appeared for {team} in our data. GP, G, A, P and TOI are for {team} only; WAR and GA/60 are the player&apos;s overall card metrics (color = percentile vs position). Click a skater for full career detail.</p>
+        <p className="muted card-note">Every skater who appeared for {team} in our data. GP, G, A, P and TOI are for {team} only; WAR and NGA/60 are the player&apos;s overall card metrics (color = percentile vs position). Click a skater for full career detail.</p>
       </div>
 
       {teamGoalies.length > 0 && (

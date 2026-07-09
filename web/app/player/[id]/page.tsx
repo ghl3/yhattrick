@@ -528,7 +528,7 @@ function GenCards({ p }: { p: PlayerDetail }) {
       the season-total counterpart over his actual usage.
     </p>
   );
-  const addedRows = evRows("all", "Goals Added /60", A.ga60.v);
+  const addedRows = evRows("all", "Net Goals Added /60", A.ga60.v);
   const addedDetail = addedRows && (
     <>
       <p>His modeled 5-on-5 production per 60 minus a replacement {posN}&apos;s, component by component:</p>
@@ -539,7 +539,7 @@ function GenCards({ p }: { p: PlayerDetail }) {
   const createdRows = evRows("created", "Goals Created /60", A.created60?.v ?? null);
   const createdDetail = createdRows && (
     <>
-      <p>The offense half of Goals Added: his own scoring plus the chances he creates, each minus
+      <p>The offense half of Net Goals Added: his own scoring plus the chances he creates, each minus
         the replacement level:</p>
       <Eq rows={createdRows} />
       {kapNote}{replNote}
@@ -548,7 +548,7 @@ function GenCards({ p }: { p: PlayerDetail }) {
   const preventedRows = evRows("prevented", "Goals Prevented /60", A.prevented60?.v ?? null);
   const preventedDetail = preventedRows && (
     <>
-      <p>The defense half of Goals Added: opponent chance value he erases (shots suppressed plus
+      <p>The defense half of Net Goals Added: opponent chance value he erases (shots suppressed plus
         danger suppressed), minus the replacement level:</p>
       <Eq rows={preventedRows} />
       {kapNote}{replNote}
@@ -711,7 +711,7 @@ function GenCards({ p }: { p: PlayerDetail }) {
       <div className="metric-grid">
         <ValueBox name="WAR" group={p.group} v={A.war.v} pctile={A.war.pct} fmt={num2} unit="wins" detail={warDetail}
           explain="Estimated wins added above a replacement player playing his games this season, offense and defense combined." />
-        <ValueBox name="Goals Added /60" group={p.group} v={A.ga60.v} pctile={A.ga60.pct} fmt={num2} unit="goals/60" detail={addedDetail}
+        <ValueBox name="Net Goals Added /60" group={p.group} v={A.ga60.v} pctile={A.ga60.pct} fmt={num2} unit="goals/60" detail={addedDetail}
           explain="Net goals added per 60 above a replacement player at 5-on-5, offense plus defense on one scale." />
         <ValueBox name="Goals Created /60" group={p.group} v={A.created60?.v ?? null} pctile={A.created60?.pct ?? null} fmt={num2} unit="goals/60" detail={createdDetail}
           explain="Offense per 60 above a replacement player at 5-on-5: his own scoring plus chances created for teammates." />
@@ -719,24 +719,26 @@ function GenCards({ p }: { p: PlayerDetail }) {
           explain="Opponent goals prevented per 60 above a replacement player, at 5-on-5." />
       </div>
       <div className="metric-grid" style={{ marginTop: 10 }}>
-        <OniceBox name="Scoring" group={p.group} v={A.scoring.v} pctile={A.scoring.pct} fmt={num2} unit="goals/60" signed={false} detail={scoringDetail}
-          explain="Inferred goal rate from his own shots per 60 at 5-on-5, as if on an average team." />
+        <OniceBox name="Playmaking" group={p.group} v={A.playmaking.v} pctile={A.playmaking.pct} fmt={num2} unit="xG/60"
+          se={A.playmaking.se ?? undefined} signed={false} detail={playmakingDetail}
+          explain="Inferred value of the chances he creates for teammates — both the extra shots and the added danger on them — in expected goals per 60 at 5-on-5, as if on an average team." />
         <OniceBox name="Shooting" group={p.group} v={A.shooting.v} pctile={A.shooting.pct} fmt={num1} unit="% shot volume" signed detail={shootingDetail}
           explain="Shot volume vs an average player at his position." />
+        <OniceBox name="Scoring" group={p.group} v={A.scoring.v} pctile={A.scoring.pct} fmt={num2} unit="goals/60" signed={false} detail={scoringDetail}
+          explain="Inferred goal rate from his own shots per 60 at 5-on-5, as if on an average team." />
         <OniceBox name="Finishing" group={p.group} v={A.finishing.v} pctile={A.finishing.pct} fmt={num2} unit="goals/100 shots"
           se={A.finishing.se ?? undefined} signed detail={finishingDetail}
           explain="Goals per 100 shots above an average player at his position, from the same shot locations." />
-        <OniceBox name="Playmaking" group={p.group} v={A.playmaking.v} pctile={A.playmaking.pct} fmt={num2} unit="xG/60"
-          se={A.playmaking.se ?? undefined} signed={false} detail={playmakingDetail}
-          explain="Inferred rate of extra chances he creates for teammates, in expected goals per 60 at 5-on-5, as if on an average team." />
+      </div>
+      <div className="metric-grid" style={{ marginTop: 10 }}>
         <OniceBox name="Defense" group={p.group} v={A.defense.v} pctile={A.defense.pct} fmt={num2} unit="xG/60" signed detail={defenseDetail}
           explain="Opponent chance value erased per 60 at 5-on-5, above an average player at his position." />
+        <ValueBox name="Penalties" group={p.group} v={p.value.rates.pen_net60?.v ?? null} pctile={p.value.rates.pen_net60?.pct ?? null} fmt={num2} unit="goals/60" detail={penDetail}
+          explain="Net goals from penalties drawn minus taken, per 60. Not yet in WAR." />
         <ValueBox name="PP Goals Created /60" group={p.group} v={A.pp_ga60.v} pctile={A.pp_ga60.pct} fmt={num2} unit="goals/60" detail={ppDetail}
           explain="Power-play offense per 60 above a replacement PP regular." />
         <ValueBox name="PK Goals Prevented /60" group={p.group} v={A.pk_ga60.v} pctile={A.pk_ga60.pct} fmt={num2} unit="goals/60" detail={pkDetail}
           explain="Penalty-kill goals prevented per 60 above a replacement PK regular." />
-        <ValueBox name="Penalties" group={p.group} v={p.value.rates.pen_net60?.v ?? null} pctile={p.value.rates.pen_net60?.pct ?? null} fmt={num2} unit="goals/60" detail={penDetail}
-          explain="Net goals from penalties drawn minus taken, per 60. Not yet in WAR." />
       </div>
     </div>
   );
@@ -744,7 +746,7 @@ function GenCards({ p }: { p: PlayerDetail }) {
 
 // ── skill trajectory: inferred per-season skill + projection + league age reference + raw dots ──
 const TRAJ_TABS = [
-  { key: "ga60", label: "Goals Added /60", unit: "goals/60" },
+  { key: "ga60", label: "Net Goals Added /60", unit: "goals/60" },
   { key: "scoring", label: "Scoring", unit: "goals/60" },
   { key: "playmaking", label: "Playmaking", unit: "xG/60" },
   { key: "defense", label: "Defense", unit: "xG/60" },

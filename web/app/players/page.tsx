@@ -22,7 +22,7 @@ type MetricCol = { key: keyof PlayerRow; label: string; title: string; fmt: (v: 
 const VIEWS: Record<View, MetricCol[]> = {
   cards: [
     { key: "war", label: "WAR", title: "Wins above replacement over his actual season (stints, linemates, opposition); 0 = replacement level", fmt: num2 },
-    { key: "ga60", label: "GA/60", title: "Goals Added per 60 above a replacement-level player at his position (5v5)", fmt: num2s },
+    { key: "ga60", label: "NGA/60", title: "Net Goals Added per 60 above a replacement-level player at his position (5v5)", fmt: num2s },
     { key: "pp_ga60", label: "PP GC/60", title: "Power-play goals created per 60 above a replacement PP regular", fmt: num2s },
     { key: "pk_ga60", label: "PK GP/60", title: "Penalty-kill goals prevented per 60 above a replacement PK regular", fmt: num2s },
     { key: "pen_net60", label: "Pen", title: "Net penalty goals per 60 (drawn − taken, priced in goals); production model, not yet inside WAR", fmt: num2 },

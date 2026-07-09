@@ -30,8 +30,8 @@ export default function About() {
           <li>
             <strong>Player cards.</strong>{" "}
             For each skater, the skills a generative model infers from every shot and shift —
-            scoring, shooting, finishing, playmaking, defense — isolated from linemates,
-            competition, and arena scorekeeping, plus two aggregates: <strong>Goals Added
+            playmaking, shooting, scoring, finishing, defense — isolated from linemates,
+            competition, and arena scorekeeping, plus two aggregates: <strong>Net Goals Added
             per 60</strong> (skill vs a replacement-level player on equal footing) and{" "}
             <strong>WAR</strong> (wins added over his actual season vs a replacement player). Each
             card shows units and a within-position percentile.
@@ -85,7 +85,7 @@ export default function About() {
           held-out seasons before we publish it.
         </p>
         <p>
-          <strong>Goals Added /60</strong> plugs a player&apos;s inferred skills into the model&apos;s
+          <strong>Net Goals Added /60</strong> plugs a player&apos;s inferred skills into the model&apos;s
           own production equations and differences against a replacement-level player — an
           equal-footing skill read on the same zero as WAR. <strong>WAR</strong> replays his actual season, swapping him for
           a replacement-level player in every real stint, and converts the goal difference to wins.
