@@ -8,7 +8,7 @@ import {
 } from "recharts";
 import type {
   AnyPlayerDetail, GameLogRow, GoalieDetail, GoalieMetricKey, GoalieSeasonRow,
-  IndividualKey, OniceKey, PlayerBio, PlayerDetail, PlayerHeat, SeasonRow,
+  IndividualKey, PlayerBio, PlayerDetail, PlayerHeat, SeasonRow,
 } from "@/lib/types";
 import { isGoalie } from "@/lib/types";
 import { mmss, pctColor } from "@/lib/format";
@@ -32,18 +32,6 @@ const signed = (v: number, fmt: (n: number) => string) => `${v >= 0 ? "+" : ""}$
 const svFmt = (v: number) => v.toFixed(3).replace(/^0/, ""); // .915
 const pctFmt = (v: number) => (v * 100).toFixed(1); // fraction 0–1 -> "54.2"
 
-// 5-on-5 unless the name says otherwise, so no "EV" prefix is needed
-const ONICE: { key: OniceKey; name: string; explain: string; fmt: (v: number) => string; unit: string }[] = [
-  { key: "ev_xgf60", name: "Expected Goals For", explain: "His team's expected goals per 60 at 5-on-5 while he's on the ice. A team rate, not isolated to him.", fmt: num2, unit: "xG/60" },
-  { key: "ev_xga60", name: "Expected Goals Against", explain: "His team's expected goals allowed per 60 at 5-on-5 while he's on the ice. A team rate, not isolated; lower is better.", fmt: num2, unit: "xG/60" },
-  { key: "ev_xgshare", name: "Expected Goals Share", explain: "His team's share of the expected goals (chance quality) at 5-on-5 while he's on the ice: xGF ÷ (xGF + xGA). Above 50% means out-chancing opponents.", fmt: pctFmt, unit: "%" },
-  { key: "ev_cf60", name: "Shot Attempts For", explain: "His team's shot attempts (Corsi) per 60 at 5-on-5 while he's on the ice. A team rate.", fmt: num1, unit: "attempts/60" },
-  { key: "ev_ca60", name: "Shot Attempts Against", explain: "Opponent shot attempts per 60 at 5-on-5 while he's on the ice. A team rate; lower is better.", fmt: num1, unit: "attempts/60" },
-  { key: "ev_cfshare", name: "Shot Attempt Share", explain: "His team's share of all shot attempts at 5-on-5 while he's on the ice: Corsi for ÷ (for + against). Above 50% means controlling play.", fmt: pctFmt, unit: "%" },
-  { key: "pp_xgf60", name: "Power-Play Expected Goals For", explain: "His team's expected goals per 60 on the power play while he's on the ice. A team rate.", fmt: num2, unit: "xG/60" },
-  { key: "pk_xga60", name: "Penalty-Kill Expected Goals Against", explain: "His team's expected goals allowed per 60 on the penalty kill while he's on the ice. A team rate; lower is better.", fmt: num2, unit: "xG/60" },
-];
-
 const INDIV: { key: IndividualKey; name: string; explain: string; fmt: (v: number) => string; unit: string; signed?: boolean; ci?: boolean }[] = [
   { key: "shots60", name: "Shot Rate", explain: "His own unblocked shots per 60.", fmt: num1, unit: "shots/60" },
   { key: "xg_per_shot", name: "Shot Quality", explain: "Average danger of his shots (expected goals per shot).", fmt: num3, unit: "xG/shot" },
@@ -62,27 +50,50 @@ const INDIV: { key: IndividualKey; name: string; explain: string; fmt: (v: numbe
 // and live in the Modeled-impact section instead). Two rows of four.
 const STAT_KEYS: IndividualKey[] = ["shots60", "g60", "a60", "a1_60", "pen_drawn60", "pen_taken60", "fo_win", "ozs"];
 
-// per-season columns; `graph` ones are clickable to chart over time
-type Col = { key: string; label: string; title: string; get: (r: SeasonRow) => number | null; fmt?: (v: number) => string; graph: boolean };
-const COLS: Col[] = [
-  { key: "gp", label: "GP", title: "Games played", get: (r) => r.gp, graph: true },
-  { key: "toi_min", label: "TOI", title: "Time on ice (min)", get: (r) => r.toi_min, fmt: (v) => String(Math.round(v)), graph: true },
-  { key: "g", label: "G", title: "Goals", get: (r) => r.g, graph: true },
-  { key: "a", label: "A", title: "Assists", get: (r) => r.a1 + r.a2, graph: true },
-  { key: "points", label: "P", title: "Points", get: (r) => r.points, graph: true },
-  { key: "sog", label: "SOG", title: "Shots on goal", get: (r) => r.sog, graph: true },
-  // goals-attributed value — the same metrics as the headline cards (per season)
-  { key: "gnet_pg", label: "Net G/GP", title: "Net goals added per game (all situations)", get: (r) => r.gnet_pg ?? null, fmt: (v) => v.toFixed(2), graph: true },
-  { key: "scoring60", label: "Scoring", title: "Goals from his own shots per 60 (5-on-5)", get: (r) => r.scoring60 ?? null, fmt: (v) => v.toFixed(2), graph: true },
-  { key: "playmaking60", label: "Playmkg", title: "Expected goals he creates for teammates per 60 (5-on-5)", get: (r) => r.playmaking60 ?? null, fmt: (v) => v.toFixed(2), graph: true },
-  { key: "allow60", label: "Defense", title: "His share of expected goals allowed per 60 (5-on-5; lower is better)", get: (r) => r.allow60 ?? null, fmt: (v) => v.toFixed(2), graph: true },
-  { key: "pp_value", label: "PP", title: "Power-play offense per 60 (scoring + playmaking)", get: (r) => (r.pp_scoring60 == null && r.pp_playmaking60 == null) ? null : (r.pp_scoring60 ?? 0) + (r.pp_playmaking60 ?? 0), fmt: (v) => v.toFixed(2), graph: true },
-  { key: "pk_allow60", label: "PK", title: "Penalty-kill expected goals allowed per 60 (lower is better)", get: (r) => r.pk_allow60 ?? null, fmt: (v) => v.toFixed(2), graph: true },
-  { key: "pen_net60", label: "Pen", title: "Net goals from penalties drawn minus taken per 60", get: (r) => r.pen_net60 ?? null, fmt: (v) => v.toFixed(2), graph: true },
-  { key: "shots60", label: "Sh/60", title: "Unblocked shots per 60", get: (r) => r.shots60 ?? null, fmt: (v) => v.toFixed(1), graph: true },
-  { key: "xg_per_shot", label: "xG/sh", title: "Average shot quality (xG per shot)", get: (r) => r.xg_per_shot ?? null, fmt: (v) => v.toFixed(3), graph: true },
-  { key: "fin_per100", label: "Fin", title: "Finishing: goals above expected per 100 shots", get: (r) => r.fin_per100 ?? null, fmt: (v) => v.toFixed(2), graph: true },
+// per-season columns, grouped into metric families for the season-by-season tabs; every
+// column is clickable to chart it over time. Columns with `traj` chart the modeled skill
+// trajectory (line + projection + league reference) instead of a plain raw-value line.
+type Col = { key: string; label: string; title: string; get: (r: SeasonRow) => number | null; fmt?: (v: number) => string; traj?: "ga60" | "scoring" | "playmaking" | "defense" };
+type ColGroup = { key: string; label: string; note: string; cols: Col[] };
+const COL_GROUPS: ColGroup[] = [
+  {
+    key: "box", label: "Box score", note: "Counting stats, all situations.",
+    cols: [
+      { key: "gp", label: "GP", title: "Games played", get: (r) => r.gp },
+      { key: "toi_min", label: "TOI", title: "Time on ice (min)", get: (r) => r.toi_min, fmt: (v) => String(Math.round(v)) },
+      { key: "g", label: "G", title: "Goals", get: (r) => r.g },
+      { key: "a", label: "A", title: "Assists", get: (r) => r.a1 + r.a2 },
+      { key: "points", label: "P", title: "Points", get: (r) => r.points },
+      { key: "sog", label: "SOG", title: "Shots on goal", get: (r) => r.sog },
+    ],
+  },
+  {
+    key: "impact", label: "Modeled impact", note: "The card metrics season by season: per-60 rates at 5-on-5; Net Goals/GP counts all situations, per game.",
+    cols: [
+      { key: "gnet_pg", label: "Net Goals/GP", title: "Net goals added per game (all situations)", get: (r) => r.gnet_pg ?? null, fmt: (v) => v.toFixed(2), traj: "ga60" },
+      { key: "scoring60", label: "Scoring", title: "Goals from his own shots per 60 (5-on-5)", get: (r) => r.scoring60 ?? null, fmt: (v) => v.toFixed(2), traj: "scoring" },
+      { key: "playmaking60", label: "Playmaking", title: "Expected goals he creates for teammates per 60 (5-on-5)", get: (r) => r.playmaking60 ?? null, fmt: (v) => v.toFixed(2), traj: "playmaking" },
+      { key: "allow60", label: "Defense", title: "His share of expected goals allowed per 60 (5-on-5; lower is better)", get: (r) => r.allow60 ?? null, fmt: (v) => v.toFixed(2), traj: "defense" },
+    ],
+  },
+  {
+    key: "st", label: "Special teams", note: "Power-play offense, penalty-kill defense, and penalty differential, per 60.",
+    cols: [
+      { key: "pp_value", label: "PP Offense", title: "Power-play offense per 60 (scoring + playmaking)", get: (r) => (r.pp_scoring60 == null && r.pp_playmaking60 == null) ? null : (r.pp_scoring60 ?? 0) + (r.pp_playmaking60 ?? 0), fmt: (v) => v.toFixed(2) },
+      { key: "pk_allow60", label: "PK Defense", title: "Penalty-kill expected goals allowed per 60 (lower is better)", get: (r) => r.pk_allow60 ?? null, fmt: (v) => v.toFixed(2) },
+      { key: "pen_net60", label: "Penalties", title: "Net goals from penalties drawn minus taken per 60", get: (r) => r.pen_net60 ?? null, fmt: (v) => v.toFixed(2) },
+    ],
+  },
+  {
+    key: "shooting", label: "Shooting", note: "Volume, quality, and finishing on his own shots.",
+    cols: [
+      { key: "shots60", label: "Shots/60", title: "Unblocked shots per 60", get: (r) => r.shots60 ?? null, fmt: (v) => v.toFixed(1) },
+      { key: "xg_per_shot", label: "xG/Shot", title: "Average shot quality (xG per shot)", get: (r) => r.xg_per_shot ?? null, fmt: (v) => v.toFixed(3) },
+      { key: "fin_per100", label: "Finishing", title: "Finishing: goals above expected per 100 shots", get: (r) => r.fin_per100 ?? null, fmt: (v) => v.toFixed(2) },
+    ],
+  },
 ];
+const COLS: Col[] = COL_GROUPS.flatMap((g) => g.cols);
 
 // shared box: a colored bar with the metric NAME and its percentile, then the value + a
 // description. When `detail` is given, clicking the card flips it over and enlarges it to a
@@ -745,17 +756,16 @@ function GenCards({ p }: { p: PlayerDetail }) {
 }
 
 // ── skill trajectory: inferred per-season skill + projection + league age reference + raw dots ──
-const TRAJ_TABS = [
+const TRAJ_ATTRS = [
   { key: "ga60", label: "Net Goals Added /60", unit: "goals/60" },
   { key: "scoring", label: "Scoring", unit: "goals/60" },
   { key: "playmaking", label: "Playmaking", unit: "xG/60" },
   { key: "defense", label: "Defense", unit: "xG/60" },
 ] as const;
-type TrajKey = (typeof TRAJ_TABS)[number]["key"];
+type TrajKey = (typeof TRAJ_ATTRS)[number]["key"];
 
-function TrajectoryChart({ p }: { p: PlayerDetail }) {
+function TrajectoryChart({ p, attr }: { p: PlayerDetail; attr: TrajKey }) {
   const g = p.gen!;
-  const [attr, setAttr] = useState<TrajKey>("ga60");
   const data = useMemo(() => {
     const per = new Map(p.per_season.map((r) => [r.season, r]));
     const lg = (tp: Record<string, unknown>) => (tp[`lg_${attr}`] as number | null) ?? null;
@@ -778,14 +788,9 @@ function TrajectoryChart({ p }: { p: PlayerDetail }) {
     }
     return pts;
   }, [g, attr, p]);
-  const tab = TRAJ_TABS.find((t) => t.key === attr)!;
+  const tab = TRAJ_ATTRS.find((t) => t.key === attr)!;
   return (
     <div>
-      <div className="seg" style={{ marginBottom: 8 }}>
-        {TRAJ_TABS.map((t) => (
-          <button key={t.key} className={attr === t.key ? "active" : ""} onClick={() => setAttr(t.key)}>{t.label}</button>
-        ))}
-      </div>
       <ResponsiveContainer width="100%" height={240}>
         <ComposedChart data={data} margin={{ top: 8, right: 16, bottom: 4, left: -8 }}>
           <CartesianGrid stroke="#e7f1fb" />
@@ -806,7 +811,7 @@ function TrajectoryChart({ p }: { p: PlayerDetail }) {
         </ComposedChart>
       </ResponsiveContainer>
       <p className="section-sub" style={{ marginTop: 4 }}>
-        Solid line: skill the model infers each season (smoothed, deployment-free). Dashed: next-season
+        Solid line: modeled {tab.label}, smoothed and deployment-free. Dashed: next-season
         projection along his position&apos;s aging curve. Grey dotted: a typical {p.group === "D" ? "defenseman" : "forward"} his
         age. Dots: unsmoothed single-season estimates.
       </p>
@@ -814,13 +819,78 @@ function TrajectoryChart({ p }: { p: PlayerDetail }) {
   );
 }
 
-function SkaterView({ p }: { p: PlayerDetail }) {
-  const [stat, setStat] = useState(p.gen ? "__traj__" : "points");
-  const col = COLS.find((c) => c.key === stat) ?? COLS.find((c) => c.key === "points")!;
+function SeasonsPanel({ p }: { p: PlayerDetail }) {
+  const [groupKey, setGroupKey] = useState(p.gen ? "impact" : "box");
+  const [stat, setStat] = useState(p.gen ? "gnet_pg" : "points");
+  const group = COL_GROUPS.find((g) => g.key === groupKey)!;
+  const col = COLS.find((c) => c.key === stat)!;
   const chartData = useMemo(
     () => p.per_season.map((r) => ({ season: seasonLabel(r.season), value: col.get(r) })),
     [p, col]
   );
+  // keep the charted stat inside the visible family, remembering each family's last pick
+  const statMemo = useRef<Record<string, string>>({});
+  const pickGroup = (g: ColGroup) => {
+    setGroupKey(g.key);
+    if (!g.cols.some((c) => c.key === stat)) {
+      setStat(statMemo.current[g.key] ?? (g.key === "box" ? "points" : g.cols[0].key));
+    }
+  };
+  const pickStat = (key: string) => {
+    setStat(key);
+    statMemo.current[groupKey] = key;
+  };
+  return (
+    <div className="panel">
+      <h2>Season by season</h2>
+      <div className="seg" style={{ margin: "2px 0 8px" }}>
+        {COL_GROUPS.map((g) => (
+          <button key={g.key} className={groupKey === g.key ? "active" : ""} onClick={() => pickGroup(g)}>{g.label}</button>
+        ))}
+      </div>
+      <p className="section-sub">{group.note} Click any column to chart it.</p>
+      <div className="chart-wrap">
+        {p.gen && col.traj ? (
+          <TrajectoryChart p={p} attr={col.traj} />
+        ) : (
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={chartData} margin={{ top: 8, right: 16, bottom: 4, left: -8 }}>
+              <CartesianGrid stroke="#e7f1fb" />
+              <XAxis dataKey="season" tick={{ fontSize: 12, fill: "#6b7e90" }} />
+              <YAxis tick={{ fontSize: 12, fill: "#6b7e90" }} width={48} />
+              <Tooltip formatter={(v: unknown) => (typeof v === "number" && col.fmt ? col.fmt(v) : String(v))} />
+              <Line type="monotone" dataKey="value" name={col.label} stroke="#2f6cb0" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+            </LineChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+      <table className="players season-table">
+        <thead>
+          <tr>
+            <th>Season</th><th>Team</th>
+            {group.cols.map((c) => (
+              <th key={c.key} className={`sortable ${stat === c.key ? "graphed" : ""}`} title={c.title} onClick={() => pickStat(c.key)}>{c.label}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {[...p.per_season].reverse().map((r) => (
+            <tr key={r.season}>
+              <td>{seasonLabel(r.season)}</td>
+              <td>{r.team}</td>
+              {group.cols.map((c) => {
+                const v = c.get(r);
+                return <td key={c.key} className={stat === c.key ? "graphed" : ""}>{v == null ? "—" : c.fmt ? c.fmt(v) : v}</td>;
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function SkaterView({ p }: { p: PlayerDetail }) {
   const last = p.seasons[p.seasons.length - 1];
 
   return (
@@ -852,70 +922,7 @@ function SkaterView({ p }: { p: PlayerDetail }) {
         </div>
       </div>
 
-      <div className="panel">
-        <h2>On-Ice Team Rates</h2>
-        <p className="section-sub">His team&apos;s rates while he was on the ice, not adjusted for teammates.</p>
-        <div className="metric-grid">
-          {ONICE.map((m) => {
-            const d = p.onice[m.key];
-            return <OniceBox key={m.key} name={m.name} explain={m.explain} v={d.v} pctile={d.pct} group={p.group} fmt={m.fmt} unit={m.unit} />;
-          })}
-        </div>
-      </div>
-
-      <div className="panel">
-        <h2>{p.gen ? "Skill trajectory & seasons" : "By season: click a stat to chart it"}</h2>
-        {p.gen && (
-          <p className="section-sub">
-            Where his skills have been and where they&apos;re heading, or click any stat in the table to
-            chart it season by season.
-          </p>
-        )}
-        <div className="chart-wrap">
-          {p.gen && stat === "__traj__" ? (
-            <TrajectoryChart p={p} />
-          ) : (
-            <>
-              {p.gen && (
-                <div className="seg" style={{ marginBottom: 8 }}>
-                  <button onClick={() => setStat("__traj__")}>← skill trajectory</button>
-                </div>
-              )}
-              <ResponsiveContainer width="100%" height={220}>
-                <LineChart data={chartData} margin={{ top: 8, right: 16, bottom: 4, left: -8 }}>
-                  <CartesianGrid stroke="#e7f1fb" />
-                  <XAxis dataKey="season" tick={{ fontSize: 12, fill: "#6b7e90" }} />
-                  <YAxis tick={{ fontSize: 12, fill: "#6b7e90" }} width={48} />
-                  <Tooltip formatter={(v: unknown) => (typeof v === "number" && col.fmt ? col.fmt(v) : String(v))} />
-                  <Line type="monotone" dataKey="value" name={col.label} stroke="#2f6cb0" strokeWidth={2} dot={{ r: 3 }} connectNulls />
-                </LineChart>
-              </ResponsiveContainer>
-            </>
-          )}
-        </div>
-        <table className="players season-table">
-          <thead>
-            <tr>
-              <th>Season</th><th>Team</th>
-              {COLS.map((c) => (
-                <th key={c.key} className={`sortable ${stat === c.key ? "graphed" : ""}`} title={c.title} onClick={() => setStat(c.key)}>{c.label}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {[...p.per_season].reverse().map((r) => (
-              <tr key={r.season}>
-                <td>{seasonLabel(r.season)}</td>
-                <td>{r.team}</td>
-                {COLS.map((c) => {
-                  const v = c.get(r);
-                  return <td key={c.key} className={stat === c.key ? "graphed" : ""}>{v == null ? "—" : c.fmt ? c.fmt(v) : v}</td>;
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <SeasonsPanel p={p} />
 
       <div className="panel">
         <h2>Top 5v5 linemates</h2>

@@ -140,6 +140,7 @@ th.sortable:hover { color: var(--accent-deep); }
 /* per-season trend chart + table */
 .chart-wrap { margin: 4px 0 14px; }
 table.season-table th.sortable { cursor: pointer; }
+table.season-table th.sortable:hover { background: var(--accent-soft); color: var(--accent-deep); }
 table.season-table th.graphed, table.season-table td.graphed { background: var(--accent-soft); }
 table.season-table th.graphed { color: var(--accent-deep); }
 table.season-table td:first-child, table.season-table th:first-child { font-variant-numeric: normal; }

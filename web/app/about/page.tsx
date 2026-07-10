@@ -37,8 +37,8 @@ export default function About() {
             card shows units and a within-position percentile.
           </li>
           <li>
-            <strong>Descriptive stats.</strong> Box score, on-ice team rates (xG, Corsi, shares), and
-            individual rates — shot volume and quality, scoring, penalties.
+            <strong>Descriptive stats.</strong> Box score and individual rates — shot volume and
+            quality, scoring, penalties.
           </li>
           <li>
             <strong>Per-player views.</strong> Shot maps, a percentile profile, a full game log, and
