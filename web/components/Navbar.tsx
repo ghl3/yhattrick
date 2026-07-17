@@ -23,7 +23,7 @@ export default function Navbar() {
           <Link className={isActive("/", true) ? "active" : ""} href="/">
             Games
           </Link>
-          <Link className={isActive("/xg") ? "active" : ""} href="/xg">
+          <Link className={isActive("/models") ? "active" : ""} href="/models">
             Models
           </Link>
           <Link className={isActive("/about") ? "active" : ""} href="/about">

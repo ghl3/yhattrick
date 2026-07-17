@@ -36,7 +36,7 @@ SEASON ?=
 FAMILY ?= gaussian        # response family for `make model`: gaussian | tweedie
 
 .DEFAULT_GOAL := all
-.PHONY: all fetch fetch-season fetch-handedness fetch-htmlshifts clean-data dims xg stints box model shooting goal-accounting games gamelog players goalie-box goalie-gamelog goalies generative-model generative-cards publish-data validate test format pipeline web-dev web-build
+.PHONY: all fetch fetch-season fetch-handedness fetch-htmlshifts clean-data dims xg stints box model shooting goal-accounting games gamelog players goalie-box goalie-gamelog goalies generative-model generative-cards gen-explainer publish-data validate test format pipeline web-dev web-build
 
 all: clean-data xg stints box model shooting goal-accounting games gamelog players goalie-gamelog goalie-box goalies
 
@@ -108,6 +108,12 @@ generative-model:
 # (export_players merges it into the site JSONs; run `make players` after). Needs the experimental group.
 generative-cards:
 	mkdir -p $(LOGDIR) && cd pipeline && uv run --group experimental python -m yhattrick.models.generative_cards 2>&1 | tee $(LOGDIR)/generative_cards.log
+
+# /models explainer payload: fit constants + every player's effective params + replacement and
+# baseline references -> web/public/data/gen_model.json (the page recomputes the value equations
+# client-side and asserts against these numbers). Run after generative-cards + players.
+gen-explainer:
+	mkdir -p $(LOGDIR) && cd pipeline && uv run --group experimental python -m yhattrick.export.export_gen_explainer 2>&1 | tee $(LOGDIR)/gen_explainer.log
 
 # final validation: read the exported artifacts and confirm the inference-stage invariants hold
 # (EXACT identities + APPROX at-scale bands). Report-only; never blocks `all`. Add --strict for CI.

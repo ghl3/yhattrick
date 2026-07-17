@@ -58,7 +58,7 @@ export default function About() {
           <li><strong>Players</strong> — a sortable leaderboard; click through to a player&apos;s full card.</li>
           <li><strong>Teams</strong> — each team&apos;s roster and schedule.</li>
           <li><strong>Games</strong> — every game, newest first; open one for its stint-by-stint timeline.</li>
-          <li><strong>Models</strong> — the expected-goals model: its danger map, calibration, and what drives it.</li>
+          <li><strong>Models</strong> — how the models work, with an interactive player lab, plus the expected-goals model&apos;s danger map, calibration, and drivers.</li>
           <li><strong>About</strong> — this page.</li>
         </ul>
       </div>
