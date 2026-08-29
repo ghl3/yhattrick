@@ -566,6 +566,31 @@ def game_logs(seasons) -> dict[int, list]:
     return out
 
 
+def team_season_splits(glog_rows: list) -> dict[str, dict[str, dict]]:
+    """team -> season -> {gp,g,a,p,toi_s} from a player's game-log rows, for the team-season
+    roster pages: a traded player's line on a team's season page shows only what he did for
+    that team in that season. Season keys are strings (JSON object keys)."""
+    out: dict[str, dict[str, dict]] = {}
+    for grow in glog_rows:
+        acc = out.setdefault(grow["team"], {}).setdefault(
+            str(grow["season"]), {"gp": 0, "g": 0, "a": 0, "p": 0, "toi_s": 0}
+        )
+        acc["gp"] += 1
+        acc["g"] += grow["g"]
+        acc["a"] += grow["a"]
+        acc["p"] += grow["p"]
+        acc["toi_s"] += grow["toi_s"]
+    return out
+
+
+def current_team_of(glog_rows: list, fallback: str) -> str:
+    """A player's CURRENT team is the team of his most recent game (game-log rows arrive
+    most-recent-first), so a mid-season trade flips the roster label as soon as he plays for
+    the new club. The season-primary team is only a fallback for players with no game log —
+    a games-majority "primary" is the wrong answer for anyone traded late in a season."""
+    return str(glog_rows[0]["team"]) if glog_rows else fallback
+
+
 def linemates(seasons, names, top=N_LINEMATES) -> dict[int, list]:
     """Top 5v5 linemates per player by shared on-ice time (from stints)."""
     stints = model.load_stints(seasons, model.SPECS["ev"].strengths)
@@ -706,21 +731,13 @@ def main() -> None:
         assists = int((career.a1 + career.a2).sum()) if len(career) else 0
         pts = int(career.points.sum()) if len(career) else 0
         team_list = sorted({t for ts in career.teams for t in ts}) if len(career) else []
-        # most-recent team = primary team of the latest season the player appears in
-        current_team = (
+        primary = (
             str(career.sort_values("season").iloc[-1].team)
             if len(career)
             else (team_list[0] if team_list else "")
         )
-        # per-team games + production (for team-roster views) from this player's game log
-        by_team: dict[str, dict] = {}
-        for grow in glog.get(int(pid), []):
-            acc = by_team.setdefault(grow["team"], {"gp": 0, "g": 0, "a": 0, "p": 0, "toi_s": 0})
-            acc["gp"] += 1
-            acc["g"] += grow["g"]
-            acc["a"] += grow["a"]
-            acc["p"] += grow["p"]
-            acc["toi_s"] += grow["toi_s"]
+        current_team = current_team_of(glog.get(int(pid), []), primary)
+        by_team = team_season_splits(glog.get(int(pid), []))
         gnp = gen_players.get(str(pid))
         # generative-card columns for the index tables: the four headline metrics + the five skill
         # attributes (prefixed gen_ where a production-model column of the same name exists)

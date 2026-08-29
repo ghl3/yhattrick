@@ -116,8 +116,8 @@ export interface PlayerRow {
   group: "F" | "D";
   team: string;
   teams: string[];
-  // per-team games + production for team-roster views (key = team abbrev)
-  by_team: Record<string, { gp: number; g: number; a: number; p: number; toi_s: number }>;
+  // games + production for team-season roster views: team abbrev -> season (string) -> line
+  by_team: Record<string, Record<string, { gp: number; g: number; a: number; p: number; toi_s: number }>>;
   ev_toi: number;
   gp: number;
   g: number;
@@ -436,6 +436,8 @@ export interface GoalieRow {
   name: string;
   team: string;
   teams: string[];
+  // season (string) -> that season's line, pooled across teams (goalie stats aren't split by team)
+  by_season: Record<string, { teams: string[]; gp: number; sv_pct: number | null; gaa: number | null; gsax: number | null }>;
   gp: number;
   starts: number;
   sa: number;          // shots on goal faced

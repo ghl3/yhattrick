@@ -25,7 +25,7 @@ from .. import config as C
 from ..models import shooting_model
 from . import goalie_heatmap
 from ..models.player_onice_model import roster_names
-from .export_players import _dump, player_bios
+from .export_players import _dump, current_team_of, player_bios
 
 MIN_SHOTS_FACED = 1000  # shots faced to be ranked (percentile pool) — a meaningful workload
 
@@ -84,7 +84,7 @@ def _career(boxes: dict[int, pd.DataFrame]) -> pd.DataFrame:
     allbox = pd.concat(boxes.values(), ignore_index=True)
     g = allbox.groupby("player_id")[_SUM_COLS].sum().reset_index()
     g = g.merge(allbox.groupby("player_id").name.first().reset_index(), on="player_id", how="left")
-    # current team = primary team of the latest season the goalie appears in; teams = union
+    # season-primary team (the game log refines this to the most recent game's team in main)
     latest = allbox.sort_values("season").groupby("player_id").team.last()
     teams = allbox.groupby("player_id").teams.apply(lambda ls: sorted({t for x in ls for t in x}))
     g = g.merge(
@@ -131,6 +131,23 @@ def _shottypes(seasons) -> dict[int, list]:
                 "gsax": round(float(r.xga - r.ga), 2),  # Fenwick GSAx for this type
             }
         )
+    return out
+
+
+def _by_season(boxes: dict[int, pd.DataFrame]) -> dict[int, dict]:
+    """player_id -> season -> {teams, gp, sv_pct, gaa, gsax} from the per-season boxes, for the
+    team-season roster pages. A goalie's season line pools his whole season (goalie stats are
+    not split by team); `teams` says which rosters he appeared on. Season keys are strings."""
+    out: dict[int, dict] = defaultdict(dict)
+    for s, df in boxes.items():
+        for r in df.itertuples():
+            out[int(r.player_id)][str(s)] = {
+                "teams": list(r.teams),
+                "gp": int(r.gp),
+                "sv_pct": round(float(r.saves / r.sog_against), 4) if r.sog_against else None,
+                "gaa": round(float(r.ga * 3600.0 / r.toi_s), 2) if r.toi_s else None,
+                "gsax": round(float(r.gsax), 1),
+            }
     return out
 
 
@@ -210,6 +227,9 @@ def main() -> None:
 
     st = _shottypes(seasons)
     glog = _gamelogs(seasons)
+    by_season = _by_season(boxes)
+    # current team from the most recent game, not the latest season's majority team
+    g["team"] = [current_team_of(glog.get(int(p), []), t) for p, t in zip(g.player_id, g.team)]
     heat = goalie_heatmap.build(seasons)
     # per-season shrunk GSAx/100 (pooled penalties) for the trend
     lams = shooting_model.pooled_lambdas(seasons, names)
@@ -237,6 +257,7 @@ def main() -> None:
                 "name": r.name,
                 "team": r.team,
                 "teams": list(r.teams),
+                "by_season": by_season.get(pid, {}),
                 "gp": int(r.gp),
                 "starts": int(r.starts),
                 "sa": int(r.sog_against),

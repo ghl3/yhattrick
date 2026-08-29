@@ -46,3 +46,46 @@ def test_rates_gsax60_and_hd_savepct_and_qspct():
 def test_rates_zero_denominator_is_nan_not_error():
     r = Gx._rates(_career(sog_against=0, saves=0, toi_s=0, starts=0)).iloc[0]
     assert np.isnan(r.sv_pct) and np.isnan(r.gaa) and np.isnan(r.qs_pct)
+
+
+def test_by_season_pools_whole_season_and_keeps_teams():
+    import pandas as pd
+
+    from yhattrick.export import export_goalies as G
+
+    boxes = {
+        2025: pd.DataFrame(
+            [
+                {
+                    "player_id": 1,
+                    "teams": ["OLD", "NEW"],
+                    "gp": 40,
+                    "toi_s": 40 * 3600,
+                    "sog_against": 1000,
+                    "saves": 910,
+                    "ga": 90,
+                    "gsax": 5.24,
+                }
+            ]
+        ),
+        2024: pd.DataFrame(
+            [
+                {
+                    "player_id": 1,
+                    "teams": ["OLD"],
+                    "gp": 1,
+                    "toi_s": 0,
+                    "sog_against": 0,
+                    "saves": 0,
+                    "ga": 0,
+                    "gsax": 0.0,
+                }
+            ]
+        ),
+    }
+    out = G._by_season(boxes)
+    s = out[1]["2025"]
+    assert s["teams"] == ["OLD", "NEW"] and s["gp"] == 40
+    assert s["sv_pct"] == 0.91 and s["gaa"] == 2.25 and s["gsax"] == 5.2
+    # a zero-workload season stays valid JSON (no division by zero)
+    assert out[1]["2024"]["sv_pct"] is None and out[1]["2024"]["gaa"] is None

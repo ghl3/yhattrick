@@ -169,3 +169,31 @@ def test_onice_zone_start_share():
     out = E.onice_table(pd.DataFrame([{"player_id": 1, **row}])).set_index("player_id").loc[1]
     assert out.n_zs == pytest.approx(10.0)  # O + D faceoff starts
     assert out.ozs == pytest.approx(0.6)  # O / (O + D)
+
+
+# --- current team (trades) ----------------------------------------------------
+def test_current_team_is_most_recent_game_not_season_majority():
+    """A deadline trade: 60 games for the old club, then games for the new one. The game log
+    arrives most-recent-first, so the newest game's team wins regardless of the majority."""
+    glog = [{"team": "NEW"}] + [{"team": "OLD"}] * 60
+    assert E.current_team_of(glog, fallback="OLD") == "NEW"
+
+
+def test_current_team_falls_back_without_game_log():
+    assert E.current_team_of([], fallback="TOR") == "TOR"
+    assert E.current_team_of([], fallback="") == ""
+
+
+def test_team_season_splits_partitions_a_trade():
+    """A deadline trade in 2025 plus a full 2024: each (team, season) cell holds only the games
+    played for that team in that season, so the team-season roster pages read one cell."""
+    glog = (
+        [{"team": "NEW", "season": 2025, "g": 1, "a": 0, "p": 1, "toi_s": 900}] * 2
+        + [{"team": "OLD", "season": 2025, "g": 0, "a": 2, "p": 2, "toi_s": 1000}] * 3
+        + [{"team": "OLD", "season": 2024, "g": 1, "a": 1, "p": 2, "toi_s": 1100}] * 4
+    )
+    out = E.team_season_splits(glog)
+    assert out["NEW"] == {"2025": {"gp": 2, "g": 2, "a": 0, "p": 2, "toi_s": 1800}}
+    assert out["OLD"]["2025"] == {"gp": 3, "g": 0, "a": 6, "p": 6, "toi_s": 3000}
+    assert out["OLD"]["2024"] == {"gp": 4, "g": 4, "a": 4, "p": 8, "toi_s": 4400}
+    assert E.team_season_splits([]) == {}
