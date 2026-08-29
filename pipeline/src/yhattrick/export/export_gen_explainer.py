@@ -109,9 +109,11 @@ def build() -> dict:
     def attr(key):
         return np.array(
             [
-                ((cards.get(str(int(pid)), {}).get("attrs", {}).get(key) or {}).get("v"))
-                if cards.get(str(int(pid))) is not None
-                else None
+                (
+                    ((cards.get(str(int(pid)), {}).get("attrs", {}).get(key) or {}).get("v"))
+                    if cards.get(str(int(pid))) is not None
+                    else None
+                )
                 for pid in t["id"]
             ],
             dtype=object,
@@ -206,7 +208,9 @@ def main() -> None:
         "create_qual": np.array([r["params"]["cq"] for r in rows]),
     }
     sc, pm, df = values_at(
-        fit, tt, "ev",
+        fit,
+        tt,
+        "ev",
         np.array([r["params"]["sh"] for r in rows]),
         np.array([r["params"]["cr"] for r in rows]),
         np.array([r["params"]["df"] for r in rows]),
@@ -214,7 +218,11 @@ def main() -> None:
         5.0,
     )
     for i, r in enumerate(rows):
-        for got, want, k in ((sc[i], r["expected"]["sc"], "sc"), (pm[i], r["expected"]["pm"], "pm"), (df[i], r["expected"]["df"], "df")):
+        for got, want, k in (
+            (sc[i], r["expected"]["sc"], "sc"),
+            (pm[i], r["expected"]["pm"], "pm"),
+            (df[i], r["expected"]["df"], "df"),
+        ):
             if abs(got - want) > 0.02:
                 raise AssertionError(f"{r['name']} {k}: recomputed {got:.4f} != shipped {want:.4f}")
 
@@ -226,7 +234,9 @@ def main() -> None:
     kb = dst.stat().st_size / 1024
     print(f"wrote {dst} ({kb:.0f} KB) and synced to {web}")
     for tpl in out["templates"]:
-        print(f"  template: {tpl['label']:<28} {tpl['name']} ({tpl['pos']}) war={tpl['expected']['war']}")
+        print(
+            f"  template: {tpl['label']:<28} {tpl['name']} ({tpl['pos']}) war={tpl['expected']['war']}"
+        )
 
 
 if __name__ == "__main__":

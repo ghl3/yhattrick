@@ -5,11 +5,22 @@ Everything else imports paths and helpers from here so the data layout stays con
 
 from __future__ import annotations
 
+import datetime as _dt
 from pathlib import Path
 
 # --- seasons -----------------------------------------------------------------
 # A "season" is named by its starting year: 2021 == 2021-22 ... 2025 == 2025-26.
+# Deliberately explicit: adding a new season is a reviewed one-line change (model pools,
+# artifact names, and exports all key off this tuple).
 SEASONS: tuple[int, ...] = (2021, 2022, 2023, 2024, 2025)
+
+
+def current_season(today: _dt.date | None = None) -> int:
+    """The season a given date belongs to (start year): Sep-Dec -> that year, Jan-Aug -> the
+    year before. During the summer this is the just-finished season; from September it is the
+    upcoming/underway one."""
+    d = today or _dt.date.today()
+    return d.year if d.month >= 9 else d.year - 1
 
 
 def season_label(season: int) -> str:
@@ -86,6 +97,11 @@ MAX_RETRIES = 3
 
 # --- constants ---------------------------------------------------------------
 PERIOD_SECONDS = 1200  # 20:00 regulation period
+
+# NHL schedule gameState values for a finished game ("OFF" = official, "FINAL" = just ended).
+# Anything else (FUT/PRE/LIVE/CRIT) has no usable pbp yet: the gamecenter endpoint answers 200
+# with zero plays, so fetching early would cache an empty file the resumable check never retries.
+FINAL_GAME_STATES = frozenset({"OFF", "FINAL"})
 
 
 # --- game_id helpers ---------------------------------------------------------

@@ -94,6 +94,104 @@ def test_metrics_basic():
     assert 0 < m["logloss"] < 1
 
 
+# --- frozen-booster scoring (the in-season daily path) ------------------------
+def _events_df(n=40):
+    """A small two-game event stream with both classes and varied geometry/shot types."""
+    rows = []
+    for i in range(n):
+        gid = 2025020001 + (i // 20)
+        rows.append(
+            _event(
+                gid,
+                (i % 20) + 1,
+                "goal" if i % 5 == 0 else "shot-on-goal",
+                60 + (i % 25),
+                (i % 21) - 10,
+                "1551",
+                t=30 * ((i % 20) + 1),
+                shot_type=["wrist", "snap", "slap"][i % 3],
+                pid=10 + (i % 6),
+            )
+        )
+    return pd.DataFrame(rows)
+
+
+@pytest.fixture
+def xg_artifacts(tmp_path, monkeypatch):
+    """Interim events on disk + saved booster/isotonic/categories from a tiny real fit."""
+    import xgboost as xgb
+    from sklearn.isotonic import IsotonicRegression
+
+    for name in ("INTERIM", "PROCESSED", "MODELS"):
+        monkeypatch.setattr(X.C, name, tmp_path / name.lower())
+    monkeypatch.setattr(X.C, "RAW_PLAYERS", tmp_path / "players")
+    (tmp_path / "interim" / "events").mkdir(parents=True)
+    (tmp_path / "players").mkdir()
+    (tmp_path / "models").mkdir()
+
+    ev = _events_df()
+    ev.to_parquet(tmp_path / "interim" / "events" / "2025.parquet")
+    df = X.load_shots([2025], {})
+    Xf, cats = X._as_model_frame(df)
+    clf = xgb.XGBClassifier(
+        n_estimators=3, max_depth=2, enable_categorical=True, tree_method="hist"
+    )
+    clf.fit(Xf, df.goal.to_numpy(int))
+    iso = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
+    iso.fit([0.0, 1.0], [0.0, 1.0])  # identity calibration keeps the comparison exact
+    X._save_artifacts(clf, iso, cats)
+    return df, Xf, clf
+
+
+def test_score_seasons_matches_fit_time_predictions(xg_artifacts):
+    df, Xf, clf = xg_artifacts
+    X.score_seasons([2025])
+    out = pd.read_parquet(X.C.PROCESSED / "xg" / "2025.parquet")
+    assert list(out.columns) == X._OUT_COLS + ["xg"]
+    assert len(out) == len(df)
+    expected = np.round(clf.predict_proba(Xf)[:, 1], 5)
+    assert np.allclose(out.xg.to_numpy(), expected, atol=1e-5)
+
+
+def test_score_seasons_is_deterministic_day_over_day(xg_artifacts):
+    p = X.C.PROCESSED / "xg" / "2025.parquet"
+    X.score_seasons([2025])
+    first = p.read_bytes()
+    X.score_seasons([2025])
+    assert p.read_bytes() == first  # byte-stable -> R2 immutable cache stays honest
+
+
+def test_score_seasons_survives_unseen_category(xg_artifacts, tmp_path):
+    """A shot type the booster never saw (the NHL adds them mid-season) scores as a missing
+    categorical instead of crashing."""
+    ev = _events_df()
+    ev.loc[ev.index[-1], "shot_type"] = "between-the-legs"
+    ev.to_parquet(tmp_path / "interim" / "events" / "2025.parquet")
+    X.score_seasons([2025])
+    out = pd.read_parquet(X.C.PROCESSED / "xg" / "2025.parquet")
+    assert out.xg.notna().all() and out.xg.between(0, 1).all()
+
+
+def test_load_artifacts_missing_says_refit(tmp_path, monkeypatch):
+    monkeypatch.setattr(X.C, "MODELS", tmp_path)
+    with pytest.raises(SystemExit, match="make xg"):
+        X._load_artifacts()
+
+
+def test_isotonic_thresholds_reproduce_sklearn_predict():
+    """np.interp over the saved (x, y) thresholds is exactly IsotonicRegression.predict —
+    the score path's calibration equals the fit path's."""
+    from sklearn.isotonic import IsotonicRegression
+
+    rng = np.random.default_rng(7)
+    p = rng.uniform(0, 1, 500)
+    y = (rng.uniform(0, 1, 500) < p).astype(int)
+    iso = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0).fit(p, y)
+    q = rng.uniform(-0.1, 1.1, 200)  # includes out-of-range values that must clip
+    via_interp = np.interp(q, iso.X_thresholds_, iso.y_thresholds_)
+    assert np.allclose(via_interp, iso.predict(q))
+
+
 def test_reliability_bins_are_calibrated_on_perfect_input():
     # 100 shots in one probability band, observed rate matches predicted
     p = np.full(100, 0.10)

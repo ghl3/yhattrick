@@ -43,3 +43,43 @@ def test_clock_formats_period_and_remaining():
 def test_count_by_tallies_and_drops_na():
     s = pd.Series([10, 10, 11, None, 12, 10])
     assert G._count_by(s) == {10: 3, 11: 1, 12: 1}
+
+
+# --- per-season index merge (in-season updates rebuild one season at a time) ---
+def test_main_with_season_keeps_other_seasons_in_index(tmp_path, monkeypatch):
+    from yhattrick import config as C
+
+    monkeypatch.setattr(C, "SITE_JSON", tmp_path)
+    (tmp_path / "games.json").write_text(
+        json.dumps(
+            [
+                {"game_id": 2024020001, "date": "2024-10-08"},  # other season: carried over
+                {"game_id": 2025020001, "date": "2025-10-07"},  # rebuilt season: replaced
+            ]
+        )
+    )
+    monkeypatch.setattr(
+        G,
+        "build_season",
+        lambda season, limit=None: [
+            {"game_id": 2025020001, "date": "2025-10-07"},
+            {"game_id": 2025020002, "date": "2025-10-08"},
+        ],
+    )
+    G.main(["--season", "2025", "--no-sync"])
+    got = json.loads((tmp_path / "games.json").read_text())
+    assert [r["game_id"] for r in got] == [2025020002, 2025020001, 2024020001]
+
+
+def test_main_with_season_and_no_prior_index(tmp_path, monkeypatch):
+    from yhattrick import config as C
+
+    monkeypatch.setattr(C, "SITE_JSON", tmp_path)
+    monkeypatch.setattr(
+        G,
+        "build_season",
+        lambda season, limit=None: [{"game_id": 2025020001, "date": "2025-10-07"}],
+    )
+    G.main(["--season", "2025", "--no-sync"])
+    got = json.loads((tmp_path / "games.json").read_text())
+    assert [r["game_id"] for r in got] == [2025020001]

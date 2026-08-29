@@ -5,8 +5,11 @@ Raw artifacts:
   - NHL players/<playerId>.json                         (handedness, for off-wing)
 
 The game list comes from the NHL schedule: the season's teams (standings) -> each club's
-schedule -> regular-season gameIds. Every fetch checks for an existing file first, so re-running
-only pulls what's missing (resumable).
+schedule -> regular-season gameIds with their gameState. Only FINISHED games (state OFF/FINAL)
+are fetched — an unplayed game's pbp endpoint answers 200 with zero plays, and caching that
+would poison the resumable skip. Every fetch checks for an existing file first, so re-running
+only pulls what's missing (resumable), and a cached pbp with no plays for a now-finished game
+is re-fetched automatically (repair).
 
 Usage:
   uv run python -m yhattrick.download games --season 2024  # shiftcharts+pbp for that season
@@ -53,21 +56,31 @@ def _get(sess: requests.Session, url: str, *, binary: bool) -> bytes | str | Non
 
 # --- NHL schedule (the game list) --------------------------------------------
 def _teams_for_season(sess: requests.Session, season: int) -> list[str]:
-    """Team abbreviations active in `season`, from the standings at a mid-season date.
+    """Team abbreviations active in `season`, from the standings.
 
-    Using the standings (not a hardcoded list) auto-tracks relocations/expansion per season."""
-    date = f"{season + 1}-01-15"  # mid-season; every active team has a standings row
-    txt = _get(sess, C.NHL_STANDINGS_URL.format(date=date), binary=False)
-    if not txt:
-        raise RuntimeError(f"NHL standings unavailable for {date}")
-    rows = json.loads(txt).get("standings", [])
-    return sorted({r["teamAbbrev"]["default"] for r in rows})
+    Using the standings (not a hardcoded list) auto-tracks relocations/expansion per season.
+    The standings endpoint answers `{"standings": []}` for any date it has no rows for (e.g. a
+    mid-season date that is still in the future), so try progressively earlier dates: mid-season,
+    today, then mid-PREVIOUS-season (the club set carries over between seasons outside an
+    expansion year, and the schedule is published months before the standings exist)."""
+    import datetime as dt
+
+    candidates = [f"{season + 1}-01-15", dt.date.today().isoformat(), f"{season}-01-15"]
+    for date in candidates:
+        txt = _get(sess, C.NHL_STANDINGS_URL.format(date=date), binary=False)
+        rows = json.loads(txt).get("standings", []) if txt else []
+        if rows:
+            return sorted({r["teamAbbrev"]["default"] for r in rows})
+    raise RuntimeError(f"NHL standings empty for all of {candidates}")
 
 
-def game_ids_for_season(season: int) -> list[int]:
-    """Regular-season NHL gameIds for a season, unioned across each club's full schedule."""
-    sess = _session()
-    ids: set[int] = set()
+def schedule_for_season(season: int, sess: requests.Session | None = None) -> list[dict]:
+    """The season's regular-season schedule, unioned across each club's full schedule.
+
+    One dict per game: {"id", "date", "state"} where `state` is the NHL gameState (OFF/FINAL =
+    finished, FUT/PRE = not started, LIVE/CRIT = underway). Sorted by id."""
+    sess = sess or _session()
+    games: dict[int, dict] = {}
     for team in _teams_for_season(sess, season):
         txt = _get(
             sess,
@@ -77,22 +90,69 @@ def game_ids_for_season(season: int) -> list[int]:
         if txt:
             for g in json.loads(txt).get("games", []):
                 if g.get("gameType") == 2 and C.is_regular_season(int(g["id"])):
-                    ids.add(int(g["id"]))
+                    games[int(g["id"])] = {
+                        "id": int(g["id"]),
+                        "date": g.get("gameDate"),
+                        "state": g.get("gameState", ""),
+                    }
         time.sleep(C.THROTTLE_SECONDS)
-    return sorted(ids)
+    return [games[k] for k in sorted(games)]
+
+
+def game_ids_for_season(season: int) -> list[int]:
+    """Regular-season NHL gameIds for a season (every schedule state)."""
+    return [g["id"] for g in schedule_for_season(season)]
 
 
 # --- NHL per-game (shiftcharts + pbp) ----------------------------------------
-def download_games(season: int, limit: int | None = None) -> None:
+# A cached pbp smaller than this is suspect (an empty-plays stub is ~1 KB, a real game ~130 KB);
+# only files under the threshold are parsed for the plays check, so the repair scan stays cheap.
+_PBP_STUB_BYTES = 20_000
+
+
+def _pbp_has_plays(txt: str) -> bool:
+    try:
+        return len(json.loads(txt).get("plays", [])) > 0
+    except json.JSONDecodeError:
+        return False
+
+
+def _pbp_file_stale(path) -> bool:
+    """True for a cached pbp with no plays — fetched while the game was still FUT/LIVE."""
+    return path.stat().st_size < _PBP_STUB_BYTES and not _pbp_has_plays(path.read_text())
+
+
+def download_games(
+    season: int,
+    limit: int | None = None,
+    only_final: bool = True,
+    schedule: list[dict] | None = None,
+) -> dict:
+    """Ensure raw shiftcharts+pbp for the season's games. Resumable and self-repairing.
+
+    Only games the schedule marks finished (OFF/FINAL) are fetched — the pbp endpoint answers
+    200 with zero plays for unplayed games, and a cached empty file would otherwise never be
+    retried. A cached pbp with no plays for a now-finished game is re-fetched (repair). A
+    shiftchart 404 is recorded as `{"data": []}` so the game still reaches clean, which falls
+    back to the HTML TOI reports. Returns the counts it prints."""
     C.ensure_dirs()
     sess = _session()
-    game_ids = game_ids_for_season(season)
+    games = schedule if schedule is not None else schedule_for_season(season, sess)
     if limit:
-        game_ids = game_ids[:limit]
-    print(f"[games] {C.season_label(season)}: {len(game_ids)} games to ensure")
+        games = games[:limit]
+    if only_final:
+        todo = [g for g in games if g["state"] in C.FINAL_GAME_STATES]
+        pending = [g for g in games if g["state"] not in C.FINAL_GAME_STATES]
+    else:
+        todo, pending = list(games), []
+    print(
+        f"[games] {C.season_label(season)}: {len(games)} scheduled, "
+        f"{len(todo)} finished, {len(pending)} not final yet"
+    )
 
-    fetched = skipped = missing = 0
-    for i, gid in enumerate(game_ids, 1):
+    n = {"fetched": 0, "repaired": 0, "cached": 0, "missing": 0, "not_ready": 0}
+    for i, g in enumerate(todo, 1):
+        gid = g["id"]
         sc_path = C.RAW_SHIFTS / f"{gid}.json"
         pbp_path = C.RAW_PBP / f"{gid}.json"
         need = []
@@ -100,25 +160,38 @@ def download_games(season: int, limit: int | None = None) -> None:
             need.append(("shift", C.NHL_SHIFTCHARTS_URL.format(game_id=gid), sc_path))
         if not pbp_path.exists():
             need.append(("pbp", C.NHL_PBP_URL.format(game_id=gid), pbp_path))
+        elif _pbp_file_stale(pbp_path):
+            need.append(("pbp-repair", C.NHL_PBP_URL.format(game_id=gid), pbp_path))
         if not need:
-            skipped += 1
+            n["cached"] += 1
             continue
         for kind, url, path in need:
             txt = _get(sess, url, binary=False)
             if txt is None:
-                missing += 1
-                print(f"    ! {kind} 404 for {gid}")
+                if kind == "shift":
+                    # dead feed: record the emptiness so clean sees the game and uses HTML shifts
+                    path.write_text('{"data":[]}')
+                    print(f"    ! shift 404 for {gid} -> recorded empty (HTML fallback)")
+                else:
+                    print(f"    ! {kind} 404 for {gid}")
+                n["missing"] += 1
+                continue
+            if kind.startswith("pbp") and not _pbp_has_plays(txt):
+                n["not_ready"] += 1
+                print(f"    ! pbp for {gid} has no plays yet (state {g['state']}) — will retry")
                 continue
             path.write_text(txt)
-            fetched += 1
+            n["repaired" if kind == "pbp-repair" else "fetched"] += 1
             time.sleep(C.THROTTLE_SECONDS)
         if i % 50 == 0:
-            print(
-                f"    {i}/{len(game_ids)}  (fetched {fetched}, cached {skipped}, missing {missing})"
-            )
+            print(f"    {i}/{len(todo)}  ({', '.join(f'{k} {v}' for k, v in n.items() if v)})")
+    n["pending"] = len(pending)
     print(
-        f"[games] {C.season_label(season)} done: fetched {fetched}, cached {skipped}, missing {missing}"
+        f"[games] {C.season_label(season)} done: fetched {n['fetched']}, repaired {n['repaired']}, "
+        f"cached {n['cached']}, missing {n['missing']}, not_ready {n['not_ready']}, "
+        f"pending {n['pending']}"
     )
+    return n
 
 
 # --- NHL per-player landing (handedness) -------------------------------------
@@ -130,8 +203,9 @@ def _shooter_ids() -> list[int]:
     return sorted(ids)
 
 
-def download_handedness() -> None:
-    """Fetch each player's landing json (for shootsCatches). Resumable; needs cleaned rosters."""
+def download_handedness() -> dict:
+    """Fetch each player's landing json (for shootsCatches). Resumable; needs cleaned rosters.
+    Returns the counts it prints."""
     C.ensure_dirs()
     sess = _session()
     ids = _shooter_ids()
@@ -154,6 +228,7 @@ def download_handedness() -> None:
         if i % 100 == 0:
             print(f"    {i}/{len(ids)}  (fetched {fetched}, cached {skipped}, missing {missing})")
     print(f"[players] done: fetched {fetched}, cached {skipped}, missing {missing}")
+    return {"fetched": fetched, "cached": skipped, "missing": missing}
 
 
 # --- HTML TOI reports (shift fallback when the JSON feed is empty) ------------
@@ -168,9 +243,10 @@ def _json_shifts_empty(gid: int) -> bool:
         return True
 
 
-def download_html_shifts(season: int) -> None:
+def download_html_shifts(season: int) -> dict:
     """Fetch TH/TV HTML TOI reports for games whose JSON shiftchart feed is empty (the legacy
-    feed stopped updating ~spring 2025). Resumable: skips reports already on disk."""
+    feed stopped updating ~spring 2025). Resumable: skips reports already on disk. Returns the
+    counts it prints."""
     C.ensure_dirs()
     sess = _session()
     gids = sorted(
@@ -204,6 +280,7 @@ def download_html_shifts(season: int) -> None:
     print(
         f"[htmlshifts] {C.season_label(season)} done: fetched {fetched}, cached {skipped}, missing {missing}"
     )
+    return {"fetched": fetched, "cached": skipped, "missing": missing}
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -212,6 +289,11 @@ def main(argv: list[str] | None = None) -> None:
     g = sub.add_parser("games", help="download NHL shiftcharts+pbp for a season")
     g.add_argument("--season", type=int, required=True)
     g.add_argument("--limit", type=int, default=None)
+    g.add_argument(
+        "--include-unfinished",
+        action="store_true",
+        help="fetch every scheduled game, not just finished (OFF/FINAL) ones",
+    )
     sub.add_parser("handedness", help="download NHL player landing json (handedness)")
     hs = sub.add_parser(
         "htmlshifts", help="download HTML TOI reports for games with an empty JSON shift feed"
@@ -221,7 +303,7 @@ def main(argv: list[str] | None = None) -> None:
 
     args = p.parse_args(argv)
     if args.cmd == "games":
-        download_games(args.season, args.limit)
+        download_games(args.season, args.limit, only_final=not args.include_unfinished)
     elif args.cmd == "handedness":
         download_handedness()
     elif args.cmd == "htmlshifts":

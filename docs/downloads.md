@@ -42,6 +42,21 @@ data/                                   # top-level, shared
 `processed/` (see [processing.md](processing.md)). One file per game keeps the fetch
 resumable and lets us re-pull a single game if needed.
 
+## Schedule gating (in-season safety)
+
+The game list carries each game's `gameState`, and only **finished** games (`OFF`/`FINAL`) are
+fetched. For an unplayed or in-progress game the pbp endpoint answers 200 with zero plays;
+caching that would poison the exists-check below, so it is never written. Two backstops make
+the cache self-healing:
+
+- fetched pbp is only saved if it actually contains plays (`not_ready` otherwise, retried on
+  the next run);
+- a cached pbp with no plays for a now-finished game is detected and re-fetched (repair).
+
+A shiftchart 404 is recorded as `{"data":[]}` so the game still reaches clean, which falls back
+to the HTML TOI reports for shifts. `--include-unfinished` disables the gate (the plays guard
+still applies). Daily in-season use goes through [updating.md](updating.md).
+
 ## Resumability & politeness
 
 - Every fetch checks for the destination file first; an interrupted run resumes cleanly and a

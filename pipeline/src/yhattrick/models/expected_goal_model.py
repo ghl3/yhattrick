@@ -278,6 +278,28 @@ def _as_model_frame(df: pd.DataFrame, categories: dict | None = None):
     return X, cats
 
 
+# the parquet schema shared by fit and score (xg keyed by nhl_game_id + event_idx for joins)
+_OUT_COLS = [
+    "nhl_game_id",
+    "event_idx",
+    "time_g",
+    "shooter_id",
+    "goal",
+    "distance",
+    "abs_angle",
+    "shot_type",
+    "strength_diff",
+    "rebound",
+    "rush",
+]
+
+
+def _predictions_frame(df: pd.DataFrame, xg: np.ndarray) -> pd.DataFrame:
+    out = df[_OUT_COLS].copy()
+    out["xg"] = np.round(xg, 5)
+    return out
+
+
 # --- fit ---------------------------------------------------------------------
 def fit(seasons: list[int]):
     """Returns (out, model, iso, meta, oof_cal) — oof_cal aligned row-for-row with out."""
@@ -314,22 +336,7 @@ def fit(seasons: list[int]):
     final.fit(X, y, verbose=False)
     xg = iso.predict(final.predict_proba(X)[:, 1])
 
-    out = df[
-        [
-            "nhl_game_id",
-            "event_idx",
-            "time_g",
-            "shooter_id",
-            "goal",
-            "distance",
-            "abs_angle",
-            "shot_type",
-            "strength_diff",
-            "rebound",
-            "rush",
-        ]
-    ].copy()
-    out["xg"] = np.round(xg, 5)
+    out = _predictions_frame(df, xg)
 
     meta = {
         "model": "xg",
@@ -485,17 +492,65 @@ def _write_meta(meta: dict) -> None:
         )
 
 
-def _save_artifacts(model, iso) -> None:
+def _save_artifacts(model, iso, categories: dict) -> None:
+    """Everything score_seasons needs to reproduce fit-time predictions: the booster, the
+    isotonic calibration curve, and the categorical encodings (XGBoost sees category CODES,
+    so scoring must rebuild the exact category order used at fit time)."""
     C.MODELS.mkdir(parents=True, exist_ok=True)
     model.get_booster().save_model(str(C.MODELS / "xg_booster.json"))
+    # full float precision: np.interp over these thresholds must reproduce iso.predict exactly,
+    # so frozen-booster scoring matches fit-time predictions bit for bit
     (C.MODELS / "xg_isotonic.json").write_text(
         json.dumps(
             {
-                "x": [round(float(v), 6) for v in iso.X_thresholds_],
-                "y": [round(float(v), 6) for v in iso.y_thresholds_],
+                "x": [float(v) for v in iso.X_thresholds_],
+                "y": [float(v) for v in iso.y_thresholds_],
             }
         )
     )
+    (C.MODELS / "xg_categories.json").write_text(json.dumps(categories))
+
+
+def _load_artifacts():
+    """(booster, iso_x, iso_y, categories) from the last fit, for frozen-model scoring."""
+    import xgboost as xgb
+
+    paths = [C.MODELS / f"xg_{n}.json" for n in ("booster", "isotonic", "categories")]
+    missing = [p.name for p in paths if not p.exists()]
+    if missing:
+        raise SystemExit(f"missing xG artifact(s) {missing} — run a full fit (`make xg`) first")
+    booster = xgb.Booster()
+    booster.load_model(str(paths[0]))
+    iso = json.loads(paths[1].read_text())
+    categories = json.loads(paths[2].read_text())
+    return booster, np.asarray(iso["x"], float), np.asarray(iso["y"], float), categories
+
+
+def score_seasons(seasons: list[int]) -> None:
+    """Score a season's shots with the FROZEN booster from the last fit (no refit) and write
+    processed/xg/<season>.parquet. This is the in-season daily path: identical shots score
+    identically day over day, so already-exported per-game JSON stays byte-stable and the
+    R2 immutable cache stays honest. Prediction matches fit() exactly (final booster +
+    isotonic), so a later refit changes values only because the training pool grew."""
+    import xgboost as xgb
+
+    booster, iso_x, iso_y, categories = _load_artifacts()
+    hand = handedness_map()
+    (C.PROCESSED / "xg").mkdir(parents=True, exist_ok=True)
+    for s in seasons:
+        df = load_shots([s], hand)
+        if df.empty:
+            print(f"[xg score {s}] no shots — skipping")
+            continue
+        X, _ = _as_model_frame(df, categories)
+        p_raw = booster.predict(xgb.DMatrix(X, enable_categorical=True))
+        xg = np.interp(p_raw, iso_x, iso_y)  # isotonic curve; endpoints clip like the fit does
+        out = _predictions_frame(df, xg)
+        out.to_parquet(C.PROCESSED / "xg" / f"{s}.parquet", index=False)
+        print(
+            f"[xg score {s}] {len(out):,} shots · Σxg={out.xg.sum():.1f} vs "
+            f"goals={int(out.goal.sum())} -> processed/xg/{s}.parquet"
+        )
 
 
 # --- reporting ---------------------------------------------------------------
@@ -539,7 +594,7 @@ def run(seasons: list[int], pool: bool) -> None:
         out = out.assign(season=(out.nhl_game_id // 1_000_000).astype(int))
         for s, sp in out.groupby("season"):
             sp.drop(columns="season").to_parquet(C.PROCESSED / "xg" / f"{s}.parquet", index=False)
-        _save_artifacts(model, iso)
+        _save_artifacts(model, iso, meta["categories"])
         _write_meta(meta)
         export_web(meta, model, iso, meta["categories"])
         sniff(out, meta)
@@ -549,11 +604,19 @@ def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description="Fit the in-house xG model (raw NHL pbp only)")
     p.add_argument("--season", type=int, default=None, help="one season (default: all available)")
     p.add_argument("--pool", action="store_true", help="pool all available seasons into one fit")
+    p.add_argument(
+        "--score-only",
+        action="store_true",
+        help="no refit: score shots with the saved booster (in-season daily updates)",
+    )
     args = p.parse_args(argv)
     seasons = [args.season] if args.season else available_seasons()
     if not seasons:
         raise SystemExit("no interim events available — run `make clean-data` first")
-    run(seasons, pool=args.pool or args.season is None)
+    if args.score_only:
+        score_seasons(seasons)
+    else:
+        run(seasons, pool=args.pool or args.season is None)
 
 
 if __name__ == "__main__":

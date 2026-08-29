@@ -27,6 +27,9 @@ make pipeline
 
 # 3. site
 make web-dev          # http://localhost:5173
+
+# in season: one-shot daily refresh (new games -> models -> site); see docs/updating.md
+make update
 ```
 
 Requirements: `uv`, Node 22+. Data sources and the join contract are documented in

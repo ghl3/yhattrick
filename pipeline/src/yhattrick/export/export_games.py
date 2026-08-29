@@ -324,9 +324,16 @@ def main(argv: list[str] | None = None) -> None:
     args = p.parse_args(argv)
     C.SITE_JSON.mkdir(parents=True, exist_ok=True)
 
+    seasons = [args.season] if args.season else C.SEASONS
     index = []
-    for season in [args.season] if args.season else C.SEASONS:
+    for season in seasons:
         index.extend(build_season(season, args.limit))
+    # a per-season run refreshes only that season's index rows; the rest carry over from the
+    # existing games.json so the site index always spans every exported season
+    if args.season and (C.SITE_JSON / "games.json").exists():
+        rebuilt = set(seasons)
+        prior = json.loads((C.SITE_JSON / "games.json").read_text())
+        index.extend(r for r in prior if r["game_id"] // 1_000_000 not in rebuilt)
     index.sort(key=lambda r: (r["date"] or "", r["game_id"]), reverse=True)  # reverse chronological
     (C.SITE_JSON / "games.json").write_text(_dump(index))
     print(f"[games] index: {len(index)} games -> {C.SITE_JSON / 'games.json'}")

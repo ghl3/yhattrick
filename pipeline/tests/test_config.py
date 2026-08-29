@@ -35,3 +35,19 @@ def test_game6():
     assert C.game6(2024020500) == "020500"  # drop the 4-digit season prefix
     assert C.game6(2021020001) == "020001"
     assert len(C.game6(2024030415)) == 6
+
+
+@pytest.mark.parametrize(
+    "date,season",
+    [
+        ((2026, 9, 1), 2026),  # September: the upcoming season
+        ((2026, 10, 15), 2026),  # underway
+        ((2027, 1, 2), 2026),  # calendar rollover mid-season
+        ((2027, 4, 30), 2026),  # stretch run
+        ((2026, 8, 26), 2025),  # summer: still the just-finished season
+    ],
+)
+def test_current_season(date, season):
+    import datetime as dt
+
+    assert C.current_season(dt.date(*date)) == season

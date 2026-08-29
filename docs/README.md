@@ -11,6 +11,7 @@ visualizes the data — starting with a per-game inspection view.
 |---|---|
 | [data-sources.md](data-sources.md) | Where the data comes from, why, and the verified URLs |
 | [downloads.md](downloads.md) | The download stage (`download.py`): what is fetched, caching, resumability |
+| [updating.md](updating.md) | In-season updates (`update.py`): the one-shot fetch → models → site refresh |
 | [joins-and-ids.md](joins-and-ids.md) | The game_id mapping and the shots↔shifts↔events join contract |
 | [processing.md](processing.md) | The clean → interim → dimensions → processed stages, the fact/dimension split, and the data layout |
 | [website.md](website.md) | The inspection site: games index + game view |

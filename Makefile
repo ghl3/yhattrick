@@ -3,6 +3,8 @@
 #
 #   make                            # = make all: full local build (clean -> site + model)
 #   make all                        # clean-data stints box model games players
+#   make update                     # one-shot in-season update: fetch new games -> models -> site
+#   make update-dry                 # report what an update would do (read-only schedule check)
 #   make fetch                      # download all NHL seasons + handedness -> data/raw/
 #   make fetch-season SEASON=2024   # NHL shiftcharts+pbp for one season
 #   make fetch-handedness           # NHL player handedness (for off-wing)
@@ -36,9 +38,19 @@ SEASON ?=
 FAMILY ?= gaussian        # response family for `make model`: gaussian | tweedie
 
 .DEFAULT_GOAL := all
-.PHONY: all fetch fetch-season fetch-handedness fetch-htmlshifts clean-data dims xg stints box model shooting goal-accounting games gamelog players goalie-box goalie-gamelog goalies generative-model generative-cards gen-explainer publish-data validate test format pipeline web-dev web-build
+.PHONY: all update update-dry fetch fetch-season fetch-handedness fetch-htmlshifts clean-data dims xg stints box model shooting goal-accounting games gamelog players goalie-box goalie-gamelog goalies generative-model generative-cards gen-explainer publish-data validate test format pipeline web-dev web-build
 
 all: clean-data xg stints box model shooting goal-accounting games gamelog players goalie-gamelog goalie-box goalies
+
+# one-shot in-season update: fetch newly-finished games, rebuild the season, refresh models,
+# re-export + validate, publish to R2, deploy the site. No-ops when nothing new. UPDATE_ARGS
+# passes extra flags, e.g. `make update UPDATE_ARGS="--no-deploy"`. See docs/updating.md.
+UPDATE_ARGS ?=
+update:
+	$(RUN) yhattrick.update $(UPDATE_ARGS) 2>&1 | tee $(LOGDIR)/update.log
+
+update-dry:
+	$(RUN) yhattrick.update --dry-run 2>&1 | tee $(LOGDIR)/update.log
 
 fetch:
 	$(RUN) yhattrick.data.download all 2>&1 | tee $(LOGDIR)/download.log
