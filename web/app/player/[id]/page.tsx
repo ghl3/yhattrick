@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
   CartesianGrid, ComposedChart, Line, LineChart, PolarAngleAxis, PolarGrid, PolarRadiusAxis,
-  Radar, RadarChart, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis,
+  Radar, RadarChart, ReferenceLine, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis,
 } from "recharts";
 import type {
   AnyPlayerDetail, GameLogRow, GoalieDetail, GoalieMetricKey, GoalieSeasonRow,
@@ -52,8 +52,11 @@ const STAT_KEYS: IndividualKey[] = ["shots60", "g60", "a60", "a1_60", "pen_drawn
 
 // per-season columns, grouped into metric families for the season-by-season tabs; every
 // column is clickable to chart it over time. Columns with `traj` chart the modeled skill
-// trajectory (line + projection + league reference) instead of a plain raw-value line.
-type Col = { key: string; label: string; title: string; get: (r: SeasonRow) => number | null; fmt?: (v: number) => string; traj?: "ga60" | "scoring" | "playmaking" | "defense" };
+// trajectory (line + projection + league reference) instead of a plain raw-value line; `zero`
+// marks signed metrics whose chart gets a reference line at 0 (the replacement / average level).
+// Rows are the exported season rows plus that season's WAR, joined in from the card block.
+type SeasonRowX = SeasonRow & { war: number | null };
+type Col = { key: string; label: string; title: string; get: (r: SeasonRowX) => number | null; fmt?: (v: number) => string; traj?: "ga60" | "scoring" | "playmaking" | "defense"; zero?: boolean };
 type ColGroup = { key: string; label: string; note: string; cols: Col[] };
 const COL_GROUPS: ColGroup[] = [
   {
@@ -68,8 +71,9 @@ const COL_GROUPS: ColGroup[] = [
     ],
   },
   {
-    key: "impact", label: "Modeled impact", note: "The card metrics season by season: per-60 rates at 5-on-5; Net Goals/GP counts all situations, per game.",
+    key: "impact", label: "Modeled impact", note: "The card metrics season by season. WAR and Net Goals/GP count all situations over his actual games; the rest are per-60 rates at 5-on-5.",
     cols: [
+      { key: "war", label: "WAR", title: "Wins above a replacement player playing his games that season, all situations", get: (r) => r.war, fmt: (v) => v.toFixed(2), zero: true },
       { key: "gnet_pg", label: "Net Goals/GP", title: "Net goals added per game (all situations)", get: (r) => r.gnet_pg ?? null, fmt: (v) => v.toFixed(2), traj: "ga60" },
       { key: "scoring60", label: "Scoring", title: "Goals from his own shots per 60 (5-on-5)", get: (r) => r.scoring60 ?? null, fmt: (v) => v.toFixed(2), traj: "scoring" },
       { key: "playmaking60", label: "Playmaking", title: "Expected goals he creates for teammates per 60 (5-on-5)", get: (r) => r.playmaking60 ?? null, fmt: (v) => v.toFixed(2), traj: "playmaking" },
@@ -81,7 +85,7 @@ const COL_GROUPS: ColGroup[] = [
     cols: [
       { key: "pp_value", label: "PP Offense", title: "Power-play offense per 60 (scoring + playmaking)", get: (r) => (r.pp_scoring60 == null && r.pp_playmaking60 == null) ? null : (r.pp_scoring60 ?? 0) + (r.pp_playmaking60 ?? 0), fmt: (v) => v.toFixed(2) },
       { key: "pk_allow60", label: "PK Defense", title: "Penalty-kill expected goals allowed per 60 (lower is better)", get: (r) => r.pk_allow60 ?? null, fmt: (v) => v.toFixed(2) },
-      { key: "pen_net60", label: "Penalties", title: "Net goals from penalties drawn minus taken per 60", get: (r) => r.pen_net60 ?? null, fmt: (v) => v.toFixed(2) },
+      { key: "pen_net60", label: "Penalties", title: "Net goals from penalties drawn minus taken per 60", get: (r) => r.pen_net60 ?? null, fmt: (v) => v.toFixed(2), zero: true },
     ],
   },
   {
@@ -89,7 +93,7 @@ const COL_GROUPS: ColGroup[] = [
     cols: [
       { key: "shots60", label: "Shots/60", title: "Unblocked shots per 60", get: (r) => r.shots60 ?? null, fmt: (v) => v.toFixed(1) },
       { key: "xg_per_shot", label: "xG/Shot", title: "Average shot quality (xG per shot)", get: (r) => r.xg_per_shot ?? null, fmt: (v) => v.toFixed(3) },
-      { key: "fin_per100", label: "Finishing", title: "Finishing: goals above expected per 100 shots", get: (r) => r.fin_per100 ?? null, fmt: (v) => v.toFixed(2) },
+      { key: "fin_per100", label: "Finishing", title: "Finishing: goals above expected per 100 shots", get: (r) => r.fin_per100 ?? null, fmt: (v) => v.toFixed(2), zero: true },
     ],
   },
 ];
@@ -824,9 +828,13 @@ function SeasonsPanel({ p }: { p: PlayerDetail }) {
   const [stat, setStat] = useState(p.gen ? "gnet_pg" : "points");
   const group = COL_GROUPS.find((g) => g.key === groupKey)!;
   const col = COLS.find((c) => c.key === stat)!;
+  const rows = useMemo<SeasonRowX[]>(
+    () => p.per_season.map((r) => ({ ...r, war: p.gen?.war?.by_season?.[String(r.season)] ?? null })),
+    [p]
+  );
   const chartData = useMemo(
-    () => p.per_season.map((r) => ({ season: seasonLabel(r.season), value: col.get(r) })),
-    [p, col]
+    () => rows.map((r) => ({ season: seasonLabel(r.season), value: col.get(r) })),
+    [rows, col]
   );
   // keep the charted stat inside the visible family, remembering each family's last pick
   const statMemo = useRef<Record<string, string>>({});
@@ -858,6 +866,7 @@ function SeasonsPanel({ p }: { p: PlayerDetail }) {
               <CartesianGrid stroke="#e7f1fb" />
               <XAxis dataKey="season" tick={{ fontSize: 12, fill: "#6b7e90" }} />
               <YAxis tick={{ fontSize: 12, fill: "#6b7e90" }} width={48} />
+              {col.zero && <ReferenceLine y={0} stroke="#b6c4d2" strokeDasharray="4 4" />}
               <Tooltip formatter={(v: unknown) => (typeof v === "number" && col.fmt ? col.fmt(v) : String(v))} />
               <Line type="monotone" dataKey="value" name={col.label} stroke="#2f6cb0" strokeWidth={2} dot={{ r: 3 }} connectNulls />
             </LineChart>
@@ -874,7 +883,7 @@ function SeasonsPanel({ p }: { p: PlayerDetail }) {
           </tr>
         </thead>
         <tbody>
-          {[...p.per_season].reverse().map((r) => (
+          {[...rows].reverse().map((r) => (
             <tr key={r.season}>
               <td>{seasonLabel(r.season)}</td>
               <td>{r.team}</td>
